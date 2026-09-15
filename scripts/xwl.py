@@ -740,6 +740,10 @@ def _iter_controls(obj, path=None, anc=None, container=None, key=None):
             yield obj, t, cfg, list(path), list(anc), container, key
             anc = anc + [(t, cfg.get("itemId"))]
         for k, v in obj.items():
+            # 不深入 `configs` —— 控件只挂在 `children` 下；`configs` 里偶尔会有带 `type` 键的
+            # 内联配置对象（实测全项目 128 个），进来就成了"幻影控件"，`@itemId` 可能误指到它。
+            if k == "configs":
+                continue
             yield from _iter_controls(v, path + [k], anc, obj, k)
     elif isinstance(obj, list):
         for i, v in enumerate(obj):
@@ -1198,15 +1202,28 @@ def cmd_itemids(args) -> int:
         if not hits:
             print(f"[FAIL] 找不到 configs.itemId == {args.name!r}")
             return 1
-        print(format_itemid_candidates(args.name, hits, "文件全域", all_names=names))
+        if args.json:
+            print(json.dumps(
+                [{"index": i + 1, "type": t, "path": p, "ancestor": _anc_str(anc),
+                  "hint": _node_hint(cfg), "children": _children_summary(n),
+                  "normalName": cfg.get("normalName")}
+                 for i, (n, t, cfg, p, anc, _c, _k) in enumerate(hits)],
+                ensure_ascii=False, indent=2))
+        else:
+            print(format_itemid_candidates(args.name, hits, "文件全域", all_names=names))
         return 0
 
     if args.suggest:
-        ops = recommend_fixes(rep, args.fix)
+        skipped: list = []
+        ops = recommend_fixes(rep, args.fix, skipped=skipped)
+        for s in skipped:
+            print("[warn] 跳过 %r 的 #%d %s —— 该类型不接受 `normalName`"
+                  "（改用 `--fix itemId` 可改 itemId）" % (s["group"], s["index"], s["type"]),
+                  file=sys.stderr)
         if not ops:
-            print("[]", file=sys.stderr)
-            print("（无 error/warn 组，无需改名）", file=sys.stderr)
-            return 1
+            print("[]")
+            print("（无需改名：没有 error/warn 组，或选定的修法对本文件不适用）")
+            return 0
         print(json.dumps(ops, ensure_ascii=False, indent=2))
         return 0
 

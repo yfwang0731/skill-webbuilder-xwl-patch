@@ -11,8 +11,14 @@
 
 ## [1.1.0] - 2026-09-15
 
-**itemId 重名从「一律拒绝」改为「分级 + 给候选清单和建议值」**。
-由项目维护者口述的三条命名规则 + 第四点"重名要读父子关系"驱动，全部用 TSHT 真实代码复算验证。
+**「itemId 重名分级」+ 一次全文件深审修复**。
+
+主线一：把 itemId 重名从「一律拒绝」改为**分级 + 给候选清单和建议值** —— 由项目维护者口述的
+三条命名规则 + 第四点「重名要读父子关系」驱动。
+
+主线二：用 `darwin-skill` 的 8 维 rubric 做全文件深审（7 个文件 + 样本工程 2780 个 xwl 交叉复算），
+修完 P1 五项 / P2 三项 / P3 四项。深审发现：**skill 里不应出现"参考的哪个项目"与
+该项目各分类的命中统计** —— 已把统计全部移到 `references/measured-data.md` §7。
 
 ### Added
 
@@ -26,7 +32,7 @@
   `suggest_normalname()` / `discover_controls()` / `normalname_types()`；`ItemIdError`（继承 `KeyError`，
   但 `str()` 给可读原文，不带引号包裹）。`_iter_controls()` 取代原 `_find_all_by_itemid` 的递归实现。
 - `check` 新增**第 ⑦ 项**：itemId 重名分级。**只有「重名且被事件 JS 引用」判 FAIL**，其余出 `[warn]`。
-  新增 `--no-itemid` 跳过。`selftest` 断言 **36 → 50 项**。
+  新增 `--no-itemid` 跳过。`selftest` 断言 **36 → 51 项**。
 
 ### Changed
 
@@ -36,13 +42,13 @@
 - `check` 的帮助文本与判定表：六项 → 七项（`SKILL.md` 第三节同步）。
 - **写盘后的自动校验只判格式**：`patch` / `edit` / `expand` 末尾的自检抽成 `_post_check()` 并显式跳过 ⑦。
   itemId 重名是**文件既有的质量属性**、不是本次改动造成的 —— 若一并判定，会出现
-  "写盘成功却返回非 0"的误导（实测：给含 5 组 error 级重名的 `WareHouse.xwl` 打补丁，退出码由 1 改回 0）。
+  "写盘成功却返回非 0"的误导（实测：给含 5 组 error 级重名的页面打补丁，退出码由 1 改回 0）。
   自检末尾附一行指引，要看重名请单独跑 `itemids`。
 
 ### Fixed
 
 - **原「itemId 不唯一就不处理」的判据是错的**。现在按 **控件类型 + 是否被 JS 引用 + 有无 `normalName`** 定级，
-  依据是框架源码与全项目实测（见下）。
+  依据是框架源码与样本工程实测。
 - `_node_hint()` 里 `normalName` 与独立字段重复显示；`suggest_normalname()` 对全大写字段名会产生
   `WAREHOUSE_CODET` 这类粘连（改为按需用 `_` 分隔）；父级名切不出"区分段"时会拼出 `editbutton2tbar`
   （改为 `editbutton2_tbar`）。
@@ -55,13 +61,13 @@
   `query` …）写出 `configs.normalName` —— **非法配置键**（已复现 `array` 组）。现**永不写入**这类项，
   并通过新增的 `skipped` 参数回报：`--fix normalName` 会列出被跳过的类型。
 - **文档归因错误**：`SKILL.md` §9.3 曾把 `panelCustomRecord_ID` 当作「改 `itemId` 用父级作前缀」的先例。
-  实测它**只以 `normalName` 出现**（2 次），**不是任何节点的 `itemId`**。已换成真实实例
-  `setupElementWin_find`（`supplyRateClient*.xwl` 等 6 个文件）并加 ⚠️ 说明。
+  实测它**只以 `normalName` 出现**，**不是任何节点的 `itemId`**。已换成样本工程里真实的 `itemId` 前缀先例（
+  `setupElementWin_find`）并把这个易错点在 `references/measured-data.md` §7.6 记清楚。
 - `js_refs_of()` **不剔 JS 注释** → 注释里的 `app.X` 被当成引用（会把 benign/warn 组误判为 error）。
   现先过 `strip_js_comments`；并新增 `filtered=False` 供"判定是否被引用"使用。
 - `_APP_REF_RESERVED` **无条件排除** `store` / `add` / `items` / `id`，**遮蔽真实引用** ——
   `basic.xwl` 的 `store` ×3 明明被 `app.store` 引用，却只判 `warn`。现判定改用未过滤集合
-  （理由：名字既已确认是文件内的 `itemId`，保留表那层歧义就不存在）。全项目 **1 组**受影响，已修。
+  （理由：名字既已确认是文件内的 `itemId`，保留表那层歧义就不存在）。样本工程里 1 组受影响，已修。
 - **`decode()` 在 12 个子命令里有 10 个未保护** —— 传一个读不到的文件就抛裸 `Traceback`
   （只有 `check` 处理了）。现抽出 `read_xwl_text()` / `load_xwl()` 统一抛 `XwlLoadError`，
   11 个子命令一律给 `[FAIL] 无法读取 …`；`edit` 走**只读**路径（不解析）以保住"能修坏文件"的用途。
@@ -75,6 +81,25 @@
 - 本文件原 `### 本次复算的关键事实` **不是 Keep a Changelog 允许的小节名**（只允许
   Added / Changed / Deprecated / Removed / Fixed / Security）→ 改为引用块。
 
+**深审修复（P3 · 4 项，健壮性与文档）**：
+
+- `itemids --name X --json` 同时给时 `--json` 被**静默忽略**（`--name` 先返回）→ `--name` 现在也支持 `--json`。
+- `itemids --suggest` 在"无事可做"时返回 **1**（其实不是错误）→ 改为返回 **0** 并给出说明；
+  同时把 `--fix normalName` 跳过的项打到 stderr（配合 P1 第 1 条）。
+- `_iter_controls()` 会深入 `configs`，把里面带 `type` 键的**内联配置对象**也当成控件
+  （样本工程里 128 个，虽然都没 `itemId`，但 `@itemId` 理论上可能误指到它）→ 现在**不深入 `configs`**，
+  控件只从 `children` 找。
+- `SKILL.md` §9.2 补上**第四条规则**（`itemId` 不是合法 JS 标识符时只能 `app.get('名')`）；
+  §8 的 `itemids` 行补 `--controls`；§9.1 的框架源码引用加「换版本按符号名搜、别按行号」提示。
+
+**文档去项目化（深审提出的原则）**：
+
+- `SKILL.md` 不再出现样本工程的名字，也不再列该工程的命中分类统计 ——
+  第九章只保留**规则 + 框架机制 + 怎么查**，数字统一指向 `references/measured-data.md` §7。
+- 原来的 §9.5「全项目基线」表改为「想知道某个工程里实际有多少重名」——教读者**在自己工程上跑**。
+- §9.3 的示例改为与具体工程无关的通用命名（`gridLeft` / `panelX_find`），
+  真实样本证据（`tbarW` / `setupElementWin_find` / `panelCustomRecord_ID` 的辨析）挪进 measured-data §7.6。
+
 > **本次复算的关键事实**（都能用 `itemids` / `selftest` 复现）
 >
 > - **重名的后果有源码依据**：`wb/libs/ext/ext-all-debug.js:21689`（WebBuilder 改过的 `Ext.ComponentManager`）
@@ -82,12 +107,15 @@
 >   注销是**按同名键直接 `delete`** ⇒ **任一重复项被销毁会把整个名字从页面作用域删掉**。
 >   这正是"重名后 `app.X` 取不到值"的确切机制。
 > - **`normalName` 是合法 configs 键**：注册表 133 个控件里 **89 个**接受、44 个不接受（多为布局/HTML/后端节点）。
-> - **列控件重名确实无害**：全项目 **3393 组**列重名（`column`/`tcolumn`），被事件 JS 引用的 **0 组**。
+> - **列控件重名确实无害**：样本工程 **3393 组**列重名（`column`/`tcolumn`），被事件 JS 引用的 **0 组**。
 >   命名约定 `_COL`/`Col` 后缀：20771 个列 itemId 里 **14213 个（68.4%）**带此后缀。
-> - **全项目重名分布**（2777 个可解析 xwl / 59791 个含 itemId 的节点 / 12304 段事件 JS）：
->   benign **3543**（列 3393 + 已有唯一 normalName 150）/ warn **1856** / error **519**。
+> - **重名分级分布**（可解析 2777 个 xwl / 59791 个含 itemId 的节点 / 12304 段事件 JS）：
+>   benign **3543**（列 3393 + 已有唯一 normalName 150）/ warn **1919** / error **456**。
+>   ⚠️ 这些只是**该样本的量级参考，不是通用阈值**；且口径随工具版本变过 ——
+>   修掉"注释里的 `app.X` 被当成引用""保留表遮蔽真实引用"两个缺陷后，error 由 519 降到 **456**
+>   （少了 63 组**误报**）。完整分布与按类型的 Top 见 `references/measured-data.md` §7.2。
 > - **`#` 从未出现在任何 `itemId` 里** ⇒ 用它作序号分隔符安全。
-> - 实测最小 diff：给 `WareHouse.xwl` 用 `@tbar#3` 改一处 `itemId`，diff **仅 2 行**。
+> - 实测最小 diff：在重名文件里用 `@名字#N` 改一处 `itemId`，diff **仅 2 行**。
 
 ---
 

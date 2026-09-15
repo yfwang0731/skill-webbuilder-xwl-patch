@@ -40,7 +40,7 @@ python scripts/xwl.py patch page.xwl --ops ops.json --backup    # 确认后落�
   并做过**回放校验**：把算法跑在项目里既有的上千个 xwl 上，还原出的字节与原件逐个比对
   （数字与口径见 [`references/measured-data.md`](references/measured-data.md)）
   → 所以重排**不会顺带改动无关内容**，**diff 只含这次真正改的内容**
-  （377 KB 的 `transTrack.xwl` 加一个带多行 JS 的按钮 + 改标题，diff 仅 17 行）；
+  （377 KB 的页面加一个带多行 JS 的按钮 + 改标题，diff 仅 17 行）；
 - 写盘前强制「**重新解析 == 改后对象**」的语义等价比对，对不上**中止不写**。
 
 > 文本级 `xwl.py edit` 只是例外手段（改一小段文本、又不希望整份重排时）。

@@ -471,7 +471,16 @@ def main() -> int:
     else:
         print("[ok]  read_xwl_text/load_xwl 读不到/解析不了时统一抛 XwlLoadError（可读消息）")
 
-    # ---- 11g. 文本级 edit 不要求文件能解析（坏文件正是它的用途）----
+    # ---- 11g. walker 不深入 `configs`（那里的内联对象不是控件，别让 @itemId 指过去）----
+    ph = {"children": [{"type": "tree", "configs": {
+        "itemId": "t1", "store": {"type": "store", "configs": {"itemId": "phantom"}}}, "children": []}]}
+    kinds = [t for _n, t, _c, _p, _a, _cc, _k in xwl._iter_controls(ph)]
+    if kinds == ["tree"] and not xwl.itemid_hits(ph, "phantom"):
+        print("[ok]  _iter_controls 不深入 configs（幻影节点不可被 @itemId 命中）")
+    else:
+        failures.append("_iter_controls 仍会产出 configs 内的幻影控件: %s" % kinds)
+
+    # ---- 11h. 文本级 edit 不要求文件能解析（坏文件正是它的用途）----
     broken = os.path.join(tmp, "broken_p11.xwl")
     with open(broken, "w", encoding="utf-8", newline="") as f:
         f.write("this is not parseable at all")

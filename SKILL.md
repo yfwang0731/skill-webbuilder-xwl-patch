@@ -80,7 +80,7 @@ m?xwl=orderCenter/highwayTransportationManagement/transSql/queryDriverFile
 
 - **从引用找文件**：补上 `.xwl` 即可。
 - **从文件找引用方**：在 xwl 里搜 `m?xwl=<该路径去扩展名>`。
-- 本项目实测有 2000 个被引用的片段路径、5000+ 处引用 —— 片段是常态，不是特例。
+- 被引用的片段是**常态**而不是特例（实测引用点数量级在数千，口径见 [`references/measured-data.md`](references/measured-data.md)）。
 
 ### 1.3 控件节点的标准形态（权威来源：设计器的控件注册表）
 
@@ -100,7 +100,7 @@ python scripts/xwl.py schema --tree --controls <工程>/wb/system/controls.json
 python scripts/xwl.py schema button --controls <工程>/wb/system/controls.json --skeleton
 ```
 
-**真实控件节点的键集合全项目只有两种**（实测 2777 个 xwl）：
+**真实控件节点的键集合只有两种**：
 
 ```text
 ["configs", "expanded", "children", "type"]            ← 无事件
@@ -248,10 +248,10 @@ python scripts/xwl.py patch <file.xwl> --ops ops.json --backup
 2. **事件 JS / SQL / serverScript 都写普通多行字符串**（`\n` 照常写）—— 序列化器会按设计器规则
    转成续行形态，你不用管。JS 里请用**单引号**。
 3. **diff 最小化有保证**：工具先比对"源文件是否设计器原样排版"。是 → 重排后逐字节一致，
-   diff **只含你真正改的内容**（实测给 377 KB 的 `transTrack.xwl` 加一个带多行 JS 的按钮 + 改标题，
+   diff **只含你真正改的内容**（实测给 377 KB 的页面加一个带多行 JS 的按钮 + 改标题，
    diff **只有 17 行**）。源文件不是设计器原样时，重排会顺带规整整份格式，工具会明确提示。
    - ⚠️ 那种"顺带规整"除缩进外，还可能把值里的 `\uXXXX` 转义**还原成真实字符**
-     （实测 `forwardOrderCntrNew.xwl` 因此多出 1 处 `\u201c` → `“`，语义等价）。
+     （实测某页面因此多出 1 处 `\u201c` → `“`，语义等价）。
      **先 `--dry-run` 数一下噪声行数再决定**：噪声只有一两行就照用 `patch`（省心，格式有保证——
      且还原后的形态反而与设计器产物一致）；噪声可观就改用 3.2 的 `edit` 做定点插入
      （语义相同，diff 只含你改的那一处）。
@@ -365,7 +365,7 @@ python scripts/xwl.py sqlrefs <file.xwl>                            # 改完验 
 | 写法 | 例 | 说明 |
 |---|---|---|
 | `m?xwl=<模块相对路径，**不带 `.xwl`**>` | `m?xwl=orderCenter/…/transSql/queryOrderHead` | **最常用**。相对 `wb/modules/`，补 `.xwl` 就是文件路径（见 §1） |
-| `/<短名>` | `/upload`、`/get-file`、`/download` | 短名注册表 **`wb/system/url.json`**（本项目 54 个），框架内部端点。改动时别自己编短名 |
+| `/<短名>` | `/upload`、`/get-file`、`/download` | 短名注册表 **`wb/system/url.json`**，框架内部端点。改动时别自己编短名 |
 | `http://…` 或任意 url | `Wb.open({url:'http://…', inframe:true})` | 外部地址必须 `inframe:true` |
 
 > `Wb.request` / `Wb.open` / `Wb.upload` / `Wb.requestAg` 的 `url` 都可以给**完整带查询串**的形式，
@@ -644,7 +644,7 @@ org.json 的字符串转义还有两条：**非 ASCII 原样保留**（中文不
 | `sqlrefs <file>` | 检查 SQL 文件里 `{#名字#}` ↔ `serverScript` 的 `setAttribute` 是否自洽；并抓 serverScript 里误用 `{#…#}` |
 | `schema [<type>] --controls <wb/system/controls.json> [--tree] [--list] [--skeleton]` | 查设计器控件注册表：`--tree` 按面板分组列出全部控件（带库 / 容器 / 内部标记）、`--list` 只列 id、给 `<type>` 则列该控件合法的 `configs` / `events` 与 `autoNames`、`--skeleton` 出设计器同款骨架 |
 | `check <file...> [--no-js] [--no-itemid]` | 七项校验：格式五项 + 事件 JS `node --check` + **itemId 重名分级**（只有「重名且被 JS 引用」判 FAIL）；任一 FAIL 返回非 0 |
-| `itemids <file> [--name X] [--dups-only] [--suggest] [--fix auto\|normalName\|itemId] [--json]` | **itemId 重名报告（只读）**：按「类型 + 是否被 JS 引用 + 有无 normalName」分级，给候选清单（祖先链 / 原路径 / 其下控件）与**建议改名**；`--suggest` 出改名 ops 草稿（需人工确认） |
+| `itemids <file> [--name X] [--dups-only] [--suggest] [--fix auto\|normalName\|itemId] [--json] [--controls <…/controls.json>]` | **itemId 重名报告（只读）**：按「类型 + 是否被 JS 引用 + 有无 normalName」分级，给候选清单（祖先链 / 原路径 / 其下控件）与**建议改名**；`--suggest` 出改名 ops 草稿（需人工确认）；`--name` 配 `--json` 可机器读 |
 | `edit <file> --old-file O --new-file F [--expect 1] [--dry-run] [--backup]` | 文本级安全替换，保留原换行，断言出现次数，可选备份 |
 | `expand <file> [--out F] [--eol auto\|lf\|crlf] [--indent N] [--safe] [--dry-run] [--backup]` | 规范成设计器同款多行（复刻 `IDE.updateModule`），写盘前做语义等价比对 |
 | `dump <file>` | 按加载器规则解析后美化输出（`ensure_ascii=False`） |
@@ -685,6 +685,9 @@ unregister: function (item) {
 },
 ```
 
+> 行号按某个版本的 `ext-all-debug.js` —— **换版本请按符号名 `ComponentManager.register`
+> 去搜**，别按行号找。
+
 两条结论，各自对应一类现象：
 
 1. **注册键是 `normalName || itemId`** —— `normalName` **优先**。所以只要每个同名控件各有互不相同的
@@ -696,18 +699,23 @@ unregister: function (item) {
 
 ### 9.2 三类控件，三种规则
 
-依据是 TSHT 全项目实测（2780 个 xwl / 59791 个含 `itemId` 的控件节点）：
-
 | 类型 | 重名 | 依据与约定 |
 |---|---|---|
-| **grid 的列** `column` / `tcolumn` | **允许** | 命名约定：**字段名 + `_COL` / `Col` 后缀**（实测 14213 / 20771 个列带此后缀）。取数走 `app.<grid>.getSelection(0).data.XXX`，**不直接取列控件** ⇒ 全项目 3393 组列重名里 **0 组**被事件 JS 引用 |
-| **取值控件**（14 个 `Ext.form.field.*`） | **靠 `normalName` 区分** | 一般是"选中一条数据的详细展现"，`itemId` 默认就用字段名，不可避免重名。**加 `normalName` 后用 `app.<normalName>`**（实测 129 组已这样做，另有 745 组待补 `normalName`） |
-| **按钮 / `item` / 面板 / `tab` / `toolbar` / 数据承载** | **不允许** | 新代码**必须**把 `itemId` 区分开。老代码若已如此且**没被 JS 引用**，可以不改；**一旦被 JS 引用就是真 bug**（实测 1651 组此类重名，其中 163 组被引用） |
+| **grid 的列** `column` / `tcolumn` | **允许** | 命名约定：**字段名 + `_COL` / `Col` 后缀**。取数走 `app.<grid>.getSelection(0).data.XXX`，**不直接取列控件** ⇒ 列名撞车不影响取值 |
+| **取值控件**（14 个 `Ext.form.field.*`） | **靠 `normalName` 区分** | 一般是"选中一条数据的详细展现"，`itemId` 默认就用字段名，重名不可避免。**加了 `normalName` 之后 JS 写 `app.<normalName>`** |
+| **按钮 / `item` / 面板 / `tab` / `toolbar` / 数据承载** | **不允许** | 新代码**必须**把 `itemId` 区分开。老代码若已如此且**没被 JS 引用**，可以不改；**一旦被 JS 引用就是真 bug** |
 
-> `normalName` 是**合法 configs 键**，注册表里 **89 / 133** 个控件接受它（含 `button` `panel` `tab`
-> `toolbar` `grid` `store` `window`…）；不接受的 44 个多是布局 / HTML / 后端节点
-> （`array` `dataprovider` `module` `method` `query` `string`…）。查具体某控件：
+第四种情况：`itemId` **不是合法 JS 标识符**（含中文 / 空格 / `.` 等）—— 这种名字只能用
+`app.get('名')` 取，点号访问不适用，所以 `itemids` 把这类重名判为无害。
+
+> `normalName` 是**合法 configs 键**，但**不是所有控件都接受**：注册表 `wb/system/controls.json` 里
+> 有一部分控件的 `configs` 没有这个键（多是布局 / HTML / 后端节点）。给不接受它的类型写
+> `normalName` 属**非法配置** —— `itemids --fix normalName` 会跳过并回报。查具体某控件：
 > `xwl.py schema <type> --controls wb/system/controls.json`。
+
+各类在**样本工程**里的实测组数、比例与按类型的分布见
+[`references/measured-data.md`](references/measured-data.md) §7。那些数字只是**一个样本的量级参考**，
+不要当成通用阈值 —— **在你自己的工程上跑 `itemids` / `check` 才是该工程的真实情况**。
 
 ### 9.3 遇到重名：先读父子关系，再把候选交给用户选
 
@@ -719,20 +727,17 @@ python scripts/xwl.py itemids <file.xwl> --name tbar       # 只看一个名字�
 python scripts/xwl.py itemids <file.xwl> --suggest         # 生成改名 ops 草稿（**需人工确认**）
 ```
 
-1. **读祖先链**判断"哪个才是真正要改的"。实测样例 `tbar` ×4，分别在 `grid[gridW]` / `grid[grid2]` /
-   `grid[platGrid]` / `grid[gridUser]` 下；#1/#2/#4 已各有 `normalName`（`tbarW` / `tbar2` / `tbarUser`），
-   **只有 #3 没有** —— 要"补"的就是 #3，而不是去动别人。
-2. **把候选列给用户，让他选**。工具只提建议、不替用户定；`itemids` 的建议值照项目既有惯例推：
-   - **补 `normalName`**（推荐，不动 `itemId`，零破坏）：**原名 + 父级 `itemId` 的区分段**
-     （`tbar` 在 `gridW` 下 → `tbarW`；`tbar` 在 `gridUser` 下 → `tbarUser`）。
-   - **改 `itemId`**（须同步改 JS 引用 —— 所以是**兜底手段**）：**父级 `itemId` 作前缀**。项目里能见到的
-     实例是 `setupElementWin_find`（`supplyRateClient*.xwl` 等 6 个文件）。
-     ⚠️ 别拿 `panelCustomRecord_ID` 当"itemId 的先例" —— 实测它是 **`normalName`**（两个同名 `text`
-     靠它区分），属于修法 A 的语境。
+1. **读祖先链**判断"哪个才是真正要改的"。例如同名工具栏 `tbar` 分别挂在 4 个 `grid` 下，
+   其中 3 个已经各有 `normalName`、只有 1 个没有 —— 要"补"的就是那一个，而不是去动别人。
+2. **把候选列给用户，让他选**。工具只提建议、不替用户定；`itemids` 的建议值照**命名惯例**推：
+   - **补 `normalName`**（推荐，不动 `itemId`，零破坏）：**原名 + 父级 `itemId` 的"区分段"** ——
+     `tbar` 挂在 `gridLeft` 下 → `tbarLeft`；挂在 `gridUser` 下 → `tbarUser`。
+   - **改 `itemId`**（须同步改 JS 引用，所以是**兜底手段**）：**父级 `itemId` 作前缀** ——
+     父级 `panelX` 下的 `find` 按钮 → `panelX_find`。
 3. 用户定了之后才走 `patch`；改 `itemId` 的**必须同步改事件 JS 里的引用**，并复查 `itemids`。
 
 > 优先级：**能用 `normalName` 就用 `normalName`**（`--fix auto` 已如此）—— 它不动 `itemId`，
-> 不会破坏任何已有引用；只有类型不接受 `normalName`（那 44 个）时才回退到改 `itemId`。
+> 不会破坏任何已有引用；只有类型不接受 `normalName` 时才回退到改 `itemId`。
 
 ### 9.4 精确定位某一个：`@itemId#N` 与「串联 `@` 限定」
 
@@ -745,21 +750,21 @@ python scripts/xwl.py itemids <file.xwl> --suggest         # 生成改名 ops �
 或者**串联 `@` 段**当"带父级的限定名"用 —— 后一段只在上一段的子树里找：
 
 ```json
-[{"op": "set", "path": ["@grid2", "@tbar", "configs", "normalName"], "value": "tbar2"}]
+[{"op": "set", "path": ["@gridUser", "@tbar", "configs", "normalName"], "value": "tbarUser"}]
 ```
 
-> 实测：给 `WareHouse.xwl` 用 `@tbar#3` 改一处 `itemId`，diff **只有 2 行**。
+### 9.5 想知道"某个工程里实际有多少重名"
 
-### 9.5 全项目基线（2777 个可解析的 xwl）
+不用问别人要数字 —— 在**你自己的工程**上跑一遍就是最新结果：
 
-| 分级 | 组数 | 含义 |
-|---|---:|---|
-| benign | 3543 | 无害（列控件 3393 + 已有唯一 `normalName` 150） |
-| warn | 1856 | 未被 JS 引用 —— 老代码可留，**新代码必须区分** |
-| error | 519 | **已被事件 JS 引用 —— 取值不确定，需处理** |
+```bash
+python scripts/xwl.py itemids <file.xwl> --dups-only      # 单文件：分级 + 候选 + 建议值
+python scripts/xwl.py check <file.xwl>                    # ⑦ 给出该文件的 error / warn 计数
+python scripts/xwl.py itemids <file.xwl> --json           # 机器可读，便于自己汇总
+```
 
-`error` 组按控件类型：`text` 202 / `combo` 178 / `toolbar` 46 / `item` 34 / `grid` 30 / `date` 24 /
-`column` 23 / `number` 22 / `textarea` 19 / `datetime` 8 …
+样本工程的一份完整分布（各档组数 + 按控件类型的 Top）见
+[`references/measured-data.md`](references/measured-data.md) §7.2，可作**量级参考**。
 
 ## 十、改完的自检清单
 

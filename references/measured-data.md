@@ -130,15 +130,22 @@ diff 只含真正改的内容（实测：377 KB 的 `transTrack.xwl` 加一个�
 | 分级 | 组数 | 说明 |
 |---|---:|---|
 | benign | 3543 | 无害：**列控件 3393** + **已有唯一 normalName 150** |
-| warn | 1856 | 未被事件 JS 引用 —— 老代码可留，新代码须区分 |
-| error | 519 | **已被事件 JS 引用 —— `app.<名字>` 取值不确定** |
+| warn | 1919 | 未被事件 JS 引用 —— 老代码可留，新代码须区分 |
+| error | 456 | **已被事件 JS 引用 —— `app.<名字>` 取值不确定** |
 
-`error` 组按控件类型：`text` 202 / `combo` 178 / `toolbar` 46 / `item` 34 / `grid` 30 / `date` 24 /
-`column` 23 / `number` 22 / `textarea` 19 / `datetime` 8。
-`warn` 组 Top：`array` 364 / `item` 356 / `text` 277 / `combo` 257 / `store` 252 / `number` 152 / `feature` 144 / `toolbar` 121。
+`error` 组按控件类型：`text` 184 / `combo` 163 / `toolbar` 46 / `grid` 30 / `item` 28 / `number` 22 /
+`column` 14 / `textarea` 10 / `panel` 6 / `date` 6 …
+`warn` 组 Top：`array` 364 / `item` 362 / `text` 295 / `combo` 272 / `store` 252 / `number` 152 /
+`feature` 144 / `toolbar` 121。
 
 **关键结论：列控件的 3393 组重名里，被事件 JS 引用的有 0 组。**
 印证了"列控件不直接取、取数走 `app.<grid>.getSelection(0).data.XXX`"这一用法。
+
+> ⚠️ **这些数字只是这一个样本工程的量级参考，不是通用阈值** —— 换工程必须重跑。
+> 另外它们的口径随工具版本变过：修掉"注释里的 `app.X` 被当成引用"与
+> "保留表（`store`/`add`/`items`/`id`）遮蔽真实引用"两个缺陷后，
+> error 由 519 降到 456、warn 由 1856 升到 1919（少了 63 组**误报的** error）。
+> 这正是"别把样本数字当阈值"的理由。
 
 ### 7.3 列的命名约定
 
@@ -175,3 +182,14 @@ unregister: function (item) {
 `unregister` 的 `delete` 是"重复会取不到值"的**确切机制**：任一重复项被销毁，
 整个名字就从页面作用域消失，哪怕另一个同名控件还活着。
 （另见 `ext-all-debug.js:453` 起：`appScope` 在 `Ext.clone` / `Ext.merge` 里被**特意保留引用、不深拷贝**。）
+
+### 7.6 命名惯例的实测证据（供 `itemids` 的建议值参考）
+
+| 惯例 | 实测证据（样本工程） |
+|---|---|
+| 列名带 `_COL` / `Col` 后缀 | 20771 个列 `itemId` 中 14213 个（68.4%）带此后缀，如 `ORDER_NO_COL`、`ITEM_NAMECol` |
+| **`normalName` = 原名 + 父级 `itemId` 的"区分段"** | 4 处：`tbar` 挂在 `gridW` / `grid2` / `gridUser` 下，分别叫 `tbarW` / `tbar2` / `tbarUser`；同一页里**唯一没给 `normalName` 的就是那个不合惯例的** |
+| **`itemId` = 父级 `itemId` + `_` + 原名** | 7 处：`setupElementWin` 下的 `find` → `setupElementWin_find`（`supplyRateClient*.xwl` 等 6 个文件） |
+
+> ⚠️ 一个容易误引的例子：`panelCustomRecord_ID` 看着像"`itemId` 用父级作前缀"，但它实测是
+> **`normalName`**（两个同名 `text` 靠它区分）—— 属"补 `normalName`"的语境，不要当成 `itemId` 的先例。
