@@ -187,3 +187,32 @@ diff 只含真正改的内容（实测：377 KB 的 `transTrack.xwl` 加一个�
 
 > ⚠️ 一个容易误引的例子：`panelCustomRecord_ID` 看着像"`itemId` 用父级作前缀"，但它实测是
 > **`normalName`**（两个同名 `text` 靠它区分）—— 属"补 `normalName`"的语境，不要当成 `itemId` 的先例。
+
+## 八、SQL 片段与 `serverScript` 的分布（`sql-fragments.md` 的数字口径）
+
+**文件分布**（样本工程 `wb/` 下）：**1165 个文件带 `serverScript`、1142 个带 `dataprovider`，
+其中 687 个两者都有**；另有 **478 个只有 `serverScript`** —— 这些自己用 `app.run` / `app.send`
+直接出数据，不靠 `dataprovider`。
+
+**`{#名字#}` 与 `setAttribute('名字',…)` 的同名交集**（按次数）：
+`sql` **715**、`sql1` 55、`whereSql` 19…
+
+**三类占位符的实测出现次数**：
+
+| 形态 | 实测例（次数） |
+|---|---|
+| `{#sys.*#}` / `{#Str.*#}`（框架内置） | `sys.username` 492、`sys.tenancyId` 278、`sys.id` 202、`sys.deptPermSql` 76、`sys.deptId` 27、`Str.home` 26 |
+| `{#任意名#}`（由同文件 `serverScript` 注入） | `sql` 715、`sql1` 55、`whereSql` 19 |
+| `{?名字?}`（绑定参数，非文本替换） | `ID` 451、`name` 247、`query` 208、`month` 132 |
+
+**被引用路径 / 引用点**：**2000 个被引用路径、5000+ 处引用**。
+
+**`serverScript` 常用 API 词频**：`Wb.isEmpty` 4750 · `app.get` 1328 · `request.setAttribute` 1052 ·
+`app.run` 394 · `app.send` 247 · `Wb.decode` 191 · `Wb.each` 178 · `Wb.encode` 134 ·
+`request.getParameter` 127 · `SysUtil.getId` 104 · `app.log` 88 · `app.update` 80。
+
+**`sqlrefs` 自洽率**：**1620 个**含 `serverScript` / `dataprovider` 的文件里，**1606 个引用自洽
+（99.1%）**；其余为 14 个 `{#sql#}` 本文件未提供（多为「由调用方传入」的场景）、
+1 处 `serverScript` 误用 `{#…#}`。
+
+> 这些数字只是**一个样本**的量级参考，不是规范；换工程请以自己的为准。

@@ -7,7 +7,7 @@
 > **本文是 [`SKILL.md`](../SKILL.md) 第六章的展开** —— 编辑方式（`patch` / `@itemId` / 校验）见那边第三章。
 > **读者**：改 SQL 片段、或改「参数控件 → store → SQL」链路时查。
 >
-> **本文里的「实测 / 次数 / 分布」都指样本工程**（口径与完整统计见 [`measured-data.md`](measured-data.md)）—— 它们**不是规范**，只是量级参考；换工程请以自己的为准。
+> **本文只讲规范与机制**：所有「实测 / 次数 / 分布」都已移到 [`measured-data.md`](measured-data.md)（SQL 相关口径在 §八），文内只在需要处给指针 —— 那些数字只是**一个样本**的量级参考，换工程请以自己的为准。
 
 ---
 
@@ -21,9 +21,8 @@
    └─ type="dataprovider" configs{ itemId, sql, totalSql?, … }   ← 执行 SQL、出数据
 ```
 
-**分布**（样本工程 `wb/` 下实测）：**1165 个文件带 `serverScript`、1142 个带 `dataprovider`、
-687 个两者都有**；另有 **478 个只有 `serverScript`** —— 这些自己用 `app.run` / `app.send`
-直接出数据，不靠 `dataprovider`。
+**分布**：多数文件两者都有；也有一部分**只有 `serverScript`** —— 这些自己用 `app.run` /
+`app.send` 直接出数据，不靠 `dataprovider`。（文件数见 [`measured-data.md`](measured-data.md) §八。）
 
 ## 二、两个字段的格式（权威来源：控件注册表）
 
@@ -67,16 +66,18 @@ where toc.ID = {?ID?}          -- ← 绑定参数
 ```
 
 实测交集（`{#x#}` 与 `setAttribute('x',…)` **同名**）：
-**`sql` / `sql1` / `sql2` / `whereSql` / `joinsql` / `date` / `username`**；
-最常见是 `{#sql#}`（715 次）。
+**`sql` / `sql1` / `sql2` / `whereSql` / `joinsql` / `date` / `username`**，其中 `{#sql#}` 最常见
+（次数见 [`measured-data.md`](measured-data.md) §八）。
 
 ### 3.2 三种占位符，来源不同（别混）
 
-| 形态 | 来源 | 实测例（出现次数） |
+| 形态 | 来源 | 典型例 |
 |---|---|---|
-| `{#sys.*#}` / `{#Str.*#}` | **框架内置**（会话 / 权限 / 资源串），**不用自己提供** | `sys.username`(492)、`sys.tenancyId`(278)、`sys.id`(202)、`sys.deptPermSql`(76)、`sys.deptId`(27)、`Str.home`(26) |
-| `{#任意名#}` | **同文件 `module` 的 serverScript** 用 `request.setAttribute('名字', …)` 提供 | `sql`(715)、`sql1`(55)、`whereSql`(19) |
-| `{?名字?}` | **绑定参数**（不是文本替换） | `ID`(451)、`name`(247)、`query`(208)、`month`(132) |
+| `{#sys.*#}` / `{#Str.*#}` | **框架内置**（会话 / 权限 / 资源串），**不用自己提供** | `sys.username`、`sys.tenancyId`、`sys.id`、`sys.deptPermSql`、`sys.deptId`、`Str.home` |
+| `{#任意名#}` | **同文件 `module` 的 serverScript** 用 `request.setAttribute('名字', …)` 提供 | `sql`、`sql1`、`whereSql` |
+| `{?名字?}` | **绑定参数**（不是文本替换） | `ID`、`name`、`query`、`month` |
+
+> 各例在样本工程里的出现次数见 [`measured-data.md`](measured-data.md) §八。
 
 > `{?…?}` 由 `com.wb.tool.Query` 解析成 `PreparedStatement` 参数（常量可见 `"{?"`、`"?}"`），
 > **所以不要在 SQL 里手工拼值**（也就不用操心转义 / 注入）。
@@ -91,7 +92,7 @@ where toc.ID = {?ID?}          -- ← 绑定参数
 ```
 
 → 文件是 `…/transSql/queryDriverFile.xwl`（**补 `.xwl`**）。
-样本工程实测 **2000 个被引用路径、5000+ 处引用**。
+被引用的片段是**常态**（引用点数量级见 [`measured-data.md`](measured-data.md) §八）。
 
 ## 四、两条硬规则（有源码依据）
 
@@ -110,9 +111,9 @@ where toc.ID = {?ID?}          -- ← 绑定参数
 | `com.wb.tool.Query` | SQL 执行 + `{?…?}` 参数绑定 |
 | `com.wb.util.WebUtil#replaceParams(req, s)` | `{#…#}` 替换实现 |
 
-**serverScript 的常用 API**（全项目词频）：
-`Wb.isEmpty`(4750) · `app.get`(1328) · `request.setAttribute`(1052) · `app.run`(394) · `app.send`(247) ·
-`Wb.decode`(191) · `Wb.each`(178) · `Wb.encode`(134) · `request.getParameter`(127) · `SysUtil.getId`(104) · `app.log`(88) · `app.update`(80)
+**serverScript 的常用 API**（按使用频次排序；数字见 [`measured-data.md`](measured-data.md) §八）：
+`Wb.isEmpty` · `app.get` · `request.setAttribute` · `app.run` · `app.send` · `Wb.decode` ·
+`Wb.each` · `Wb.encode` · `request.getParameter` · `SysUtil.getId` · `app.log` · `app.update`
 
 ## 五、页面怎么把值送进来：两条通路（**推荐 `out`**）
 
@@ -156,7 +157,7 @@ Wb.request({ url: 'm?xwl=orderCenter/…/transSql/saveOrder', out: app.editWin, 
 | `Wb.request` / `Wb.requestAg` / `Wb.upload` | `wb/script/wb.js`（`Wb.getValue(options.out)`） |
 
 容器用什么：查询条惯用 `toolbar`（典型 `app.tbar`）；表单 / 弹窗用 `form` / `window` / `container`。
-实测样本工程 `out` 最常指向 `app.tbar`（160 处）、其次 `app.manageTopTbar` / `app.editWin`。
+`out` 最常指向 `app.tbar`，其次 `app.manageTopTbar` / `app.editWin`（次数见 [`measured-data.md`](measured-data.md) §二）。
 
 ### 5.2 通路② `params`：显式传「参数名 → 值」
 
@@ -241,8 +242,8 @@ python scripts/xwl.py params  <page.xwl> [--controls …]   # 页面 → store �
 - **`sqlrefs`** —— 检查三件事：每个 `{#名字#}` 是否有 serverScript 提供（`sys.*` / `Str.*` 视为内置）、
   **serverScript 里是否误用了 `{#…#}`**、顺带列出所有 `{?参数?}` 名字。
 
-  > 实测全项目：**1620 个含 serverScript/dataprovider 的文件中，1606 个引用自洽（99.1%）**；
-  > 14 个 `{#sql#}` 本文件未提供（多为「由调用方传入」的场景）、1 处 serverScript 误用 `{#…#}`。
+  > 样本工程上的自洽率约 **99%**（明细见 [`measured-data.md`](measured-data.md) §八）：
+  > 少量告警是「由调用方传入」的正常场景，或 serverScript 误用 `{#…#}`。
   > 这类告警要**结合调用方判断**，不要一律当成错误。
 
 - **`params`** —— 自动做四件事：
@@ -254,7 +255,7 @@ python scripts/xwl.py params  <page.xwl> [--controls …]   # 页面 → store �
      报「SQL 需要但页面未发现来源」与「页面送了但 SQL 用不到」；
   4. `--controls` 给了就用注册表推导取值控件类型（不给则用内置的同一份 14 个兜底）。
 
-  实测 `aboutUs.xwl`：
+  实测某页面：
 
   ```text
   === 传参点（N 处）: out X 处 / params Y 处 ===
