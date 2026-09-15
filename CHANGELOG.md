@@ -67,19 +67,27 @@
   11 个子命令一律给 `[FAIL] 无法读取 …`；`edit` 走**只读**路径（不解析）以保住"能修坏文件"的用途。
   顺带把 `parse_xwl` 找不到 `{` 的报错从 `substring not found` 改成人话。
 
-### 本次复算的关键事实（都能用 `itemids` / `selftest` 复现）
+**深审修复（P2 · 3 项，文档一致性）**：
 
-- **重名的后果有源码依据**：`wb/libs/ext/ext-all-debug.js:21689`（WebBuilder 改过的 `Ext.ComponentManager`）
-  —— 注册键是 **`normalName || itemId`**（normalName 优先），注册是**普通赋值**（后者覆盖前者），
-  注销是**按同名键直接 `delete`** ⇒ **任一重复项被销毁会把整个名字从页面作用域删掉**。
-  这正是"重名后 `app.X` 取不到值"的确切机制。
-- **`normalName` 是合法 configs 键**：注册表 133 个控件里 **89 个**接受、44 个不接受（多为布局/HTML/后端节点）。
-- **列控件重名确实无害**：全项目 **3393 组**列重名（`column`/`tcolumn`），被事件 JS 引用的 **0 组**。
-  命名约定 `_COL`/`Col` 后缀：20771 个列 itemId 里 **14213 个（68.4%）**带此后缀。
-- **全项目重名分布**（2777 个可解析 xwl / 59791 个含 itemId 的节点 / 12304 段事件 JS）：
-  benign **3543**（列 3393 + 已有唯一 normalName 150）/ warn **1856** / error **519**。
-- **`#` 从未出现在任何 `itemId` 里** ⇒ 用它作序号分隔符安全。
-- 实测最小 diff：给 `WareHouse.xwl` 用 `@tbar#3` 改一处 `itemId`，diff **仅 2 行**。
+- `README.md` 目录树写 `test-prompts.json # 3 条典型 prompt`，实际已是 **4 条** —— 修正。
+- `references/measured-data.md` §7.1 的「不接受 `normalName`」清单只列了 23/44，**补齐为完整 44 个**，
+  并点明这些是纯 HTML 标签 / 图表子元素 / 后端节点（给它们写 `normalName` 属非法配置）。
+- 本文件原 `### 本次复算的关键事实` **不是 Keep a Changelog 允许的小节名**（只允许
+  Added / Changed / Deprecated / Removed / Fixed / Security）→ 改为引用块。
+
+> **本次复算的关键事实**（都能用 `itemids` / `selftest` 复现）
+>
+> - **重名的后果有源码依据**：`wb/libs/ext/ext-all-debug.js:21689`（WebBuilder 改过的 `Ext.ComponentManager`）
+>   —— 注册键是 **`normalName || itemId`**（normalName 优先），注册是**普通赋值**（后者覆盖前者），
+>   注销是**按同名键直接 `delete`** ⇒ **任一重复项被销毁会把整个名字从页面作用域删掉**。
+>   这正是"重名后 `app.X` 取不到值"的确切机制。
+> - **`normalName` 是合法 configs 键**：注册表 133 个控件里 **89 个**接受、44 个不接受（多为布局/HTML/后端节点）。
+> - **列控件重名确实无害**：全项目 **3393 组**列重名（`column`/`tcolumn`），被事件 JS 引用的 **0 组**。
+>   命名约定 `_COL`/`Col` 后缀：20771 个列 itemId 里 **14213 个（68.4%）**带此后缀。
+> - **全项目重名分布**（2777 个可解析 xwl / 59791 个含 itemId 的节点 / 12304 段事件 JS）：
+>   benign **3543**（列 3393 + 已有唯一 normalName 150）/ warn **1856** / error **519**。
+> - **`#` 从未出现在任何 `itemId` 里** ⇒ 用它作序号分隔符安全。
+> - 实测最小 diff：给 `WareHouse.xwl` 用 `@tbar#3` 改一处 `itemId`，diff **仅 2 行**。
 
 ---
 

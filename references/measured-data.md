@@ -103,3 +103,75 @@ diff 只含真正改的内容（实测：377 KB 的 `transTrack.xwl` 加一个�
 
 见 [`controls.md`](controls.md)：总表有每个控件的「用过的次数」列，
 第四节有实测父子结构 Top 45 与典型骨架。
+
+## 七、itemId 与 normalName（重名分级的数据依据）
+
+口径：全项目 **2780 个 xwl**（其中 **2777 个可解析**，3 个失败见第五节）、
+**59791 个含 `itemId` 的控件节点**、**599 个文件带事件 JS（共 12304 段事件）**。
+
+### 7.1 `normalName` 的合法性（权威来源 = 控件注册表）
+
+注册表 `wb/system/controls.json` 共 **133 个控件节点**，其中 **89 个**的 `configs` 里含 `normalName`
+（类型 `string`），**44 个不含**：
+
+- 接受：`button` `panel` `tab` `toolbar` `grid` `store` `window` `viewport` `text` `combo` `item` `menu`
+  `column` `tree` `dataview` `fieldset` `form` `image` `label` …（含全部 `t*` 触屏变体）
+- 不接受（**完整 44 个**）：`a` `array` `bbutton` `bcheck` `bform` `bimage` `br` `bradio` `clientscript`
+  `dataprovider` `div` `eaxis` `egrid` `elabel` `elegend` `eseries` `etextstyle` `etitle` `etoolbox`
+  `etooltip` `folder` `header` `hr` `input` `li` `mailer` `method` `module` `ol` `p` `query` `radio`
+  `report` `response` `serverscript` `socket` `span` `sqlswitcher` `string` `treelist` `tsocket` `ul`
+  `updater` `xwl`
+  —— 绝大多数是纯 HTML 标签（`div` / `span` / `ul` / `p` …）、图表子元素（`eaxis` / `eseries` /
+  `etitle` …）或后端节点（`module` / `dataprovider` / `serverscript` …），本来就没有 `normalName`
+  这个概念。**给这些类型写 `normalName` 是非法配置**（`itemids --fix normalName` 会跳过并回报）。
+
+### 7.2 重名组的实际分布（按「类型 + 是否被 JS 引用 + 有无 normalName」分级）
+
+| 分级 | 组数 | 说明 |
+|---|---:|---|
+| benign | 3543 | 无害：**列控件 3393** + **已有唯一 normalName 150** |
+| warn | 1856 | 未被事件 JS 引用 —— 老代码可留，新代码须区分 |
+| error | 519 | **已被事件 JS 引用 —— `app.<名字>` 取值不确定** |
+
+`error` 组按控件类型：`text` 202 / `combo` 178 / `toolbar` 46 / `item` 34 / `grid` 30 / `date` 24 /
+`column` 23 / `number` 22 / `textarea` 19 / `datetime` 8。
+`warn` 组 Top：`array` 364 / `item` 356 / `text` 277 / `combo` 257 / `store` 252 / `number` 152 / `feature` 144 / `toolbar` 121。
+
+**关键结论：列控件的 3393 组重名里，被事件 JS 引用的有 0 组。**
+印证了"列控件不直接取、取数走 `app.<grid>.getSelection(0).data.XXX`"这一用法。
+
+### 7.3 列的命名约定
+
+全项目 **20771 个** `column` / `tcolumn` 节点的 `itemId` 中，**14213 个（68.4%）**带
+`_COL` / `Col` 后缀（如 `ORDER_NO_COL`、`ITEM_NAMECol`），其余 6558 个不带。
+
+### 7.4 `itemId` 的字符集
+
+绝大多数是合法 JS 标识符，但**并非全部**：全项目有 **57 个**节点的 `itemId` 含非 `[A-Za-z0-9_]` 字符 ——
+中文（如 `query` 节点上写 `"检查是否存在重复记录"`）、空格、`.`、`(`、`)`、`-`、`+` 都出现过。
+这类名字**不能用 `app.X` 点号访问**，只能用 `app.get('名字')`；`itemids` 因此把它们的重名判为无害。
+
+**`#` 从未出现在任何 `itemId` 里** —— 所以 `@名字#N` 用 `#` 作序号分隔符不会与既有名字冲突。
+
+### 7.5 框架侧机制（源码原文）
+
+`wb/libs/ext/ext-all-debug.js:21689`（WebBuilder 改过的 `Ext.ComponentManager`）：
+
+```js
+register: function (item) {
+    this.all.add(item);
+    if (item.appScope && (item.normalName || item.itemId))
+        item.appScope[item.normalName || item.itemId] = item;      // 普通赋值 ⇒ 后者覆盖前者
+},
+unregister: function (item) {
+    var all = this.all;
+    all.removeAtKey(all.getKey(item));
+    if (item.appScope && (item.normalName || item.itemId))
+        delete item.appScope[item.normalName || item.itemId];      // 按同名键 delete ⇒ 会误删别人
+},
+```
+
+注册键 = **`normalName || itemId`**（normalName 优先）。
+`unregister` 的 `delete` 是"重复会取不到值"的**确切机制**：任一重复项被销毁，
+整个名字就从页面作用域消失，哪怕另一个同名控件还活着。
+（另见 `ext-all-debug.js:453` 起：`appScope` 在 `Ext.clone` / `Ext.merge` 里被**特意保留引用、不深拷贝**。）

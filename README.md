@@ -46,6 +46,29 @@ python scripts/xwl.py patch page.xwl --ops ops.json --backup    # 确认后落�
 > 文本级 `xwl.py edit` 只是例外手段（改一小段文本、又不希望整份重排时）。
 > 两条路都**禁止**用普通编辑器 / 通用 Edit 工具改 xwl —— 会写成裸 LF。
 
+### itemId 重名怎么办
+
+`itemId` 是事件 JS 取控件的键，但重名**不是一律有问题** —— 判据是**控件类型 + 是否已被 JS 引用 + 有没有 `normalName`**：
+
+| 类型 | 重名 | 规则 |
+|---|---|---|
+| grid 的列（`column` / `tcolumn`） | **允许** | 约定后缀 `_COL` / `Col`；取数走 `grid.getSelection(0).data.XXX`，不直接取列控件 |
+| 取值控件（14 个 `Ext.form.field.*`） | 靠 `normalName` 区分 | 有 `normalName` 就用 `app.<normalName>` |
+| 按钮 / `item` / 面板 / `tab` / `toolbar` / 数据承载 | **不允许** | 新代码必须区分开；老代码**被 JS 引用**时就是真 bug |
+
+```bash
+python scripts/xwl.py itemids page.xwl --dups-only     # 分级 + 候选清单（祖先链 / 其下控件）+ 建议改名
+python scripts/xwl.py itemids page.xwl --name tbar     # 只看一个名字的全部候选
+python scripts/xwl.py itemids page.xwl --suggest       # 出改名 ops 草稿（**需人工确认**）
+```
+
+重名时 `@itemId` **不会猜顺序**：报错并附候选清单；要指名第 N 个用 **`@名字#N`**（N 从 1 起），
+或串联 `@` 段当限定名（`["@grid2", "@tbar"]`）。
+
+> 框架源码依据（`ext-all-debug.js:21689`）：注册键是 `normalName || itemId`，注册是**普通赋值**、
+> 注销是**按同名键直接 `delete`** ⇒ 后注册的覆盖先注册的，且**任一重复项被销毁会把整个名字删掉**。
+> 这就是"重名后 `app.X` 取不到值"的来源。详见 [`SKILL.md`](SKILL.md) 第九章。
+
 ## 快速开始
 
 ```bash
@@ -66,8 +89,9 @@ python scripts/xwl.py check page.xwl                             # 5) 改完必�
 | 子命令 | 干什么 |
 |---|---|
 | `patch <file> --ops ops.json` | **结构级编辑（默认方式）**：只给值/子树，按设计器算法重建整份文件 |
-| `check <file...>` | 六项格式校验 + 事件 JS `node --check`；任一不过返回非 0 |
-| `paths <file>` | 列出 `sql` / `totalSql` / `serverScript` / `url` 四类字段的位置，给「原路径 + `@itemId` 写法」（`@` 要求 `itemId` 唯一，重名会被拒绝） |
+| `check <file...>` | 七项校验：格式五项 + 事件 JS `node --check` + **itemId 重名分级**；任一 FAIL 返回非 0 |
+| `itemids <file>` | **itemId 重名报告（只读）**：分级（无害 / 待区分 / 需处理）+ 候选清单（祖先链、其下控件）+ 建议改名；`--suggest` 出 ops 草稿 |
+| `paths <file>` | 列出 `sql` / `totalSql` / `serverScript` / `url` 四类字段的位置，给「原路径 + `@itemId` 写法」（重名时给 `@名字#N` 点名写法） |
 | `params <page.xwl>` | 核对「参数控件 → store → SQL」传参链路（标出 `out` / `params` 两条通路） |
 | `sqlrefs <file>` | 校验 SQL 片段里 `{#名字#}` 与 `serverScript` 是否自洽 |
 | `schema [<type>] --controls <…/controls.json>` | 查控件注册表：`--tree` 面板分组树、`--list` 控件 id、`--skeleton` 设计器同款骨架 |
@@ -83,7 +107,7 @@ python scripts/xwl.py check page.xwl                             # 5) 改完必�
 webbuilder-xwl-patch/
 ├── SKILL.md                  # 完整流程与规则：格式硬规则、四步、SQL 片段要点、引用方式、工具、坑
 ├── CHANGELOG.md              # 变更历史（倒序，含每一步的依据与实测数字）
-├── test-prompts.json         # 3 条典型 prompt（供 skill 评估用）
+├── test-prompts.json         # 4 条典型 prompt（供 skill 评估用）
 ├── references/
 │   ├── controls.md           # 控件清单：有哪些 / 干什么 / 该挂哪里 / 怎么选
 │   ├── sql-fragments.md      # SQL 片段：两级结构、字段全集、{#…#} 引用、页面传参两条通路
