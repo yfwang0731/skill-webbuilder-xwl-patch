@@ -1,0 +1,17 @@
+[
+  {
+    "id": 1,
+    "prompt": "帮我看看 wb/modules/orderCenter/highwayTransportationManagement/transTrack.xwl 这个文件格式有没有问题",
+    "expected": "用 xwl.py check 跑六项格式校验（无 BOM / 换行一致 / 无「反斜杠+空白」/ 加载器等价解析 / 末行结构 / 事件 JS 语法），报告每项结果而不是只给一句『没问题』；不应打开文件手工看"
+  },
+  {
+    "id": 2,
+    "prompt": "给 transTrack.xwl 的查询工具栏加一个「导出」按钮，点击时读表格选中行、没选就提示，然后调后台导出",
+    "expected": "用结构级 patch（不碰文本层）：先 schema button 取合法字段与骨架、paths/dump 核对路径，写 ops.json 追加节点（标准键序 configs/expanded/children/type/events），事件 JS 用单引号；先 --dry-run 看 diff 再 --backup 落盘，最后 check。产物里不应出现手工拼接的续行符"
+  },
+  {
+    "id": 3,
+    "prompt": "页面上的日期条件我改了 itemId，现在查询不生效了，SQL 也没报错，帮我看下哪里断了",
+    "expected": "指出「参数名 = 控件 itemId」这条命名契约，用 xwl.py params 做交叉核对（页面送的参数名 vs SQL 的 {?名?} / app.get('名')），说明名字对不上只会取到 null、条件静默失效；并覆盖 out / params 两条通路与同名参数覆盖方向相反的坑"
+  }
+]
