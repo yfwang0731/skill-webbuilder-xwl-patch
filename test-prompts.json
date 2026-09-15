@@ -2,7 +2,7 @@
   {
     "id": 1,
     "prompt": "帮我看看 wb/modules/orderCenter/highwayTransportationManagement/transTrack.xwl 这个文件格式有没有问题",
-    "expected": "用 xwl.py check 跑六项格式校验（无 BOM / 换行一致 / 无「反斜杠+空白」/ 加载器等价解析 / 末行结构 / 事件 JS 语法），报告每项结果而不是只给一句『没问题』；不应打开文件手工看"
+    "expected": "用 xwl.py check 跑七项校验（无 BOM / 换行一致 / 无「反斜杠+空白」/ 加载器等价解析 / 末行结构 / 事件 JS 语法 / itemId 重名分级），报告每项结果而不是只给一句『没问题』；不应打开文件手工看"
   },
   {
     "id": 2,
@@ -13,5 +13,10 @@
     "id": 3,
     "prompt": "页面上的日期条件我改了 itemId，现在查询不生效了，SQL 也没报错，帮我看下哪里断了",
     "expected": "指出「参数名 = 控件 itemId」这条命名契约，用 xwl.py params 做交叉核对（页面送的参数名 vs SQL 的 {?名?} / app.get('名')），说明名字对不上只会取到 null、条件静默失效；并覆盖 out / params 两条通路与同名参数覆盖方向相反的坑"
+  },
+  {
+    "id": 4,
+    "prompt": "这个页面里两个按钮都叫 findBton，我要改其中一个的点击事件，工具说重名了。是不是得先把名字改掉？",
+    "expected": "不要直接下结论改名。用 xwl.py itemids --name findBton（或 --dups-only）拿候选清单与分级：说明判据是「类型 + 是否被事件 JS 引用 + 有无 normalName」，列控件重名无害、取值控件优先补 normalName 而非改 itemId、按钮/面板/承载必须唯一；重名时 @ 不猜顺序，要指名第 N 个用 @findBton#2（N 从 1 起）或串联 @ 段限定；最后把候选列给用户选，而不是替他定"
   }
 ]

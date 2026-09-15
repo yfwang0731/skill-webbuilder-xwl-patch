@@ -7,8 +7,10 @@ description: >-
   触发场景：改 wb/modules/** 下的页面 .xwl（加删控件、挂改事件、改配置、改网格列）、
   改被引用的 SQL 片段 transSql/*.xwl（同样用 @itemId 寻址 patch）、
   查改「参数控件 → store → SQL」传参链路（两条通路 out / params，推荐 out）、
+  处理 itemId 重名（按「类型 + 是否被 JS 引用 + 有无 normalName」分级，给候选清单与建议值；
+  列控件允许重名、取值控件靠 normalName 区分、按钮/面板/承载必须唯一）、
   判断某个 .xwl 格式是否合法、xwl 加载报解析错误或页面白屏、要不要把 xwl 压成一行。
-  附零依赖工具 xwl.py：check / patch / edit / params / paths / sqlrefs / schema / dump / expand / sql / events。
+  附零依赖工具 xwl.py：check / itemids / patch / edit / params / paths / sqlrefs / schema / dump / expand / sql / events。
 agent_created: true
 ---
 
@@ -201,8 +203,14 @@ if (!rec) {\
 
 > `path` 里的**对象键**能用 `@itemId` 就用；**数组元素**（如 `children`、`columns`）仍要用下标 —— 两者可混写：`["@grid1","children",0,"configs","title"]`。
 >
-> **`@itemId` 要求唯一**：同一个文件里重名（常见：多个 store 都叫 `itemId="store"`）时，
-> 工具**拒绝执行**而不是猜第一个 —— 改用 `paths` 给出的**原路径**，或先把目标节点的 `itemId` 改成唯一值。
+> **`@itemId` 要求唯一**。重名时工具**不猜顺序** —— 它会**报错并附上候选清单**：每个候选带
+> 祖先链（`panel2 › tab1 › grid2`）、原路径、"其下有什么控件"、以及**建议改名与依据**。
+> 三条出路：① `@名字#N` 点名第 N 个（N 从 1 起）；② 串联 `@` 段缩小范围（`["@grid2", "@tbar"]`）；
+> ③ 按父子关系只改真正要改的那个。**重名的由来、分级与处置流程见第九章。**
+>
+> ⚠️ `paths` **只列** `sql` / `totalSql` / `serverScript` / `url` 四类字段 ——
+> **按钮、网格等控件的 `itemId` 不在它的输出里**。要 `patch` 某个 `events.*`（如给按钮改 `click`）时，
+> 用 **`xwl.py itemids <file>`** 看重名报告（第九章），或直接试跑并接受工具的候选清单报错。
 
 **改前先核对（几十秒，省一次返工）**：
 
@@ -242,6 +250,12 @@ python scripts/xwl.py patch <file.xwl> --ops ops.json --backup
 3. **diff 最小化有保证**：工具先比对"源文件是否设计器原样排版"。是 → 重排后逐字节一致，
    diff **只含你真正改的内容**（实测给 377 KB 的 `transTrack.xwl` 加一个带多行 JS 的按钮 + 改标题，
    diff **只有 17 行**）。源文件不是设计器原样时，重排会顺带规整整份格式，工具会明确提示。
+   - ⚠️ 那种"顺带规整"除缩进外，还可能把值里的 `\uXXXX` 转义**还原成真实字符**
+     （实测 `forwardOrderCntrNew.xwl` 因此多出 1 处 `\u201c` → `“`，语义等价）。
+     **先 `--dry-run` 数一下噪声行数再决定**：噪声只有一两行就照用 `patch`（省心，格式有保证——
+     且还原后的形态反而与设计器产物一致）；噪声可观就改用 3.2 的 `edit` 做定点插入
+     （语义相同，diff 只含你改的那一处）。
+   - 判断噪声量：把 `--dry-run` 输出重定向到文件，数以 `  +` / `  -` 开头的行即可。
 
 > 改 **SQL / serverScript** 时，`path` 用 `["@dataprovider","configs","sql"]` 这类写法 —— 见第四章。
 
@@ -260,11 +274,12 @@ python scripts/xwl.py edit <file.xwl> --old-file old.txt --new-file new.txt --ex
 
 ### 第 4 步 · 格式校验（**改完必跑**）
 
-六项检查（**改完必跑**；不通过时先用 `--backup` 的 `<file>.bak` 回退再排查）：
+七项检查（**改完必跑**；不通过时先用 `--backup` 的 `<file>.bak` 回退再排查）：
 
 ```bash
 python scripts/xwl.py check <file.xwl> [more.xwl ...]
-python scripts/xwl.py check <file.xwl> --no-js      # 本机没有 node 时跳过 JS 校验
+python scripts/xwl.py check <file.xwl> --no-js              # 本机没有 node 时跳过 JS 校验
+python scripts/xwl.py check <file.xwl> --no-itemid          # 跳过 itemId 重名分级（只查格式）
 ```
 
 | # | 检查 | 判定 |
@@ -275,11 +290,16 @@ python scripts/xwl.py check <file.xwl> --no-js      # 本机没有 node 时跳�
 | ④ | **加载器等价解析** | 归一化后 `json.loads` 通过（**解析通过 ⇔ 格式没问题**） |
 | ⑤ | 续行结构 | 末行不以 `\` 结尾 |
 | ⑥ | 事件 JS 语法 | 抽出所有 `events.*` 的 JS 值 → `node --check` |
+| ⑦ | **itemId 重名分级** | **只有「重名 且 已被事件 JS 引用」判 FAIL**；其余重名只出 `[warn]`，不影响结论（分级与处置见第九章） |
 
 > ④ 的写法是**替换成「反斜杠 + 字母 n」两个字符**，不是替换成换行符 —— 写错会误报。
 > 等价实现：`re.sub(r'\\(?:\r\n|\r|\n)', r'\\n', text)`，再对 `text[text.index('{'):]` 做 `json.loads`。
 >
 > ② 别写成「必须 CRLF」—— 设计器与仓库里存的都是 **LF**，那样会把合法文件判成失败。
+>
+> ⑦ 的 `[FAIL]` 与 ①–⑥ 性质不同：①–⑥ 是**格式**（文件坏了），⑦ 是**命名质量**（文件能用但取值有风险）。
+> 所以 `patch` / `edit` / `expand` **写盘后的自动校验只判 ①–⑥** —— 否则会出现"写盘成功却返回非 0"。
+> 要看 ⑦ 请单独跑 `check`，或直接 `itemids`。
 
 ## 四、SQL 片段：`module.serverScript` ↔ `dataprovider`
 
@@ -620,10 +640,11 @@ org.json 的字符串转义还有两条：**非 ASCII 原样保留**（中文不
 |---|---|
 | `patch <file> --ops ops.json [--eol auto\|lf\|crlf] [--indent N] [--dry-run] [--backup]` | **结构级编辑（推荐）**：改对象后按设计器规则整份重建，语义等价比对 + 自动校验。`path` 支持 **`@itemId`** 寻址 |
 | `params <page.xwl> [--module-root <wb/modules>] [--controls <…/controls.json>]` | 检查「页面 → store → SQL」传参链路：列出 store 与**两条通路**（`out` / `params`）的传参点；`out` 会**展开容器内的取值控件名**，再与 SQL 的 `{?名?}` / `app.get('名')` 交叉核对；`--list-fields` 只打印取值控件名单 |
-| `paths <file>` | 列出**四类字段**（`sql` / `totalSql` / `serverScript` / `url`）的位置，给「原路径」与「`@写法`」；`itemId` 重名时标 ⚠ 并提示不可用 |
+| `paths <file>` | 列出**四类字段**（`sql` / `totalSql` / `serverScript` / `url`）的位置，给「原路径」与「`@写法`」；`itemId` 重名时标 ⚠ 并给出 `@名字#N` 点名写法 |
 | `sqlrefs <file>` | 检查 SQL 文件里 `{#名字#}` ↔ `serverScript` 的 `setAttribute` 是否自洽；并抓 serverScript 里误用 `{#…#}` |
 | `schema [<type>] --controls <wb/system/controls.json> [--tree] [--list] [--skeleton]` | 查设计器控件注册表：`--tree` 按面板分组列出全部控件（带库 / 容器 / 内部标记）、`--list` 只列 id、给 `<type>` 则列该控件合法的 `configs` / `events` 与 `autoNames`、`--skeleton` 出设计器同款骨架 |
-| `check <file...>` | 六项格式校验 + 事件 JS `node --check`；任一不过返回非 0 |
+| `check <file...> [--no-js] [--no-itemid]` | 七项校验：格式五项 + 事件 JS `node --check` + **itemId 重名分级**（只有「重名且被 JS 引用」判 FAIL）；任一 FAIL 返回非 0 |
+| `itemids <file> [--name X] [--dups-only] [--suggest] [--fix auto\|normalName\|itemId] [--json]` | **itemId 重名报告（只读）**：按「类型 + 是否被 JS 引用 + 有无 normalName」分级，给候选清单（祖先链 / 原路径 / 其下控件）与**建议改名**；`--suggest` 出改名 ops 草稿（需人工确认） |
 | `edit <file> --old-file O --new-file F [--expect 1] [--dry-run] [--backup]` | 文本级安全替换，保留原换行，断言出现次数，可选备份 |
 | `expand <file> [--out F] [--eol auto\|lf\|crlf] [--indent N] [--safe] [--dry-run] [--backup]` | 规范成设计器同款多行（复刻 `IDE.updateModule`），写盘前做语义等价比对 |
 | `dump <file>` | 按加载器规则解析后美化输出（`ensure_ascii=False`） |
@@ -641,7 +662,106 @@ org.json 的字符串转义还有两条：**非 ASCII 原样保留**（中文不
 **环境依赖**：Python 3.9+（纯标准库）；Node.js 可选（仅用于事件 JS 语法校验）。
 **改完 `xwl.py` 先跑 `python scripts/selftest.py`** 自检（内置样本验证各子命令的关键行为）。
 
-## 九、改完的自检清单
+## 九、itemId 命名规范与重名处置
+
+`itemId` 既是设计器里的节点名，**也是事件 JS 取控件的键**。重名**不是一律有问题** ——
+判据是三条：**控件类型 + 是否已被 JS 引用 + 有没有 `normalName`**。
+
+### 9.1 框架怎么把控件交给 JS（这决定了重名的后果）
+
+WebBuilder 改过的 `Ext.ComponentManager`（`wb/libs/ext/ext-all-debug.js:21689`，原文）：
+
+```js
+register: function (item) {
+    this.all.add(item);
+    if (item.appScope && (item.normalName || item.itemId))
+        item.appScope[item.normalName || item.itemId] = item;      // 普通赋值，不检重
+},
+unregister: function (item) {
+    var all = this.all;
+    all.removeAtKey(all.getKey(item));
+    if (item.appScope && (item.normalName || item.itemId))
+        delete item.appScope[item.normalName || item.itemId];      // 按同名键直接删
+},
+```
+
+两条结论，各自对应一类现象：
+
+1. **注册键是 `normalName || itemId`** —— `normalName` **优先**。所以只要每个同名控件各有互不相同的
+   `normalName`，就根本不会撞车，JS 走 `app.<normalName>`。（这就是第二条规则的由来。）
+2. 注册是**普通赋值**、`unregister` 是**按同名键直接 `delete`** ⇒
+   **后创建的覆盖先创建的**，且**任一重复项被销毁时会把整个名字从页面作用域删掉** ——
+   哪怕另一个同名控件还活着。这正是"重名后 `app.X` 取不到值 / 取到的不是你以为的那个"的确切来源：
+   **打开一个窗口再关掉，另一个同名控件就"消失"了**（事件 JS 里表现为偶发、难复现的取不到值）。
+
+### 9.2 三类控件，三种规则
+
+依据是 TSHT 全项目实测（2780 个 xwl / 59791 个含 `itemId` 的控件节点）：
+
+| 类型 | 重名 | 依据与约定 |
+|---|---|---|
+| **grid 的列** `column` / `tcolumn` | **允许** | 命名约定：**字段名 + `_COL` / `Col` 后缀**（实测 14213 / 20771 个列带此后缀）。取数走 `app.<grid>.getSelection(0).data.XXX`，**不直接取列控件** ⇒ 全项目 3393 组列重名里 **0 组**被事件 JS 引用 |
+| **取值控件**（14 个 `Ext.form.field.*`） | **靠 `normalName` 区分** | 一般是"选中一条数据的详细展现"，`itemId` 默认就用字段名，不可避免重名。**加 `normalName` 后用 `app.<normalName>`**（实测 129 组已这样做，另有 745 组待补 `normalName`） |
+| **按钮 / `item` / 面板 / `tab` / `toolbar` / 数据承载** | **不允许** | 新代码**必须**把 `itemId` 区分开。老代码若已如此且**没被 JS 引用**，可以不改；**一旦被 JS 引用就是真 bug**（实测 1651 组此类重名，其中 163 组被引用） |
+
+> `normalName` 是**合法 configs 键**，注册表里 **89 / 133** 个控件接受它（含 `button` `panel` `tab`
+> `toolbar` `grid` `store` `window`…）；不接受的 44 个多是布局 / HTML / 后端节点
+> （`array` `dataprovider` `module` `method` `query` `string`…）。查具体某控件：
+> `xwl.py schema <type> --controls wb/system/controls.json`。
+
+### 9.3 遇到重名：先读父子关系，再把候选交给用户选
+
+**不要**"删一个"、"随便挑一个"、或"重名就不处理"。按这个顺序做：
+
+```bash
+python scripts/xwl.py itemids <file.xwl> --dups-only       # 重名组：分级 + 候选清单 + 建议值
+python scripts/xwl.py itemids <file.xwl> --name tbar       # 只看一个名字的全部候选
+python scripts/xwl.py itemids <file.xwl> --suggest         # 生成改名 ops 草稿（**需人工确认**）
+```
+
+1. **读祖先链**判断"哪个才是真正要改的"。实测样例 `tbar` ×4，分别在 `grid[gridW]` / `grid[grid2]` /
+   `grid[platGrid]` / `grid[gridUser]` 下；#1/#2/#4 已各有 `normalName`（`tbarW` / `tbar2` / `tbarUser`），
+   **只有 #3 没有** —— 要"补"的就是 #3，而不是去动别人。
+2. **把候选列给用户，让他选**。工具只提建议、不替用户定；`itemids` 的建议值照项目既有惯例推：
+   - **补 `normalName`**（推荐，不动 `itemId`，零破坏）：**原名 + 父级 `itemId` 的区分段**
+     （`tbar` 在 `gridW` 下 → `tbarW`；`tbar` 在 `gridUser` 下 → `tbarUser`）。
+   - **改 `itemId`**（须同步改 JS 引用 —— 所以是**兜底手段**）：**父级 `itemId` 作前缀**。项目里能见到的
+     实例是 `setupElementWin_find`（`supplyRateClient*.xwl` 等 6 个文件）。
+     ⚠️ 别拿 `panelCustomRecord_ID` 当"itemId 的先例" —— 实测它是 **`normalName`**（两个同名 `text`
+     靠它区分），属于修法 A 的语境。
+3. 用户定了之后才走 `patch`；改 `itemId` 的**必须同步改事件 JS 里的引用**，并复查 `itemids`。
+
+> 优先级：**能用 `normalName` 就用 `normalName`**（`--fix auto` 已如此）—— 它不动 `itemId`，
+> 不会破坏任何已有引用；只有类型不接受 `normalName`（那 44 个）时才回退到改 `itemId`。
+
+### 9.4 精确定位某一个：`@itemId#N` 与「串联 `@` 限定」
+
+`path` 里 `@itemId` 段要求唯一；重名时**不猜顺序**，报错并附候选清单。想指名第 N 个（**N 从 1 起**）：
+
+```json
+[{"op": "set", "path": ["@tbar#3", "configs", "normalName"], "value": "tbarGrid"}]
+```
+
+或者**串联 `@` 段**当"带父级的限定名"用 —— 后一段只在上一段的子树里找：
+
+```json
+[{"op": "set", "path": ["@grid2", "@tbar", "configs", "normalName"], "value": "tbar2"}]
+```
+
+> 实测：给 `WareHouse.xwl` 用 `@tbar#3` 改一处 `itemId`，diff **只有 2 行**。
+
+### 9.5 全项目基线（2777 个可解析的 xwl）
+
+| 分级 | 组数 | 含义 |
+|---|---:|---|
+| benign | 3543 | 无害（列控件 3393 + 已有唯一 `normalName` 150） |
+| warn | 1856 | 未被 JS 引用 —— 老代码可留，**新代码必须区分** |
+| error | 519 | **已被事件 JS 引用 —— 取值不确定，需处理** |
+
+`error` 组按控件类型：`text` 202 / `combo` 178 / `toolbar` 46 / `item` 34 / `grid` 30 / `date` 24 /
+`column` 23 / `number` 22 / `textarea` 19 / `datetime` 8 …
+
+## 十、改完的自检清单
 
 - [ ] 用脚本/工具改的（**没有**用普通编辑器或 Edit 工具）
 - [ ] **默认走了结构级 `patch`**（只提供值/子树，格式由序列化器产出）；用了 `edit` 的话能说清为什么
@@ -661,3 +781,8 @@ org.json 的字符串转义还有两条：**非 ASCII 原样保留**（中文不
 - [ ] 用 `out` 通路时：需要的参数控件**确实挂在该容器内**、`itemId` 没改过、类型是**取值控件**（button/label 之类没有 `getValue()`，不会被送）
 - [ ] 没有在 `out` 与 `params` 里给**同名参数**写不同值（`store.load` 与 `Wb.request` 的覆盖方向相反）
 - [ ] 改 SQL 用的是 `@itemId` 寻址（而不是硬编码 `children[0].children[0]`）
+- [ ] `@itemId` 重名时**没有猜第一个**：用了 `@名字#N` 点名，或串联 `@` 段限定，或按父子关系确认过后再改
+- [ ] 新增控件时 `itemId` **在文件内唯一**（列控件可重名，但要带 `_COL` / `Col` 后缀；按钮 / 面板 / `tab` / 数据承载**必须**区分开）
+- [ ] 若目标是"同一字段名出现在多处明细面板"：**优先补 `normalName`**（`app.<normalName>`），而不是改 `itemId`
+- [ ] 改了 `itemId` 的话：**事件 JS 里对它的引用已同步改**，且 `itemids` 复查过
+- [ ] `xwl.py check` 的 ⑦ 没有 `[FAIL]`（`[warn]` 级重名知道了就行 —— 老代码可留，新代码别再加）
