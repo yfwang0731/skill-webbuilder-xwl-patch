@@ -6,6 +6,8 @@
 >
 > **本文是 [`SKILL.md`](../SKILL.md) 第六章的展开** —— 编辑方式（`patch` / `@itemId` / 校验）见那边第三章。
 > **读者**：改 SQL 片段、或改「参数控件 → store → SQL」链路时查。
+>
+> **本文里的「实测 / 次数 / 分布」都指样本工程**（口径与完整统计见 [`measured-data.md`](measured-data.md)）—— 它们**不是规范**，只是量级参考；换工程请以自己的为准。
 
 ---
 
@@ -19,7 +21,7 @@
    └─ type="dataprovider" configs{ itemId, sql, totalSql?, … }   ← 执行 SQL、出数据
 ```
 
-**分布**（本项目 `wb/` 下实测）：**1165 个文件带 `serverScript`、1142 个带 `dataprovider`、
+**分布**（样本工程 `wb/` 下实测）：**1165 个文件带 `serverScript`、1142 个带 `dataprovider`、
 687 个两者都有**；另有 **478 个只有 `serverScript`** —— 这些自己用 `app.run` / `app.send`
 直接出数据，不靠 `dataprovider`。
 
@@ -89,7 +91,7 @@ where toc.ID = {?ID?}          -- ← 绑定参数
 ```
 
 → 文件是 `…/transSql/queryDriverFile.xwl`（**补 `.xwl`**）。
-本项目实测 **2000 个被引用路径、5000+ 处引用**。
+样本工程实测 **2000 个被引用路径、5000+ 处引用**。
 
 ## 四、两条硬规则（有源码依据）
 
@@ -154,7 +156,7 @@ Wb.request({ url: 'm?xwl=orderCenter/…/transSql/saveOrder', out: app.editWin, 
 | `Wb.request` / `Wb.requestAg` / `Wb.upload` | `wb/script/wb.js`（`Wb.getValue(options.out)`） |
 
 容器用什么：查询条惯用 `toolbar`（典型 `app.tbar`）；表单 / 弹窗用 `form` / `window` / `container`。
-实测本项目 `out` 最常指向 `app.tbar`（160 处）、其次 `app.manageTopTbar` / `app.editWin`。
+实测样本工程 `out` 最常指向 `app.tbar`（160 处）、其次 `app.manageTopTbar` / `app.editWin`。
 
 ### 5.2 通路② `params`：显式传「参数名 → 值」
 
@@ -166,7 +168,7 @@ Wb.requestAg({ params: { bean: 'xxxController', method: 'del', aboutUsNo: … } 
 
 适用场景：**值不来自控件**、只需少数几个参数、或参数名要和控件名**不一致**时。
 
-> `params: Wb.getValue(app.tbar)` 与 `out: app.tbar` **运行时等价**（本项目只有 4 处这种写法）。
+> `params: Wb.getValue(app.tbar)` 与 `out: app.tbar` **运行时等价**（样本工程只有 4 处这种写法）。
 
 ### 5.3 两条通路同名时谁赢 —— **两个 API 方向相反**（最容易踩）
 
@@ -208,7 +210,7 @@ selectAboutUs.xwl
 
 - **存量以显式 `params` 为主**（历史习惯，改动跟着现状走）；**新写查询用 `out`** ——
   条件控件增减不用动 JS。`out` 主要指向**查询条**（`app.tbar`）与**编辑弹窗**（`app.editWin`）。
-- 本项目**没有**用 `proxy.extraParams` / `setExtraParams` / `Wb.getValues`（各 0 处）——
+- 样本工程**没有**用 `proxy.extraParams` / `setExtraParams` / `Wb.getValues`（各 0 处）——
   别照搬别的项目习惯。
 - 完整分布（按 API × 通路、`out` 容器 Top、页面维度）见 [`measured-data.md`](measured-data.md)。
 

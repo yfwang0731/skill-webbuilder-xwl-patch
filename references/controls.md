@@ -206,7 +206,7 @@
 | `report` | supcan | 原生 |  | — | 1 | 硕正报表：报表控件 |
 
 ## 四、层级结构：设计器不管，但有三种"约定"
-> 下文的 `wb-debug.js` / `ide-debug.js` 是**项目自带的** WebBuilder 前端脚本；所注**行号取自本项目版本**，
+> 下文的 `wb-debug.js` / `ide-debug.js` 是**项目自带的** WebBuilder 前端脚本；所注**行号取自样本工程版本**，
 > 换版本要按**符号名**（`append` / `setNewNode`）搜，别按行号找。
 
 **先说硬事实**：设计器**不校验**父子关系 —— `Wb.append(parentNode, node)` 就是直接 `parentNode.appendChild(node)`（`wb-debug.js:2633`），拖到哪都行。
