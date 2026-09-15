@@ -4,7 +4,7 @@
 > （典型路径 `…/transSql/queryXxx.xwl`）。它的**文件结构与普通页面完全一样**，
 > 只是内容固定在 `module` + `dataprovider` 这两层。
 >
-> **本文是 [`SKILL.md`](../SKILL.md) 第四章的展开** —— 编辑方式（`patch` / `@itemId` / 校验）见那边第三章。
+> **本文是 [`SKILL.md`](../SKILL.md) 第六章的展开** —— 编辑方式（`patch` / `@itemId` / 校验）见那边第三章。
 > **读者**：改 SQL 片段、或改「参数控件 → store → SQL」链路时查。
 
 ---

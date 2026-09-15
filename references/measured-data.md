@@ -77,7 +77,7 @@
 
 | 第一个参数名 | 处数 | 含义 |
 |---|---|---|
-| `action` | **101** | **错位一位**（`action` 实际是 form），见 SKILL.md §5.5 |
+| `action` | **101** | **错位一位**（`action` 实际是 form），见 SKILL.md §5.6 |
 | `form` | 32 | 顺序正确 |
 | （无参） | 5 | 不需要返回值 |
 | `resp` | 1 | 命名不规范 |
@@ -141,6 +141,13 @@ diff 只含真正改的内容（实测：377 KB 的 `transTrack.xwl` 加一个�
 **关键结论：列控件的 3393 组重名里，被事件 JS 引用的有 0 组。**
 印证了"列控件不直接取、取数走 `app.<grid>.getSelection(0).data.XXX`"这一用法。
 
+按"重名组**全部成员的类型**是否都是取值控件"再切一刀，共 **874 组**：
+
+| 字段控件重名组 | 组数 | 说明 |
+|---|---:|---|
+| 已各有**互不相同**的 `normalName` | **129** | 已是正确做法：框架按 `normalName || itemId` 注册，不冲突 |
+| `normalName` 缺失或彼此重复 | **745** | **待补 `normalName`** —— 这正是"取值控件重名靠 `normalName` 区分"这条规则的落点 |
+
 > ⚠️ **这些数字只是这一个样本工程的量级参考，不是通用阈值** —— 换工程必须重跑。
 > 另外它们的口径随工具版本变过：修掉"注释里的 `app.X` 被当成引用"与
 > "保留表（`store`/`add`/`items`/`id`）遮蔽真实引用"两个缺陷后，
@@ -162,21 +169,8 @@ diff 只含真正改的内容（实测：377 KB 的 `transTrack.xwl` 加一个�
 
 ### 7.5 框架侧机制（源码原文）
 
-`wb/libs/ext/ext-all-debug.js:21689`（WebBuilder 改过的 `Ext.ComponentManager`）：
-
-```js
-register: function (item) {
-    this.all.add(item);
-    if (item.appScope && (item.normalName || item.itemId))
-        item.appScope[item.normalName || item.itemId] = item;      // 普通赋值 ⇒ 后者覆盖前者
-},
-unregister: function (item) {
-    var all = this.all;
-    all.removeAtKey(all.getKey(item));
-    if (item.appScope && (item.normalName || item.itemId))
-        delete item.appScope[item.normalName || item.itemId];      // 按同名键 delete ⇒ 会误删别人
-},
-```
+源码原文见 `SKILL.md` §7.1（`wb/libs/ext/ext-all-debug.js:21689`，WebBuilder 改过的
+`Ext.ComponentManager.register` / `unregister`）—— 那里是**规则依据**，这里只记结论，不重复贴。
 
 注册键 = **`normalName || itemId`**（normalName 优先）。
 `unregister` 的 `delete` 是"重复会取不到值"的**确切机制**：任一重复项被销毁，

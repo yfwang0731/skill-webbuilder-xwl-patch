@@ -493,6 +493,52 @@ def main() -> int:
     except Exception as exc:  # noqa: BLE001
         failures.append("read_xwl_text 不该对坏文件报错: %s" % exc)
 
+    # ---- 11i. 防御性：recommend_fixes 不该因 group 缺键就崩 ----
+    try:
+        xwl.recommend_fixes({"groups": [{"level": "error"}, {"level": "warn"}]}, "auto")
+        xwl.recommend_fixes({"groups": [{"level": "error"}]}, "normalName", skipped=[])
+        print("[ok]  recommend_fixes 对缺 fix_* 键的 group 不崩（防御性取值）")
+    except Exception as exc:  # noqa: BLE001
+        failures.append("recommend_fixes 对缺键 group 抛错: %s: %s" % (type(exc).__name__, exc))
+
+    # ---- 11j. itemids --name 找不到名字时，--json 路径要给 JSON（不能混纯文本）----
+    page_obj2 = {"children": [{"type": "panel", "configs": {"itemId": "p"}, "children": []}]}
+    pj = os.path.join(tmp, "noname.xwl")
+    with open(pj, "w", encoding="utf-8", newline="") as f:
+        f.write(xwl.dumps_designer(page_obj2, 1, CRLF))
+    _b = io.StringIO()
+    with contextlib.redirect_stdout(_b):
+        xwl.cmd_itemids(type("NS", (), {"file": pj, "name": "zzz", "dups_only": False,
+                                       "suggest": False, "fix": "auto", "controls": None,
+                                       "json": True})())
+    out = _b.getvalue()
+    try:
+        o = json.loads(out)
+        if o.get("error") == "not_found":
+            print("[ok]  itemids --name 找不到时 --json 给结构化错误（不是纯文本 [FAIL]）")
+        else:
+            failures.append("itemids --name --json 的错误载荷不对: %s" % o)
+    except Exception as exc:  # noqa: BLE001
+        failures.append("itemids --name --json 的输出不是 JSON: %s | %r" % (exc, out[:80]))
+
+    # ---- 11k. SKILL.md 章节顺序守卫（语义分组：认知→格式→操作→专题→经验→收尾）----
+    skill_md = os.path.join(os.path.dirname(HERE), "SKILL.md")
+    if os.path.exists(skill_md):
+        with open(skill_md, "r", encoding="utf-8", newline="") as f:
+            titles = [l.rstrip("\r\n") for l in f if l.startswith("## ")]
+        want_order = ["一", "二", "三", "四", "五", "六", "七", "八", "九"]
+        got_order = [t[3] for t in titles if len(t) > 4 and t[3] in want_order]
+        want_keys = ["是什么", "格式硬规则", "处理流程", "工具", "引用方式", "SQL 片段",
+                     "itemId", "常见坑", "自检清单"]
+        if got_order == want_order and all(k in t for k, t in zip(want_keys, [x for x in titles if x.startswith("## ") and x[3] in want_order])):
+            print("[ok]  SKILL.md 章节顺序符合语义分组（认知→格式→操作→专题→经验→收尾）")
+        else:
+            failures.append("SKILL.md 章节顺序错位: %s" % [t[:22] for t in titles])
+        if any("单行源" in t for t in titles):
+            failures.append("「单行源 vs 多行源」应并入格式章，不该单列一章")
+    else:
+        print("[note] 未找到 SKILL.md，跳过章节顺序守卫")
+
     # ---- 12. 子命令冒烟：paths / sqlrefs / params 真跑一遍（防“改了内部函数名漏改调用”）----
     page_obj = {"title": "参数页", "children": [
         {"configs": {"itemId": "viewport"}, "expanded": False, "type": "viewport", "children": [

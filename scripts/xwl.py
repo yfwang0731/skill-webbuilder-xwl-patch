@@ -1130,8 +1130,8 @@ def recommend_fixes(rep, mode="auto", skipped=None) -> list:
     for g in rep["groups"]:
         if g["level"] not in ("error", "warn"):
             continue
-        nn_ok = [s for s in g["fix_normalname"] if s["type_ok"]]
-        nn_bad = [s for s in g["fix_normalname"] if not s["type_ok"]]
+        nn_ok = [s for s in g.get("fix_normalname", []) if s["type_ok"]]
+        nn_bad = [s for s in g.get("fix_normalname", []) if not s["type_ok"]]
         if mode == "normalName":
             if skipped is not None:
                 skipped.extend(dict(s, group=g["name"]) for s in nn_bad)
@@ -1139,7 +1139,7 @@ def recommend_fixes(rep, mode="auto", skipped=None) -> list:
         elif mode == "auto" and nn_ok and not nn_bad:
             src = nn_ok
         else:
-            src = g["fix_itemid"]
+            src = g.get("fix_itemid", [])
         for s in src:
             ops.append({"op": "set", "path": s["path"], "value": s["suggest"]})
     return ops
@@ -1200,7 +1200,12 @@ def cmd_itemids(args) -> int:
     if args.name:
         hits = itemid_hits(obj, args.name)
         if not hits:
-            print(f"[FAIL] 找不到 configs.itemId == {args.name!r}")
+            if args.json:   # 机器可读路径也要给 JSON，别混纯文本
+                print(json.dumps({"error": "not_found", "name": args.name,
+                                  "message": "找不到 configs.itemId == %r" % args.name},
+                                 ensure_ascii=False, indent=2))
+            else:
+                print(f"[FAIL] 找不到 configs.itemId == {args.name!r}")
             return 1
         if args.json:
             print(json.dumps(

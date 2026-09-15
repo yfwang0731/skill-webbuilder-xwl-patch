@@ -67,7 +67,7 @@ python scripts/xwl.py itemids page.xwl --suggest       # 出改名 ops 草稿（
 
 > 框架源码依据（`ext-all-debug.js:21689`）：注册键是 `normalName || itemId`，注册是**普通赋值**、
 > 注销是**按同名键直接 `delete`** ⇒ 后注册的覆盖先注册的，且**任一重复项被销毁会把整个名字删掉**。
-> 这就是"重名后 `app.X` 取不到值"的来源。详见 [`SKILL.md`](SKILL.md) 第九章。
+> 这就是"重名后 `app.X` 取不到值"的来源。详见 [`SKILL.md`](SKILL.md) 第七章。
 
 ## 快速开始
 
