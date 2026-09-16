@@ -1,7 +1,7 @@
 # SQL 片段：结构、字段与传参
 
 > **什么算「SQL 片段」**：被别的 xwl 用 `store.configs.url = 'm?xwl=…'` 引用的 `.xwl`
-> （典型路径 `…/transSql/queryXxx.xwl`）。它的**文件结构与普通页面完全一样**，
+> （典型路径 `…/xxxSql/queryXxx.xwl`）。它的**文件结构与普通页面完全一样**，
 > 只是内容固定在 `module` + `dataprovider` 这两层。
 >
 > **本文是 [`SKILL.md`](../SKILL.md) 第六章的展开** —— 编辑方式（`patch` / `@itemId` / 校验）见那边第三章。
@@ -16,10 +16,14 @@
 被 store 引用的「SQL 文件」**不是散装 SQL**，而是固定两级：
 
 ```text
-(页面钥匙: title / iconCls / inframe / pageLink / hidden / roles / children)
+(页面钥匙 7 把，真实键序：hidden / children / roles / title / iconCls / inframe / pageLink)
 └─ type="module"          configs{ itemId, serverScript }        ← 取参数、拼条件
    └─ type="dataprovider" configs{ itemId, sql, totalSql?, … }   ← 执行 SQL、出数据
 ```
+
+> **新建这种文件**用 `xwl.py new <路径> --kind sql` —— 顶层键序与这两层结构都已内置。
+> 改已有文件才走 `patch`（见 SKILL.md 第三章）。**不要** `cp` 别的文件当种子：种子里没被
+> 显式覆盖的键（如 `roles:{"demo":1}`）会静默带进新文件。
 
 **分布**：多数文件两者都有；也有一部分**只有 `serverScript`** —— 这些自己用 `app.run` /
 `app.send` 直接出数据，不靠 `dataprovider`。（文件数见 [`measured-data.md`](measured-data.md) §八。）
@@ -50,18 +54,18 @@ python scripts/xwl.py schema module       --controls <工程>/wb/system/controls
 // module.configs.serverScript
 var data = app.get();                      // 取查询参数
 var sql = "";
-if (!Wb.isEmpty(data.FILE_KIND_ID)) {
-  if (data.FILE_KIND_ID == '1') sql += " AND FILE_KIND_ID IN ('QSD','GBD','SJD') ";
-  else                          sql += " and ows.WORK_TYPE={?FILE_KIND_ID?} ";
+if (!Wb.isEmpty(data.BIZ_TYPE)) {
+  if (data.BIZ_TYPE == '1') sql += " AND BIZ_KIND IN ('A','B','C') ";
+  else                      sql += " and t.BIZ_CODE={?BIZ_TYPE?} ";
 }
 request.setAttribute('sql', sql);          // ← 注意：名字就叫 sql
 ```
 
 ```sql
 -- dataprovider.configs.sql
-select ofi.* from order_file ofi
-left join order_work_state ows on ofi.WORK_ID = ows.ID
-where toc.ID = {?ID?}          -- ← 绑定参数
+select t.* from biz_table t
+left join biz_state s on t.REF_ID = s.ID
+where t.ID = {?ID?}            -- ← 绑定参数
 {#sql#}                        -- ← 引用 serverScript 注入的 sql
 ```
 
@@ -88,10 +92,10 @@ where toc.ID = {?ID?}          -- ← 绑定参数
 // 页面里的 store 节点
 {"type": "store",
  "configs": {"itemId": "store",
-             "url": "m?xwl=orderCenter/highwayTransportationManagement/transSql/queryDriverFile"}}
+             "url": "m?xwl=<模块>/<业务目录>/xxxSql/queryBizList"}}
 ```
 
-→ 文件是 `…/transSql/queryDriverFile.xwl`（**补 `.xwl`**）。
+→ 文件是 `wb/modules/<模块>/<业务目录>/xxxSql/queryBizList.xwl`（**补 `.xwl`**）。
 被引用的片段是**常态**（引用点数量级见 [`measured-data.md`](measured-data.md) §八）。
 
 ## 四、两条硬规则（有源码依据）
@@ -126,7 +130,7 @@ where toc.ID = {?ID?}          -- ← 绑定参数
 // 查询按钮
 app.grid1.store.load({ out: app.tbar });
 // 弹窗保存 / 任意请求
-Wb.request({ url: 'm?xwl=orderCenter/…/transSql/saveOrder', out: app.editWin, success: … });
+Wb.request({ url: 'm?xwl=<模块>/…/xxxSql/saveBiz', out: app.editWin, success: … });
 ```
 
 **收集规则**（= `Wb.getValue(容器)`，源码实测）：
@@ -154,7 +158,7 @@ Wb.request({ url: 'm?xwl=orderCenter/…/transSql/saveOrder', out: app.editWin, 
 | 位置 | 文件 |
 |---|---|
 | `Ext.data.Store.load`、`Ext.data.TreeStore.load` | `wb/libs/ext/ext-all-debug.js`（WebBuilder 改过的 ExtJS） |
-| `Wb.request` / `Wb.requestAg` / `Wb.upload` | `wb/script/wb.js`（`Wb.getValue(options.out)`） |
+| `Wb.request` / `Wb.requestAg` / `Wb.upload` | `wb/script/wb.js`（`Wb.getValue(options.out)`；本 skill 别处引用的是源码版文件名 `wb-debug.js`，与它是同一文件的两种形态） |
 
 容器用什么：查询条惯用 `toolbar`（典型 `app.tbar`）；表单 / 弹窗用 `form` / `window` / `container`。
 `out` 最常指向 `app.tbar`，其次 `app.manageTopTbar` / `app.editWin`（次数见 [`measured-data.md`](measured-data.md) §二）。
@@ -164,7 +168,7 @@ Wb.request({ url: 'm?xwl=orderCenter/…/transSql/saveOrder', out: app.editWin, 
 ```js
 app.grid1.store.load({ params: { cId: rec.data.MR_ID } });     // 值不来自控件（当前行 / 上级变量）
 app.grid1.store.load({ params: Wb.getValue(app.tbar) });       // 效果等同 out，只是写得更啰嗦
-Wb.requestAg({ params: { bean: 'xxxController', method: 'del', aboutUsNo: … } });
+Wb.requestAg({ params: { bean: 'xxxController', method: 'del', BIZ_NO: … } });
 ```
 
 适用场景：**值不来自控件**、只需少数几个参数、或参数名要和控件名**不一致**时。
@@ -187,24 +191,24 @@ Wb.requestAg({ params: { bean: 'xxxController', method: 'del', aboutUsNo: … } 
 
 | 环节 | 名字 |
 |---|---|
-| `tbar` 内控件的 `itemId` | `aboutUsTyp` · `startTim` · `endTim` · `status` |
-| `serverScript` 读取 | `data.aboutUsTyp` · `data.startTim` · `data.endTim` · `data.status` |
-| SQL 绑定参数 | `{?aboutUsTyp?}` · `{?startTim?}` · `{?endTim?}` · `{?status?}` |
+| `tbar` 内控件的 `itemId` | `BIZ_TYPE` · `START_DATE` · `END_DATE` · `STATUS` |
+| `serverScript` 读取 | `data.BIZ_TYPE` · `data.START_DATE` · `data.END_DATE` · `data.STATUS` |
+| SQL 绑定参数 | `{?BIZ_TYPE?}` · `{?START_DATE?}` · `{?END_DATE?}` · `{?STATUS?}` |
 
 > **名字对不上不会报错** —— 只会取到 null，SQL 条件**静默失效**。所以改这类页面必须核对名字。
 
-### 5.5 完整链路（真实业务页 `AgWeb/AgWebAboutUs/aboutUs.xwl`）
+### 5.5 完整链路（示意）
 
 ```text
-查询控件 tbar 内： combo aboutUsTyp / date startTim / date endTim / combo status
+查询控件 tbar 内： combo BIZ_TYPE / date START_DATE / date END_DATE / combo STATUS
       ↑ 被 out: 收值
 查询按钮 click →  app.grid1.store.load({ out: app.tbar })
       ↓
-grid1.store   configs.url = 'm?xwl=agWeb/agWebAboutUs/aboutusdata/selectAboutUs'
+grid1.store   configs.url = 'm?xwl=<模块>/<业务目录>/xxxSql/queryBizList'
       ↓ HTTP（参数 = 容器内控件的值）
-selectAboutUs.xwl
-      ├─ module.serverScript :  var data = app.get();  →  data.aboutUsTyp / data.startTim / …
-      └─ dataprovider.sql    :  … and aboutus_typ = {?aboutUsTyp?} …   ← 绑定参数
+queryBizList.xwl
+      ├─ module.serverScript :  var data = app.get();  →  data.BIZ_TYPE / data.START_DATE / …
+      └─ dataprovider.sql    :  … where biz_type = {?BIZ_TYPE?} …   ← 绑定参数
 ```
 
 ### 5.6 存量代码怎么写（结论）
@@ -255,16 +259,16 @@ python scripts/xwl.py params  <page.xwl> [--controls …]   # 页面 → store �
      报「SQL 需要但页面未发现来源」与「页面送了但 SQL 用不到」；
   4. `--controls` 给了就用注册表推导取值控件类型（不给则用内置的同一份 14 个兜底）。
 
-  实测某页面：
+  示例输出（字段名示意）：
 
   ```text
   === 传参点（N 处）: out X 处 / params Y 处 ===
-    [out 推荐]        app.tbar → 容器内取值控件 ['aboutUsTyp','ecPublicAboutUsData','endTim','startTim','status']
+    [out 推荐]        app.tbar → 容器内取值控件 ['BIZ_NO','BIZ_TYPE','END_DATE','START_DATE','STATUS']
   === 交叉核对 ===
-    页面送出 6 个: ['aboutUsNo','aboutUsTyp','ecPublicAboutUsData','endTim','startTim','status']
-    SQL 需要 4 个: ['aboutUsTyp','endTim','startTim','status']
+    页面送出 6 个: ['BIZ_NO','BIZ_TYPE','FORM_DATA','END_DATE','START_DATE','STATUS']
+    SQL 需要 4 个: ['BIZ_TYPE','END_DATE','START_DATE','STATUS']
     [ok]   SQL 需要的参数在页面侧都能找到来源
-    [info] 页面送了但 SQL 未用到: ['aboutUsNo','ecPublicAboutUsData']
+    [info] 页面送了但 SQL 未用到: ['BIZ_NO','FORM_DATA']
   ```
 
   **这类告警要结合上下文判断**（可能来自上级容器 / 其它请求 / store 的固定 `params` / 框架上下文）。

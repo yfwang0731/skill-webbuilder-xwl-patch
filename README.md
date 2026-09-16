@@ -6,6 +6,8 @@
 `.xwl` 看起来像 JSON，但**不是严格 JSON** —— 磁盘上是「字面反斜杠 + 真实换行」的多行字符串。
 直接拿编辑器改，**第一刀就会把文件改坏**（运行时解析失败、页面白屏）。
 
+它能干两件事：**改**已有文件（结构级 `patch`）、**造**新文件（`new`，内置设计器真实键序的骨架）。
+
 ## 核心工作方式：结构级 `patch`
 
 **不碰文本层。** 你只提供「值 / 子树」，工具按**设计器自己的算法**重建整份文件 ——
@@ -37,7 +39,7 @@ python scripts/xwl.py patch page.xwl --ops ops.json --backup    # 确认后落�
 
 - **格式错误在构造上不会发生** —— 不接触文本层，就没有"改坏格式"这条路；
 - 重建算法从设计器源码**完整复刻**（`IDE.updateModule` = `org.json toString(1)` + 两次 `replaceAll`），
-  并做过**回放校验**：把算法跑在项目里既有的上千个 xwl 上，还原出的字节与原件逐个比对
+  并做过**回放校验**：把算法跑在样本工程既有的上千个 xwl 上，还原出的字节与原件逐个比对
   （数字与口径见 [`references/measured-data.md`](references/measured-data.md)）
   → 所以重排**不会顺带改动无关内容**，**diff 只含这次真正改的内容**
   （377 KB 的页面加一个带多行 JS 的按钮 + 改标题，diff 仅 17 行）；
@@ -65,15 +67,25 @@ python scripts/xwl.py itemids page.xwl --suggest       # 出改名 ops 草稿（
 重名时 `@itemId` **不会猜顺序**：报错并附候选清单；要指名第 N 个用 **`@名字#N`**（N 从 1 起），
 或串联 `@` 段当限定名（`["@grid2", "@tbar"]`）。
 
-> 框架源码依据（`ext-all-debug.js:21689`）：注册键是 `normalName || itemId`，注册是**普通赋值**、
-> 注销是**按同名键直接 `delete`** ⇒ 后注册的覆盖先注册的，且**任一重复项被销毁会把整个名字删掉**。
-> 这就是"重名后 `app.X` 取不到值"的来源。详见 [`SKILL.md`](SKILL.md) 第七章。
+> 重名会让 `app.X` 取到别的控件、或在窗口关闭后整体失效（框架按 `normalName || itemId` 注册、
+> 注销时按同名键直接 `delete`；源码见 `wb/libs/ext/ext-all-debug.js` 的 `ComponentManager.register`）——
+> 机制与分级依据见 [`SKILL.md`](SKILL.md) 第七章。
 
 ## 快速开始
 
 ```bash
 git clone <this-repo> ~/.workbuddy/skills/webbuilder-xwl-patch   # 或直接把目录拷进去
 ```
+
+### 造新文件
+
+```bash
+python scripts/xwl.py new wb/modules/<模块>/myPage.xwl --kind page --title "我的页面"
+python scripts/xwl.py new wb/modules/<模块>/xxxSql/queryXxx.xwl --kind sql --title "出库单查询"
+python scripts/xwl.py folders wb/modules/<模块>/myPage.xwl        # 登记检查（否则设计器里看不到）
+```
+
+### 改已有文件
 
 ```bash
 python scripts/xwl.py check page.xwl                             # 1) 先看基线格式是否合法
@@ -88,7 +100,9 @@ python scripts/xwl.py check page.xwl                             # 5) 改完必�
 
 | 子命令 | 干什么 |
 |---|---|
+| `new <out.xwl> --kind page\|sql [--from-json F]` | **从零生成**：内置设计器真实键序的骨架（页面 / SQL 载体）；默认拒绝覆盖已有文件 |
 | `patch <file> --ops ops.json` | **结构级编辑（默认方式）**：只给值/子树，按设计器算法重建整份文件 |
+| `folders <path> [--register NAME]` | `folder.json`（设计器导航树索引）一致性检查（**只读**）：未登记 / index 悬空 / 缺 folder.json；`--register` 才写 |
 | `check <file...>` | 七项校验：格式五项 + 事件 JS `node --check` + **itemId 重名分级**；任一 FAIL 返回非 0 |
 | `itemids <file>` | **itemId 重名报告（只读）**：分级（无害 / 待区分 / 需处理）+ 候选清单（祖先链、其下控件）+ 建议改名；`--suggest` 出 ops 草稿 |
 | `paths <file>` | 列出 `sql` / `totalSql` / `serverScript` / `url` 四类字段的位置，给「原路径 + `@itemId` 写法」（重名时给 `@名字#N` 点名写法） |
@@ -105,9 +119,9 @@ python scripts/xwl.py check page.xwl                             # 5) 改完必�
 
 ```
 webbuilder-xwl-patch/
-├── SKILL.md                  # 完整流程与规则：格式硬规则、四步、SQL 片段要点、引用方式、工具、坑
+├── SKILL.md                  # 完整流程与规则：格式硬规则、新建/编辑流程、SQL 片段要点、引用方式、工具、坑
 ├── CHANGELOG.md              # 变更历史（倒序，含每一步的依据与实测数字）
-├── test-prompts.json         # 4 条典型 prompt（供 skill 评估用）
+├── test-prompts.json         # 6 条典型 prompt（供 skill 评估用）
 ├── references/
 │   ├── controls.md           # 控件清单：有哪些 / 干什么 / 该挂哪里 / 怎么选
 │   ├── sql-fragments.md      # SQL 片段：两级结构、字段全集、{#…#} 引用、页面传参两条通路
@@ -124,7 +138,7 @@ webbuilder-xwl-patch/
   可用 `--node <path>` 或环境变量 `NODE_BIN` 指定。
 
 > 范围：只看 `.xwl` 文件本身（格式、编辑、校验、抽取）。
-> 不涉及后端代码、模块打包、部署副本同步等。
+> 不涉及菜单注册（`WB_MENU`）、后端代码、模块打包、部署副本同步。
 
 ## 许可
 

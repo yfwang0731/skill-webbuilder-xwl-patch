@@ -5,12 +5,15 @@ description: >-
   只提供「值 / 子树」，工具按设计器自己的算法重建整份文件，续行符、转义、缩进、换行全部自动产出
   —— 格式错误在构造上不会发生，且 diff 只含真正改的内容。
   触发场景：改 wb/modules/** 下的页面 .xwl（加删控件、挂改事件、改配置、改网格列）、
-  改被引用的 SQL 片段 transSql/*.xwl（同样用 @itemId 寻址 patch）、
+  改被引用的 SQL 片段 xxxSql/*.xwl（同样用 @itemId 寻址 patch）、
   查改「参数控件 → store → SQL」传参链路（两条通路 out / params，推荐 out）、
   处理 itemId 重名（按「类型 + 是否被 JS 引用 + 有无 normalName」分级，给候选清单与建议值；
   列控件允许重名、取值控件靠 normalName 区分、按钮/面板/承载必须唯一）、
+  **从零新建页面或 SQL 文件**（`new` 内置设计器真实键序的骨架，不依赖任何「种子文件」）、
+  新建后设计器导航树里看不到它（`folder.json` 未登记 —— `folders` 可查、可登记）、
   判断某个 .xwl 格式是否合法、xwl 加载报解析错误或页面白屏、要不要把 xwl 压成一行。
-  附零依赖工具 xwl.py：check / itemids / patch / edit / params / paths / sqlrefs / schema / dump / expand / sql / events。
+  附零依赖工具 xwl.py：check / new / patch / edit / params / paths / folders / sqlrefs /
+  schema / dump / expand / sql / events。
 agent_created: true
 ---
 
@@ -33,14 +36,16 @@ WebBuilder 的页面与查询定义都写在 `.xwl` 里。它**看起来像 JSON
 > 范围：只看 `.xwl` 文件本身（格式、编辑、校验、抽取）。
 > 不涉及后端代码、模块打包、部署副本同步等 —— 那些由各自流程负责。
 
-行文约定：`##` 主题，`###` 子主题；列表项以 `**标签**：` 开头；`>` 只放警告。
+行文约定：`##` 主题，`###` 子主题；列表项以 `**标签**：` 开头；`>` 放警告与补充说明（不放成段的规则正文）。
 
 ## 何时使用
 
 - 要**读懂或修改任何 `.xwl`**。PC 页面、弹窗/子面板、store 数据源、SQL 定义，全都是同一套格式、同一套处置方式 —— 不按目录或操作类型设限。
 - 常见改动：加/删/改控件与按钮、挂改事件 JS、改 `multiSelect` / `selType` / `columns` / `configs` 等配置、改 store 里的 SQL、改标题 / 权限 / 内嵌地址。
 - 遇到 xwl 加载报解析错误、页面白屏 / 栅格不出来。
-- 要**新建/调整控件结构**：不知道该用哪个控件、该挂在哪个父控件下、`grid` 的列/工具栏/数据源分别挂在哪 —— 见 `references/controls.md`（控件清单）与第五章（引用方式）。
+- 要**调整控件结构**（加 / 换 / 挪节点）：不知道该用哪个控件、该挂在哪个父控件下、`grid` 的列/工具栏/数据源分别挂在哪 —— 见 `references/controls.md`（控件清单）与第五章（引用方式）。
+- 要**从零造一个新 xwl**（页面或 SQL 载体）—— 见**第三章第 0 步**与 `xwl.py new`（内置设计器真实顶层键序）。
+- **新建的文件在设计器导航树里看不到**，或要确认某目录的 `folder.json` 登记与磁盘是否一致 —— 见 `xwl.py folders`（第三章第 0 步）。
 - 要把 xwl 里的 SQL 或事件 JS 抽出来离线验证（灌真实库跑一遍、`node --check` 语法检查）。
 - 要确认一次改动没破坏格式；或判断某个 xwl 是**独立页面**还是**被引用的片段**、是谁在引用它。
 - 遇到 **`itemId` 重名**（事件 JS 里 `app.X` 取不到值 / 取错控件），或要判断某个重名到底该不该改 —— 见第七章。
@@ -48,9 +53,8 @@ WebBuilder 的页面与查询定义都写在 `.xwl` 里。它**看起来像 JSON
 
 ## 一、xwl 是什么（先建立正确心智模型）
 
-**一个 `.xwl` = 一棵 JSON 树**，描述一个"页面 / 资源"。顶层固定是那几把页面钥匙
-（`title` / `iconCls` / `inframe` / `pageLink` / `hidden` / `roles` / `children`），
-`children` 递归挂控件；控件上通常有
+**一个 `.xwl` = 一棵 JSON 树**，描述一个"页面 / 资源"。顶层固定是那 7 把页面钥匙
+（真实键序见 1.4），`children` 递归挂控件；控件上通常有
 
 - `type` —— 控件类型（window / container / grid / store / button …）；
 - `configs` —— 控件配置；**SQL 就在这里**（store 节点的 `configs.sql`，不是顶层键）；
@@ -63,12 +67,12 @@ WebBuilder 的页面与查询定义都写在 `.xwl` 里。它**看起来像 JSON
 | 类别 | 说明 | 怎么认 |
 |---|---|---|
 | **独立页面** | 能由菜单 / `inframe` / 直接 URL 打开 | 一般 `title` + `roles` 齐备，`inframe` / `pageLink` 有值 |
-| **被引用的片段** | 不是给人直接打开的页面，而是被别的 xwl 用 `url: 'm?xwl=…'` 加载：store 数据源、子面板、动作片段、SQL 载体 | 被别处引用；典型命名如 `transSql/queryXxx`、`.../insert`、`.../delete`、`.../fileUpload` |
+| **被引用的片段** | 不是给人直接打开的页面，而是被别的 xwl 用 `url: 'm?xwl=…'` 加载：store 数据源、子面板、动作片段、SQL 载体 | 被别处引用；典型命名如 `xxxSql/queryXxx`、`.../insert`、`.../delete`、`.../fileUpload` |
 
 **两类的格式规则与处置方式完全相同**，区别只在于：改片段时你要额外确认"谁在用它"。
 
-> SQL 类片段（`dataprovider` + `serverScript` + `{#…#}` / `{?…?}` 占位符）有专门的
-> 引用规则见**第五章**，SQL 片段的写法见**第六章**。
+> SQL 类片段（`dataprovider` + `serverScript` + `{#…#}` / `{?…?}` 占位符）的引用规则见**第五章**，
+> 写法见**第六章**。
 
 ### 1.2 控件节点的标准形态（权威来源：设计器的控件注册表）
 
@@ -111,6 +115,35 @@ python scripts/xwl.py schema button --controls <工程>/wb/system/controls.json 
 
 xwl 是**图形化页面设计器的持久化格式**，设计器保存时会按自己的规则重新排版
 （写回算法已破解，见**第二章**）。所以手工把文件压成一行**维护不住**。
+
+### 1.4 页面顶层骨架（7 把钥匙，键序固定）
+
+顶层是固定的 7 把钥匙，**键序也是固定的**：
+
+```text
+hidden, children, roles, title, iconCls, inframe, pageLink
+```
+
+**独立页面与被引用的 SQL 载体完全一样**（键集合与顺序都不区分这两类）。
+序列化按 dict 插入序输出（老 org.json 的 `json.toString(1)`，见第二章）⇒
+**键序写错，产出即与设计器不一致**，下次被设计器保存就会产生额外 diff。
+
+取值形态（实测）：
+
+| 键 | 典型值 | 说明 |
+|---|---|---|
+| `hidden` | `false` | bool |
+| `children` | 控件树 | 数组 |
+| `roles` | `{"default": 1}` | **dict：角色名 → 1**；`{}` 也合法（如 `dev/ide/add-file.xwl`） |
+| `title` | 页面标题 | 允许空串 |
+| `iconCls` | `""` | 空串最常见 |
+| `inframe` | `false` | bool |
+| `pageLink` | `""` | 空串最常见 |
+
+> ⚠️ **缺 `inframe` / `pageLink` 这类键时，`check` 依然 ALL OK** —— 它只查格式，不查"骨架是否齐全"。
+> 工程里确实存在这种「缺钥匙」的文件（如 `dev/ide/add-file.xwl`）。
+> 所以**新建时不要手写顶层键** —— 用 `xwl.py new`（内置了这套键序，见**第三章第 0 步**）。
+> 分布与份额见 [`references/measured-data.md`](references/measured-data.md) §九。
 
 ## 二、格式硬规则与文件形态
 
@@ -178,7 +211,7 @@ if (!rec) {\
 
 **结论：可行。** 设计器的写回逻辑已反编译确认并完整复刻，不需要猜排版。
 
-**实际逻辑在哪**
+关键位置：
 
 | 项 | 位置 |
 |---|---|
@@ -217,18 +250,55 @@ org.json 的字符串转义还有两条：**非 ASCII 原样保留**（中文不
 「`\\` + 反斜杠 + 换行」这种看着别扭的形态。
 
 **这不是缺陷，语义无损**：加载器的正则 `\\(?:\r\n|\r|\n)` 恰好只吃「**一个**反斜杠 + 换行」，
-所以这段在重新加载时会精确还原回原来的 `\n`。回放校验（`queryApproval.xwl` / `queryTrackHead.xwl`）：
+所以这段在重新加载时会精确还原回原来的 `\n`。回放校验（两个多行源文件）：
 忠实模式产出与原文件**逐字节相同**，且两种模式的回读值都与原值一致。
 
 - `expand` 默认**忠实复刻**，产出与设计器逐字节一致；
 - `expand --safe` 写成更直观的 `\\n`（语义同样无损，但与设计器产物不同）。
 - 两种模式都在写盘前强制做「**重新解析 == 原对象**」的语义等价比对，**对不上就中止**。
 
-## 三、处理流程（四步）
+## 三、处理流程
 
 > **先把结论说清楚**：改 xwl 时**可以完全遵循设计器的规则来改、并且不犯错** ——
 > 做法是**只给出「值」，让工具按设计器算法重建文件**（第 3 步的结构级 `patch`）。
 > 续行符、转义、缩进、换行全部由序列化器产出，你根本不碰文本层，格式错误在构造上就不会发生。
+
+**改已有文件从第 1 步起；从零造新文件先走第 0 步。**
+
+### 第 0 步 · 新建文件
+
+```bash
+# 独立页面：顶层 7 把钥匙 + 一个空 module 节点
+python scripts/xwl.py new wb/modules/<模块>/myPage.xwl --kind page --title "我的页面"
+# SQL 载体：module(serverScript) → dataprovider(sql)，被页面用 store.url='m?xwl=…' 引用
+python scripts/xwl.py new wb/modules/<模块>/xxxSql/queryXxx.xwl --kind sql --title "出库单查询"
+```
+
+`new` 内置了 1.4 那套**设计器真实键序**，所以：
+
+- **顶层键不用管** —— 手写时漏掉 `inframe` / `pageLink`，`check` 照样 ALL OK，问题会被静默吞掉；
+- **也不要用 `cp` 别的文件再整树重写** —— 种子是**继承式**的：它顶层没被显式覆盖的键会
+  **静默残留**（种子的 `roles:{"demo":1}` 会跟着进新页面）。实测证据见
+  [`references/measured-data.md`](references/measured-data.md) §九；
+- 默认**拒绝覆盖已存在文件**（要覆盖得显式 `--force`；改已有文件应该用 `patch`）；
+- `--from-json <obj.json>` 可以喂一个自己拼的顶层对象，它会**按设计器键序重排并补齐缺失的页面钥匙**
+  （补齐了哪些会明确回报），且不覆盖你给的 `title` / `roles`。
+
+**`new` 之后必做三件事** —— 只把文件写进磁盘是不够的：
+
+| # | 做什么 | 怎么验 |
+|---|---|---|
+| ① | **登记进所在目录的 `folder.json`** —— 否则设计器导航树里看不到它 | `xwl.py folders <file>`；未登记则 `--register` |
+| ② | SQL 载体验引用自洽 / 页面验传参链路 | `xwl.py sqlrefs` / `xwl.py params` |
+| ③ | **在设计器里打开一次**（真正的冒烟） | `check` 只证"格式能加载"，不证"页面能用" |
+
+**`folder.json` 是设计器导航树的目录索引**（每个目录一个，形如
+`{"hidden":false,"index":[…],"title":…}`）：`index` 里带 `.xwl` 后缀的是文件、不带后缀的是子目录；
+新文件不登记进它就**在设计器里看不到**。它自身的**键序不固定、是单行紧凑形态** ——
+用 `xwl.py folders --register` 来写（追加到 index 末尾，保原键序、保单行、幂等），别手工重排。
+
+> **还有一步在 xwl 之外**：要让**用户**能打开这个页面，得在数据库 `WB_MENU` 里挂菜单
+> （权限在 `WB_ROLE` / `WB_RESOURCE`）。那属于后端 / 数据库流程，本工具只负责 xwl 这一侧。
 
 ### 第 1 步 · 定位文件
 
@@ -255,7 +325,7 @@ org.json 的字符串转义还有两条：**非 ASCII 原样保留**（中文不
 
 #### 3.1 结构级 `patch`（默认方式）
 
-`ops.json` 是操作数组，`path` 是「键 / 数组下标」的列表。**节点请用设计器的标准形态**（见 1.3）：
+`ops.json` 是操作数组，`path` 是「键 / 数组下标」的列表。**节点请用设计器的标准形态**（见 1.2）：
 
 ```json
 [
@@ -288,8 +358,10 @@ python scripts/xwl.py dump  <file.xwl>    # ② 要看清层级时：解析后�
 ```
 
 1. **能用 `@itemId` 就别手写下标** —— `paths` 给出的 `["@dataprovider","configs","sql"]`
-   不受嵌套层数影响，比 `["children",0,"children",0,"sql"]` 稳得多。
+   不受嵌套层数影响，比 `["children",0,"children",0,"configs","sql"]` 稳得多。
    必须手写下标时，先用 `dump` 确认那一层**确实有**那个元素。
+   > `paths` 的「原路径」**已经带 `configs` 一层**（`["children",0,"configs","serverScript"]`），照抄即可。
+   > 手写时**别漏这一层** —— 漏了 `patch` **不会报错**，而是把字段写到节点根上（静默语义损坏，`check` 不拦）。
 2. 写 `ops.json`（`set` / `insert` / `append` / `delete`）。
 3. **先 `--dry-run` 看 diff**，确认"只改了想改的"，再真跑。
 
@@ -317,8 +389,7 @@ python scripts/xwl.py patch <file.xwl> --ops ops.json --backup
    转成续行形态，你不用管。JS 里请用**单引号**。
 3. **diff 最小化有保证**：工具先比对"源文件是否设计器原样排版"。是 → 重排后逐字节一致，
    diff **只含你真正改的内容**（口径与量级见 [`references/measured-data.md`](references/measured-data.md) §五）。源文件不是设计器原样时，重排会顺带规整整份格式，工具会明确提示。
-   - ⚠️ 那种"顺带规整"除缩进外，还可能把值里的 `\uXXXX` 转义**还原成真实字符**
-     （会把值里的 `\uXXXX` 转义还原成真实字符，语义等价）。
+   - ⚠️ 那种"顺带规整"除缩进外，还可能把值里的 `\uXXXX` 转义**还原成真实字符**（语义等价）。
      **先 `--dry-run` 数一下噪声行数再决定**：噪声只有一两行就照用 `patch`（省心，格式有保证——
      且还原后的形态反而与设计器产物一致）；噪声可观就改用 3.2 的 `edit` 做定点插入
      （语义相同，diff 只含你改的那一处）。
@@ -341,7 +412,7 @@ python scripts/xwl.py edit <file.xwl> --old-file old.txt --new-file new.txt --ex
 
 ### 第 4 步 · 格式校验（**改完必跑**）
 
-七项检查（**改完必跑**；不通过时先用 `--backup` 的 `<file>.bak` 回退再排查）：
+七项检查（不通过时先用 `--backup` 的 `<file>.bak` 回退再排查）：
 
 ```bash
 python scripts/xwl.py check <file.xwl> [more.xwl ...]
@@ -374,9 +445,11 @@ python scripts/xwl.py check <file.xwl> --no-itemid          # 跳过 itemId 重�
 
 | 子命令 | 作用 |
 |---|---|
+| `new <out.xwl> [--kind page\|sql] [--from-json F] [--title T] [--roles R] [--eol lf\|crlf] [--force] [--dry-run]` | **从零生成 xwl（推荐入口）**：内置设计器真实键序的骨架 —— `page` = 顶层 7 钥匙 + 空 `module`；`sql` = `module(serverScript)` → `dataprovider(sql)`。**不需要种子文件**。默认拒绝覆盖已存在文件；`--from-json` 会按设计器键序重排并**补齐缺失的页面钥匙**（补齐项明确回报） |
 | `patch <file> --ops ops.json [--eol auto\|lf\|crlf] [--indent N] [--dry-run] [--backup]` | **结构级编辑（推荐）**：改对象后按设计器规则整份重建，语义等价比对 + 自动校验。`path` 支持 **`@itemId`** 寻址 |
 | `params <page.xwl> [--module-root <wb/modules>] [--controls <…/controls.json>]` | 检查「页面 → store → SQL」传参链路：列出 store 与**两条通路**（`out` / `params`）的传参点；`out` 会**展开容器内的取值控件名**，再与 SQL 的 `{?名?}` / `app.get('名')` 交叉核对；`--list-fields` 只打印取值控件名单 |
-| `paths <file>` | 列出**四类字段**（`sql` / `totalSql` / `serverScript` / `url`）的位置，给「原路径」与「`@写法`」；`itemId` 重名时标 ⚠ 并给出 `@名字#N` 点名写法 |
+| `folders <path> [--register NAME] [--dry-run]` | **`folder.json`（设计器导航树索引）一致性检查（只读）**：报「未登记进 index 的 xwl」「index 悬空项」「缺 folder.json 的目录」。`--register` 才写（把名字追加到 index 末尾；保原键序、保单行形态、幂等） |
+| `paths <file>` | 列出**四类字段**（`sql` / `totalSql` / `serverScript` / `url`）的位置，给「原路径」（**已含 `configs` 层**）与「`@写法`」；`itemId` 重名时标 ⚠ 并给出 `@名字#N` 点名写法 |
 | `sqlrefs <file>` | 检查 SQL 文件里 `{#名字#}` ↔ `serverScript` 的 `setAttribute` 是否自洽；并抓 serverScript 里误用 `{#…#}` |
 | `schema [<type>] --controls <wb/system/controls.json> [--tree] [--list] [--skeleton]` | 查设计器控件注册表：`--tree` 按面板分组列出全部控件（带库 / 容器 / 内部标记）、`--list` 只列 id、给 `<type>` 则列该控件合法的 `configs` / `events` 与 `autoNames`、`--skeleton` 出设计器同款骨架 |
 | `check <file...> [--no-js] [--no-itemid]` | 七项校验：格式五项 + 事件 JS `node --check` + **itemId 重名分级**（只有「重名且被 JS 引用」判 FAIL）；任一 FAIL 返回非 0 |
@@ -420,8 +493,8 @@ python scripts/xwl.py check <file.xwl> --no-itemid          # 跳过 itemId 重�
 引用写的是**模块相对路径、不带 `.xwl` 后缀**：
 
 ```text
-m?xwl=orderCenter/highwayTransportationManagement/transSql/queryDriverFile
-   → 文件 = wb/modules/orderCenter/highwayTransportationManagement/transSql/queryDriverFile.xwl
+m?xwl=<模块>/<业务目录>/xxxSql/queryBizList
+   → 文件 = wb/modules/<模块>/<业务目录>/xxxSql/queryBizList.xwl
 ```
 
 - **从引用找文件**：补上 `.xwl` 即可。
@@ -432,7 +505,7 @@ m?xwl=orderCenter/highwayTransportationManagement/transSql/queryDriverFile
 
 | 写法 | 例 | 说明 |
 |---|---|---|
-| `m?xwl=<模块相对路径，**不带 `.xwl`**>` | `m?xwl=orderCenter/…/transSql/queryOrderHead` | **最常用**。相对 `wb/modules/`，补 `.xwl` 就是文件路径（见 §1） |
+| `m?xwl=<模块相对路径，**不带 `.xwl`**>` | `m?xwl=<模块>/…/xxxSql/queryBizList` | **最常用**。相对 `wb/modules/`，补 `.xwl` 就是文件路径（见 §1） |
 | `/<短名>` | `/upload`、`/get-file`、`/download` | 短名注册表 **`wb/system/url.json`**，框架内部端点。改动时别自己编短名 |
 | `http://…` 或任意 url | `Wb.open({url:'http://…', inframe:true})` | 外部地址必须 `inframe:true` |
 
@@ -457,7 +530,7 @@ m?xwl=orderCenter/highwayTransportationManagement/transSql/queryDriverFile
 ```js
 // 查询/校验/取数：不建页面，只要结果
 Wb.request({
-  url: 'm?xwl=agWeb/agWebAboutUs/aboutusdata/selectAboutUsInsertStatus',
+  url: 'm?xwl=<模块>/<业务目录>/selectBizStatus',
   params: values,                 // 或 out: app.editWin（整包收容器内控件值）
   // async: false,                // 需要同步拿结果时
   success: function (resp) {
@@ -493,10 +566,10 @@ Wb.request({
 
 ```js
 Wb.open({
-  url: 'm?xwl=settlementCenter/payFeeManagement/billPay/FFbillPayList',
-  title: '应付对账单',
+  url: 'm?xwl=<模块>/<业务目录>/bizPayList',
+  title: '业务单据',
   iconCls: '',
-  params: { FEE_BILL_NO: data.feeBillNo }     // 子页面里 app.get('FEE_BILL_NO') 可取
+  params: { BIZ_NO: data.bizNo }              // 子页面里 app.get('BIZ_NO') 可取
 });
 ```
 
@@ -514,7 +587,7 @@ Wb.open({
 // ① 先把文件传到"上传承载页"，拿回服务端返回的值（通常是文件路径/新文件名）
 Wb.upload({
   form: app.form1,                 // 必填：含 file 控件的 form 面板
-  url: 'm?xwl=agWeb/AgWebDownload/downloaddata/fileUpload',
+  url: 'm?xwl=<模块>/<业务目录>/fileUpload',
   showProgress: true,
   // out: app.form1,               // 也可显式指定取值的容器
   success: function (form, action, value) {
@@ -537,16 +610,16 @@ Wb.upload({
 | `failure` | `(form, action, value)` | `action.response.responseText` → `Wb.decode(...).msg` |
 | `callback` | `(form, action, value, success)` | 返回 `false` 可跳过 success/failure |
 
-> 项目里大量写成 `success: function(action, form1, value)`——**参数名与实际顺序错位一位**
+> 样本工程里大量写成 `success: function(action, form1, value)`——**参数名与实际顺序错位一位**
 > （`action` 实际是 form、`form1` 实际是 action）。只用到第 3 个参数 `value` 时**照样能跑**，
 > 但新写代码请按官方顺序 `(form, action, value)`。失败分支里的 `failure: function(resp, action)`
 > 同理：`action` 才是 action 对象，所以 `action.response.responseText` 能取到。
 > 另外 `form.form.submit` 走的是 form 提交通道，`_jsonresp=1` 由框架自动加。
 
-**导入类页面的典型两步链**（项目里最标准的导入写法）：
+**导入类页面的典型两步链**（样本工程里最标准的导入写法）：
 
 ```text
-① Wb.upload  → 上传承载页 xwl（如 agWeb/…/fileUpload.xwl）→ 拿到文件在服务端的值
+① Wb.upload  → 上传承载页 xwl（如 <模块>/…/fileUpload.xwl）→ 拿到文件在服务端的值
 ② Wb.request → 校验页 xwl（可多个，如 selectXxxInsertStatus / …UpdateStatus）
 ③ Wb.requestAg → 落库（bean/method），成功回调里关窗 + store.load() + Wb.tip
 ```
@@ -558,10 +631,10 @@ Wb.upload({
 ```js
 Wb.requestAg({
   params: {
-    bean: 'OrderCenterController',   // 后台 bean 名（必须）
-    method: 'saveMethod',            // 方法名（必须）
-    ecPublicAboutUsData: values,     // 业务参数：键名就是后台取参名
-    data: Wb.encode(rows)            // 表格批量数据用 data 键（JSON 字符串）
+    bean: 'xxxController',       // 后台 bean 名（必须）
+    method: 'saveMethod',        // 方法名（必须）
+    BIZ_DATA: values,            // 业务参数：键名就是后台取参名
+    data: Wb.encode(rows)        // 表格批量数据用 data 键（JSON 字符串）
   },
   success: function (resp) {
     win.close();
@@ -582,7 +655,7 @@ Wb.requestAg({
 | 表格批量增删改 | 用 `data`（`Wb.encode(...)` 的 JSON 字符串）+ 配套键 `datatable` / `className` / `insertSql` / `updateSql` / `deleteSql`（实测 Top 组合） |
 | 同一 bean 多方法 | 只改 `method` 即可，`bean` 复用 |
 
-> 实测常用业务参数名与频次（`idList` / `datatable` / `className` / `insertSql` / `updateSql` / `deleteSql`…）见 [`references/measured-data.md`](references/measured-data.md)。
+> 实测常用业务参数名与频次（`idList` / `datatable` / `className` / `insertSql` / `updateSql` / `deleteSql`…）见 [`references/measured-data.md`](references/measured-data.md) §三。
 
 **后台传回后，前台怎么处理**（统计见 [`references/measured-data.md`](references/measured-data.md) §四）：
 
@@ -610,7 +683,7 @@ Wb.requestAg({
 被 store 引用的「SQL 文件」不是散装 SQL，而是固定的**两级结构**：
 
 ```text
-(页面钥匙: title / iconCls / inframe / pageLink / hidden / roles / children)
+(页面钥匙 7 把，真实键序见 1.4)
 └─ type="module"          configs{ itemId, serverScript }        ← 取参数、拼条件
    └─ type="dataprovider" configs{ itemId, sql, totalSql?, … }   ← 执行 SQL、出数据
 ```
@@ -639,7 +712,7 @@ python scripts/xwl.py sqlrefs <file.xwl>                            # 改完验 
 ```json
 [
   {"op": "set", "path": ["@dataprovider", "configs", "sql"],
-   "value": "select ofi.* from order_file ofi\nwhere 1=1\n{#sql#}"},
+   "value": "select t.* from biz_table t\nwhere 1=1\n{#sql#}"},
   {"op": "set", "path": ["@module", "configs", "serverScript"],
    "value": "var data = app.get();\nvar sql = '';\nrequest.setAttribute('sql', sql);"}
 ]
@@ -796,3 +869,11 @@ python scripts/xwl.py itemids <file.xwl> --json           # 机器可读，便�
 - [ ] 若目标是"同一字段名出现在多处明细面板"：**优先补 `normalName`**（`app.<normalName>`），而不是改 `itemId`
 - [ ] 改了 `itemId` 的话：**事件 JS 里对它的引用已同步改**，且 `itemids` 复查过
 - [ ] `xwl.py check` 的 ⑦ 没有 `[FAIL]`（`[warn]` 级重名知道了就行 —— 老代码可留，新代码别再加）
+
+> **新建文件时**（额外必查）：
+> - [ ] 用 `xwl.py new` 生成的（**没有**手写顶层键、**没有**拿别的文件当种子）
+> - [ ] 顶层 7 把钥匙齐全，且键序是 `hidden, children, roles, title, iconCls, inframe, pageLink`（`new` 已保证；手写或 `--from-json` 时自查）
+> - [ ] `xwl.py folders <file>`：**已登记进所在目录的 `folder.json`**（否则设计器导航树里看不到）
+> - [ ] SQL 载体跑过 `sqlrefs`；引用 SQL 的页面跑过 `params`
+> - [ ] **在设计器里打开过一次**（`check` 只证"格式能加载"，不证"页面能用"；新文件也没有 diff 可比）
+> - [ ] 知道要让用户能打开还得在数据库 `WB_MENU` 挂菜单（范围外 —— 别以为文件建好就完事）

@@ -6,7 +6,11 @@
 
 子命令：
   check   <file...>                              五项格式校验 + 事件 JS 语法校验
+  new     <out.xwl> [--kind page|sql]            **从零生成** xwl（内置设计器骨架）
+  patch   <file> --ops ops.json                  结构级编辑（改对象 → 按设计器规则重建）
   edit    <file> --old-file O --new-file N       安全替换（保留 CRLF，断言出现次数）
+  paths   <file>                                 列出 sql / serverScript / url 等字段位置
+  folders <path> [--register NAME]               folder.json（导航树索引）一致性检查 / 登记
   dump    <file>                                 按加载器规则解析后美化输出
   sql     <file>                                 抽取 SQL 文本（正确反转义）
   events  <file> [--outdir DIR]                  抽取事件 JS 到文件
@@ -1450,15 +1454,29 @@ def cmd_schema(args) -> int:
         print(f"  {k}" + (f"  (实际名 {rn})" if rn else ""))
 
     if args.skeleton:
+        # 骨架必须**只含该控件允许的键** —— 否则照抄进 xwl 就是非法配置。
+        # 所以 configs 从注册表声明推导（不是写死 text），events 键按「该控件是否真有事件」决定。
         sk = collections.OrderedDict()
-        sk["configs"] = {"itemId": "<必填：app.<itemId> 用它寻址>", "text": ""}
+        cfgs = collections.OrderedDict()
+        cfgs["itemId"] = "<必填：app.<itemId> 用它寻址>"
+        for cand in ("text", "title"):          # 只加该控件**确实允许**的「显示名」键
+            if cand in cfg:
+                cfgs[cand] = ""
+        sk["configs"] = cfgs
         sk["expanded"] = False
         sk["children"] = []
         sk["type"] = args.type
-        sk["events"] = {"click": ""} if "click" in ev else {}
-        print("\n设计器同款最小骨架（键序与设计器一致：configs, expanded, children, type, events）：")
+        if "click" in shown:
+            # 真实控件节点的键集合只有两种：无事件时**没有** events 键（见 SKILL 1.2）
+            sk["events"] = {"click": ""}
+        keys = ", ".join(sk.keys())
+        print(f"\n设计器同款最小骨架（键序与设计器一致：{keys}）：")
         print(json.dumps(sk, ensure_ascii=False, indent=2))
-        print("\n> 提示：configs 里只放该控件**允许**的键（见上表）；itemId 必须唯一。")
+        if not shown:
+            print("\n> 该控件 events 为 0 个 —— 骨架里**不带** events 键（与真实文件形态一致）。")
+        elif "click" not in shown:
+            print(f"\n> 该控件没有 click 事件；可挂的是：{' / '.join(shown)} —— 需要时自己加 events 键。")
+        print(f"> 提示：configs 只放上表列出的键（共 {len(cfg)} 个）；itemId 必须唯一。")
     return 0
 
 
@@ -1483,7 +1501,11 @@ def cmd_paths(args) -> int:
             v = cfg.get(k)
             if not isinstance(v, str):
                 continue
-            raw = "[" + ", ".join(json.dumps(x) if isinstance(x, str) else str(x) for x in path + [k]) + "]"
+            # 注意必须带 "configs" 一层：iter_nodes 给出的 path 指向**节点本身**，
+            # 而 sql / serverScript 是节点 `configs` 下的键。漏掉这一层时 patch 不会报错，
+            # 而是把字段写到节点根上（静默语义损坏）。
+            raw = "[" + ", ".join(json.dumps(x) if isinstance(x, str) else str(x)
+                                  for x in path + ["configs", k]) + "]"
             if isinstance(iid, str) and iid:
                 at = "[" + ", ".join(json.dumps(x) for x in ["@" + iid, "configs", k]) + "]"
             else:
@@ -1513,6 +1535,329 @@ def cmd_paths(args) -> int:
     if dup_any:
         print("注意：上面标 ⚠ 的条目 itemId 不唯一 —— 用 `@名字#N` 点名第 N 个候选，")
         print("      或直接看 `xwl.py itemids <file>` 的候选清单与建议改名（工具不猜顺序）。")
+    return 0
+
+
+# --------------------------------------------------------------------------- #
+# new（从零生成一个 xwl 文件）
+# --------------------------------------------------------------------------- #
+# 顶层页面钥匙的**真实键序** —— 实测样本工程 2780 个 xwl：2750 个是这个顺序，
+# 且**独立页面与被引用的 SQL 载体完全一样**。
+# 序列化按 dict 插入序输出 ⇒ 键序写错，产出即与设计器不一致（下次被设计器保存就产生额外 diff）。
+_PAGE_KEYS = ("hidden", "children", "roles", "title", "iconCls", "inframe", "pageLink")
+_PAGE_DEFAULTS = collections.OrderedDict([
+    ("hidden", False), ("children", []), ("roles", {}), ("title", ""),
+    ("iconCls", ""), ("inframe", False), ("pageLink", ""),
+])
+
+# SQL 载体的 serverScript 骨架：取参数用 app.get('名')（**serverScript 里禁止写 {#…#}**），
+# 拼好的条件通过 request.setAttribute('sql', …) 交给 dataprovider 的 {#sql#}。
+_SQL_SERVER_SCRIPT = "var sql = '';\nrequest.setAttribute('sql', sql);"
+_SQL_BODY = "select * from WB_MISC\nwhere 1=1\n{#sql#}"
+
+
+def _page_obj(title: str, roles: dict, children: list):
+    """按设计器真实键序构造页面顶层对象。"""
+    o = collections.OrderedDict()
+    o["hidden"] = False
+    o["children"] = children
+    o["roles"] = roles
+    o["title"] = title
+    o["iconCls"] = ""
+    o["inframe"] = False
+    o["pageLink"] = ""
+    return o
+
+
+def _ctl(ntype: str, configs: dict, expanded: bool = False, children=None):
+    """按设计器键序（configs, expanded, children, type）构造控件节点。"""
+    n = collections.OrderedDict()
+    n["configs"] = configs
+    n["expanded"] = expanded
+    n["children"] = [] if children is None else children
+    n["type"] = ntype
+    return n
+
+
+def skeleton_page(title: str = "", roles: dict | None = None) -> dict:
+    """独立页面骨架：顶层 7 把钥匙 + 一个空的 `module` 节点。"""
+    return _page_obj(title, {"default": 1} if roles is None else roles,
+                     [_ctl("module", {"itemId": "module"})])
+
+
+def skeleton_sql(title: str = "", roles: dict | None = None) -> dict:
+    """SQL 载体骨架：`module(serverScript)` → `dataprovider(sql)`。
+
+    就是被页面用 `store.configs.url = 'm?xwl=…'` 引用的那种文件（惯用路径 `…/xxxSql/queryXxx`）。
+    """
+    dp = _ctl("dataprovider", collections.OrderedDict([
+        ("itemId", "dataprovider"),
+        ("sql", _SQL_BODY),
+    ]))
+    mod = _ctl("module", collections.OrderedDict([
+        ("itemId", "module"),
+        ("serverScript", _SQL_SERVER_SCRIPT),
+    ]), expanded=True, children=[dp])
+    return _page_obj(title, {"default": 1} if roles is None else roles, [mod])
+
+
+def _parse_roles(spec) -> dict:
+    """`"default"` → `{"default": 1}`；`""` → `{}`；支持逗号分隔多个角色。"""
+    return {n: 1 for n in (x.strip() for x in (spec or "").split(",")) if n}
+
+
+def _reorder_page_keys(obj: dict):
+    """把顶层键按设计器真实键序重排；缺失的页面钥匙按默认值补齐。
+
+    返回 `(new_obj, added_keys, extra_keys)`。
+    缺 `inframe` / `pageLink` 这类键时，`check` 依然 ALL OK（格式合法），
+    但**设计器/框架的行为会不一致** —— 所以这里显式补齐并回报。
+    """
+    out = collections.OrderedDict()
+    added = []
+    for k in _PAGE_KEYS:
+        if k in obj:
+            out[k] = obj[k]
+        else:
+            out[k] = _PAGE_DEFAULTS[k]
+            added.append(k)
+    extra = [k for k in obj if k not in _PAGE_KEYS]     # 非标准顶层键（如 url）原样保留
+    for k in extra:
+        out[k] = obj[k]
+    return out, added, extra
+
+
+def cmd_new(args) -> int:
+    """**从零生成**一个 xwl 文件 —— 不依赖任何「种子文件」。
+
+    为什么要这个子命令：`patch` / `expand` / `check` 的第一步都是**读已有文件**，
+    所以「新建」在工具层原本没有入口，只能靠「复制一个文件当种子、再整树重写」。
+    而种子是**继承式**的：
+
+      · 顶层没被显式覆盖的键会**静默残留**（种子的 `roles:{"demo":1}` 会带进新页面）；
+      · 顶层缺 `inframe` / `pageLink` 的种子（工程里确实存在这类文件）产出的页面
+        **缺钥匙而 `check` 不告警**。
+
+    本命令把「设计器真实顶层键序 + 键序齐全」固化成内置骨架，从构造上消掉这两类问题。
+    """
+    dest = args.out
+    if os.path.exists(dest) and not args.force:
+        print(f"[FAIL] 目标已存在：{dest}")
+        print("       要改已有文件请用 `xwl.py patch`（结构级编辑，diff 最小）；")
+        print("       确实要整份覆盖再加 --force。")
+        return 2
+
+    added: list = []
+    extra: list = []
+    if args.from_json:
+        try:
+            with open(args.from_json, "r", encoding="utf-8") as f:
+                raw = json.load(f)
+        except Exception as exc:  # noqa: BLE001
+            print(f"[FAIL] 读 --from-json 失败: {exc}")
+            return 2
+        if not isinstance(raw, dict):
+            print("[FAIL] --from-json 的顶层必须是对象（xwl 顶层是一棵树，不是数组）")
+            return 2
+        obj, added, extra = _reorder_page_keys(raw)
+        if not isinstance(obj.get("children"), list):
+            print("[FAIL] children 必须是数组")
+            return 2
+        kind = f"from-json({os.path.basename(args.from_json)})"
+    else:
+        roles = None if args.roles is None else _parse_roles(args.roles)
+        obj = (skeleton_sql(args.title, roles) if args.kind == "sql"
+               else skeleton_page(args.title, roles))
+        kind = args.kind
+
+    eol = "\n" if args.eol == "lf" else CRLF
+    eol_name = "LF" if eol == "\n" else "CRLF"
+    out = dumps_designer(obj, args.indent, eol)
+
+    # 语义等价比对（必须过，否则不写盘）
+    try:
+        if parse_xwl(out) != obj:
+            print("[FAIL] 重建结果语义不一致，已中止（不写文件）")
+            return 2
+    except Exception as exc:  # noqa: BLE001
+        print(f"[FAIL] 重建结果无法解析，已中止: {exc}")
+        return 2
+
+    top = list(obj.keys())
+    print(f"骨架: {kind} | 顶层 {len(top)} 键，键序 = {top}")
+    if added:
+        print(f"[note] 已按设计器默认值补齐缺失的页面钥匙：{added}")
+        print("       缺这些键的文件 `check` 也是 ALL OK（只查格式），但设计器/框架行为会不一致。")
+    if extra:
+        print(f"[note] 保留了非标准顶层键（原样追加在末尾）：{extra}")
+    print(f"[ok]   语义等价比对通过 | {len(out.encode('utf-8'))} B | 换行={eol_name}")
+
+    if args.dry_run:
+        print("\n--- 将写入的内容 ---")
+        print(out)
+        print("[dry-run] 未写入")
+        return 0
+
+    write_text(dest, out)
+    print(f"已写入: {dest}")
+
+    rc = _post_check(dest, args)
+    if rc == 0:
+        print("> 新建之后必做：")
+        print(f"  1) 设计器导航树里看不到它 → 跑 `xwl.py folders {dest}` 看 folder.json 登记情况")
+        print("  2) 若这是 SQL 载体 → 跑 `xwl.py sqlrefs`；若是引用它的页面 → 跑 `xwl.py params`")
+        print("  3) 要被用户打开还需在数据库 WB_MENU 里挂菜单（在 xwl 工具范围外）")
+    return rc
+
+
+# --------------------------------------------------------------------------- #
+# folders（folder.json：设计器导航树索引的一致性检查 / 登记）
+# --------------------------------------------------------------------------- #
+_FOLDER_NAME = "folder.json"
+
+
+def _read_folder_json(d: str):
+    """返回 `(data, path)`；`data=None` 表示文件不存在，`data=False` 表示存在但解析失败。"""
+    p = os.path.join(d, _FOLDER_NAME)
+    if not os.path.exists(p):
+        return None, p
+    try:
+        with open(p, "r", encoding="utf-8") as f:
+            data = json.load(f)
+        return (data if isinstance(data, dict) else False), p
+    except Exception:  # noqa: BLE001
+        return False, p
+
+
+def _register_one(target: str, args) -> int:
+    """把文件名追加到所在目录 `folder.json` 的 `index` 末尾（保留原键序与单行形态）。"""
+    d = os.path.dirname(target)
+    name = os.path.basename(target)
+    if not os.path.exists(target):
+        print(f"[FAIL] 文件不存在：{target}")
+        return 2
+    data, jp = _read_folder_json(d)
+    if data is None:
+        print(f"[FAIL] {d} 下没有 {_FOLDER_NAME} —— 该目录未被设计器管理，")
+        print("       请先在设计器里建这个目录（或确认路径是否写错）。")
+        return 2
+    if data is False:
+        print(f"[FAIL] {jp} 不是合法 JSON，本工具不动它")
+        return 2
+    idx = data.get("index")
+    if not isinstance(idx, list):
+        print(f"[FAIL] {jp} 的 index 不是数组，本工具不动它")
+        return 2
+    if name in idx:
+        print(f"[ok]   {name} 已登记在 {jp} 的 index 第 {idx.index(name) + 1} 项，无需改动")
+        return 0
+
+    text, has_bom = decode(jp)
+    if has_bom:
+        print(f"[FAIL] {jp} 带 BOM，本工具不动它（先手工去掉 BOM）")
+        return 2
+    eol = CRLF if text.count(CRLF) else ("\n" if "\n" in text else "")
+    tail = eol if text.endswith(("\n", "\r")) else ""
+    idx.append(name)
+    out = json.dumps(data, ensure_ascii=False, separators=(",", ":")) + tail
+
+    print(f"将追加 index 项 {name!r} → {os.path.relpath(jp)}（登记后共 {len(idx)} 项）")
+    if args.dry_run:
+        print(f"  before: {text.rstrip()[:140]}")
+        print(f"  after : {out.rstrip()[:140]}")
+        print("[dry-run] 未写入")
+        return 0
+
+    bak = jp + ".bak"
+    with open(bak, "wb") as f:
+        f.write(read_bytes(jp))
+    write_text(jp, out)
+    print(f"备份 -> {bak}")
+    print(f"已写入: {jp}")
+    print("> index 的顺序 = 设计器导航树里的显示顺序（追加在末尾）。")
+    return 0
+
+
+def cmd_folders(args) -> int:
+    """检查 `folder.json`（设计器导航树的目录索引）与实际文件是否一致。
+
+    `folder.json` 形如 `{"hidden":false,"index":[…],"title":"…","iconCls":"…"}`；
+    **`index` 里带 `.xwl` 后缀的是文件，不带后缀的才是子目录**。
+    新建一个 xwl 之后不登记进所在目录的 `index`，设计器导航树里就看不到它。
+
+    默认**只读**；只有 `--register` 才写（把该文件名追加到 index 末尾）。
+    """
+    target = os.path.abspath(args.path)
+    if os.path.isfile(target):
+        if not target.lower().endswith(".xwl"):
+            print(f"[FAIL] 不是 .xwl 文件：{target}")
+            return 2
+        if args.register is not None:
+            return _register_one(target, args)
+        jobs = [(os.path.dirname(target), [os.path.basename(target)])]
+        base = os.path.dirname(target)
+        recursive = False
+    elif os.path.isdir(target):
+        jobs = []
+        base = target
+        recursive = True
+        for d, _subs, files in os.walk(target):
+            xs = [x for x in files if x.endswith(".xwl")]
+            if xs:
+                jobs.append((d, xs))
+        if not jobs:
+            print(f"[FAIL] {target} 下没有 .xwl 文件")
+            return 2
+    else:
+        print(f"[FAIL] 路径不存在：{target}")
+        return 2
+
+    n_dir = n_unreg = n_dangling = n_bad = 0
+    detail: list = []
+    registered_at = None
+    for d, names in sorted(jobs):
+        n_dir += 1
+        rel = os.path.relpath(d, base) if recursive else os.path.basename(d)
+        data, jp = _read_folder_json(d)
+        if data is None:
+            n_unreg += len(names)
+            detail.append(("缺 folder.json", rel, f"{len(names)} 个 xwl 未登记"))
+            continue
+        if data is False:
+            n_bad += 1
+            detail.append(("folder.json 损坏", rel, os.path.basename(jp)))
+            continue
+        idx = data.get("index") if isinstance(data.get("index"), list) else []
+        miss = [x for x in names if x not in idx]
+        if miss:
+            n_unreg += len(miss)
+            shown = ", ".join(miss[:6]) + ("…" if len(miss) > 6 else "")
+            detail.append(("未登记", rel, shown))
+        elif not recursive and names:
+            registered_at = (names[0], jp, idx.index(names[0]) + 1)
+        # 悬空：index 项在磁盘上既不是文件也不是子目录（文件/目录被删了但登记还留着）
+        for it in idx:
+            if isinstance(it, str) and it and not os.path.exists(os.path.join(d, it)):
+                n_dangling += 1
+                detail.append(("index 悬空", rel, it))
+
+    print(f"目录 {n_dir} 个 | 未登记的 xwl {n_unreg} 个 | "
+          f"index 悬空项 {n_dangling} 个 | folder.json 损坏 {n_bad} 个")
+    if detail:
+        print("\n明细（最多 40 条）：")
+        for kind, rel, info in detail[:40]:
+            print(f"  [{kind}] {rel}/  {info}")
+        if len(detail) > 40:
+            print(f"  ...（另有 {len(detail) - 40} 条）")
+    elif registered_at:
+        nm, jp, pos = registered_at
+        print(f"[ok]   {nm} 已登记在 {os.path.relpath(jp)} 的 index 第 {pos} 项。")
+    else:
+        print("[ok]   index 与实际文件一致。")
+    if n_unreg and not recursive:
+        print(f"\n登记：xwl.py folders {os.path.relpath(target)} --register {os.path.basename(target)}")
+    if n_unreg:
+        print("\n> index 里带 `.xwl` 的是文件、不带后缀的是子目录；顺序 = 导航树显示顺序。")
     return 0
 
 
@@ -2092,6 +2437,31 @@ def build_parser() -> argparse.ArgumentParser:
     pa = sub.add_parser("paths", help="列出可编辑字段位置（sql / totalSql / serverScript / url），供 patch 用")
     pa.add_argument("file")
     pa.set_defaults(func=cmd_paths)
+
+    n = sub.add_parser("new", help="从零生成一个 xwl 文件（内置设计器骨架，不需要种子文件）")
+    n.add_argument("out", help="输出路径；默认拒绝覆盖已存在文件（除非 --force，或改用 patch）")
+    n.add_argument("--kind", choices=["page", "sql"], default="page",
+                   help="page=独立页面（顶层 + 空 module）；sql=SQL 载体（module→dataprovider）")
+    n.add_argument("--from-json", dest="from_json",
+                   help="改用这个 JSON 文件的顶层对象（给了它则忽略 --kind / --title / --roles）")
+    n.add_argument("--title", default="", help="页面标题（title）")
+    n.add_argument("--roles", default=None,
+                   help='角色权限，逗号分隔（如 "default" / "default,developer"）；给空串得到 {}')
+    n.add_argument("--eol", choices=["lf", "crlf"], default="lf",
+                   help="换行：lf=设计器/仓库的原始形态（默认）；crlf=Windows 工作区形态")
+    n.add_argument("--indent", type=int, default=1)
+    n.add_argument("--force", action="store_true", help="允许覆盖已存在的文件")
+    n.add_argument("--dry-run", action="store_true", help="只打印将写入的内容，不写盘")
+    n.add_argument("--node")
+    n.add_argument("--no-js", action="store_true")
+    n.set_defaults(func=cmd_new)
+
+    fld = sub.add_parser("folders", help="folder.json（设计器导航树索引）一致性检查 / 登记")
+    fld.add_argument("path", help=".xwl 文件，或要递归检查的目录")
+    fld.add_argument("--register", metavar="NAME",
+                     help="写操作：把 NAME（一般是该 .xwl 的文件名）追加到所在目录 folder.json 的 index 末尾")
+    fld.add_argument("--dry-run", action="store_true")
+    fld.set_defaults(func=cmd_folders)
 
     ii = sub.add_parser("itemids", help="itemId 重名分级报告（候选清单 + 建议值），只读")
     ii.add_argument("file")

@@ -27,7 +27,7 @@
 ### (根)
 | id | ExtJS 类型 | 库 | 容器 | 面板 | 用过的次数 | 干什么 |
 |---|---|---|---|---|---|---|
-| `module` | — | 结构/服务端 |  | ✔ | 2777 | **每个 xwl 的根节点**（页面钥匙）。顶层 `title`/`roles`/`inframe`/`pageLink` 是它的属性；`serverScript` 挂在这层 |
+| `module` | — | 结构/服务端 |  | ✔ | 2777 | **每个 xwl 的第一个子节点**（`children[0]`，页面级节点）。`serverScript` 挂在这层。设计器面板里它是树的根、页面钥匙显示为它的属性，但**文件里顶层就是那 7 把钥匙**（见 4.2） |
 
 ### General
 | id | ExtJS 类型 | 库 | 容器 | 面板 | 用过的次数 | 干什么 |
@@ -267,8 +267,24 @@
 | `module` | `response` | 123 | 根 → 直接输出响应（`app.send` 型） |
 
 ### 4.2 典型骨架（照这个搭就不会错）
+
+**页面顶层 —— 7 把钥匙，键序固定**（样本工程里绝大多数 xwl 都是这个顺序，
+**独立页面与被引用的 SQL 载体完全一样**；份额见 [`measured-data.md`](measured-data.md) §九）：
+
 ```text
-module                          ← 每个 xwl 的根（页面钥匙：title/roles/inframe/pageLink）
+hidden, children, roles, title, iconCls, inframe, pageLink
+```
+
+取值形态：`roles` 是 **dict（角色名 → 1）**，如 `{"default":1}`；`iconCls` / `pageLink` 多为空串；
+`hidden` / `inframe` 是 bool。序列化按 dict 插入序输出 ⇒ **键序写错，产出即与设计器不一致**。
+
+> **这层别手写**：用 `xwl.py new --kind page|sql` 生成（内置了这套键序），
+> 或用 `xwl.py new --from-json` 让它按这套键序重排、补齐缺失的钥匙（见 SKILL.md 第三章第 0 步）。
+
+**控件树**：
+
+```text
+module                          ← 每个 xwl 的 children[0]（页面级节点；挂 serverScript / 后台方法）
 ├─ dataprovider                 ← 只有 serverScript 型数据源
 │  （module.configs.serverScript + dataprovider.configs.sql）
 └─ viewport / window / panel    ← 可见根容器
@@ -280,6 +296,10 @@ module                          ← 每个 xwl 的根（页面钥匙：title/rol
       ├─ feature (itemId=features)
       └─ tableview (itemId=viewConfig)
 ```
+
+**每个控件节点的键序也固定**：`configs, expanded, children, type`；**有事件时才多一个 `events`，排在最后**。
+所以「无事件的控件节点没有 `events` 键」—— 拿骨架时按 `schema --skeleton` 给的来（它只输出该控件合法的键）。
+
 其它常见组合：`tab → panel`（页签页）、`combo → store`（下拉数据源）、`form → 字段控件`、`window → form/panel`（弹窗）、`panel → panel`（嵌套布局）、`toolbar → item`（分隔符/菜单项）。
 
 ## 五、"配置载体"节点：最容易看不懂的一类
@@ -321,10 +341,19 @@ module                          ← 每个 xwl 的根（页面钥匙：title/rol
 | 传递隐藏参数 | `hidden` | `out:` 会把它一起送出 |
 | 自由排版 / 富文本 | `div`/`span`/`p`（lib=3）或 `htmleditor` |  |
 | 移动端页面 | `t` 前缀那一套（lib=2） | 与桌面控件一一对应，别混用 |
-| SQL 数据源 | `module.configs.serverScript` + `dataprovider.configs.sql` | 文件名惯用 `transSql/queryXxx` |
+| SQL 数据源 | `module.configs.serverScript` + `dataprovider.configs.sql` | 文件名惯用 `xxxSql/queryXxx` |
 
 ## 七、改结构时的安全顺序
+
+**要新建整个文件**：用 `xwl.py new --kind page|sql`（见 SKILL.md 第三章第 0 步）——
+**不要** `cp` 一个别的 xwl 当种子再整树重写，种子是继承式的，顶层没覆盖到的键会静默残留。
+
+**改已有文件的控件结构**：
+
 1. 先从这张表确认**目标控件的 id 与 ExtJS 类型**；
-2. 用 `xwl.py schema <id> --controls <…/controls.json> --skeleton` 取**合法字段 + 设计器同款骨架**（键序 `configs, expanded, children, type, events`）；
-3. 用 `xwl.py paths` / `xwl.py dump` 看清现有层级，再写 `patch` 的 `ops`（`path` 段可用 `@itemId` 寻址）；
+2. 用 `xwl.py schema <id> --controls <…/controls.json> --skeleton` 取骨架 ——
+   它**只输出该控件合法的键**（键序 `configs, expanded, children, type`；
+   只有该控件真有 `click` 事件时才多一个 `events` 键）；
+3. 用 `xwl.py paths` / `xwl.py dump` 看清现有层级，再写 `patch` 的 `ops`
+   （`path` 段可用 `@itemId` 寻址；`paths` 的「原路径」已含 `configs` 层）；
 4. `patch --dry-run` 看 diff → 真跑 → `xwl.py check`。

@@ -9,6 +9,114 @@
 
 ---
 
+## [1.2.0] - 2026-09-16
+
+**补上「新建」这条路 + 修两个会静默损坏文件的缺陷 + 全文去项目化。**
+
+起因是一次评审提问：「能不能用它生成一个新页面 + 配套的 sql.xwl」。查下来是
+**改已有文件完备，但「新建」在工具层没有入口** —— `patch` / `expand` / `check` 第一步都是读已有文件，
+只能靠「复制一个文件当种子、再整树重写」；而种子是**继承式**的（顶层没被覆盖到的键会静默残留）。
+
+### Added
+
+- **新子命令 `new`**：`xwl.py new <out.xwl> --kind page|sql` —— **从零生成** xwl，
+  内置设计器**真实顶层键序**的骨架，**不需要任何种子文件**。
+  - `--kind page` = 顶层 7 把钥匙 + 一个空 `module` 节点；
+    `--kind sql` = `module(serverScript)` → `dataprovider(sql)`（被页面用 `store.url='m?xwl=…'` 引用）。
+  - `--from-json F`：喂一个自己拼的顶层对象，按设计器键序**重排 + 补齐缺失的页面钥匙**并明确回报
+    补齐了哪些；不覆盖用户给的 `title` / `roles`。
+  - 默认**拒绝覆盖已存在文件**（要改已有文件应该用 `patch`）；另有 `--eol lf|crlf` / `--indent` /
+    `--dry-run` / `--force`。
+  - 与既有子命令同一套保证：`dumps_designer` 序列化 → `parse_xwl(out) == obj` 语义等价比对 → `_post_check`。
+- **新子命令 `folders`**：`xwl.py folders <path>` —— `folder.json`（**设计器导航树索引**）
+  一致性检查，默认**只读**：报「未登记进 `index` 的 xwl」「`index` 悬空项」「缺 `folder.json` 的目录」。
+  `--register NAME` 才写 —— 追加到 `index` 末尾，**保原键序、保单行紧凑形态、幂等**，写前备份。
+- **`SKILL.md` 新增 1.4「页面顶层骨架（7 把钥匙，键序固定）」**：写出真实键序与 7 把钥匙的取值形态。
+- **`SKILL.md` 新增「第 0 步 · 新建文件」**（第三章）：`new` 用法 + **新建后必做的三件事**
+  （`folder.json` 登记 / `sqlrefs`+`params` / 设计器里打开一次），
+  并点明「要让用户能打开还得在数据库 `WB_MENU` 挂菜单」属范围外。
+- `selftest` 新增**第 17 条：文档一致性守卫（跨文件）** —— 四类检查：
+  emoji 未入标题 / README↔SKILL 无逐字重复的表格行 / 「见 N.M」编号引用可解析 / **无业务路径残留**。
+  判据用**结构**（`m?xwl=` 后必须是占位符、多段 `.xwl` 路径必须落在平台白名单内）而**不是业务名黑名单**
+  —— 黑名单等于把业务名又写回代码里。**负向测试**：临时塞入两类真实业务路径，守卫均报 FAIL；
+  移除后恢复 ALL OK。
+- `test-prompts.json` 从 4 条扩到 **6 条**：新增「新建 SQL 文件」与「新页面在设计器里看不到」，
+  覆盖本版新增的 `new` / `folders`（原 4 条全部只针对"改已有文件"）；原 4 条的路径改为占位符写法。
+
+### Fixed
+
+- **`paths` 的「原路径」漏了 `configs` 一层**（真 bug，**静默**损坏语义）：
+  原来输出 `["children",0,"serverScript"]`，照抄跑 `patch` **不报错**，而是把字段写到**节点根上**
+  （产出 `{"type":"module","serverScript":…}`），`check` 也拦不住。已改为 `[...,"configs","serverScript"]`，
+  并补断言：照抄该路径跑 `patch` 必须改到 `configs` 里、且不得在节点根上留下该键。
+- **`schema --skeleton` 生成的是非法骨架**：原来把 `configs:{itemId, text}` 写死 ——
+  但 `module` / `dataprovider` 的合法 configs 里**没有 `text`**（`module` 只有 `title`），属非法配置；
+  且无条件下发 `"events": {}`，而 `dataprovider` 的合法 events 是 **0 个**、
+  真实节点形态是**没有 `events` 键**的。改为：`configs` 按注册表声明推导（只加该控件确实允许的
+  「显示名」键），`events` 键只在「该控件真有 `click` 事件」时输出，否则只提示可挂哪些事件。
+- 三处「页面钥匙」的**列举顺序**改为真实键序（原文写作
+  `title / iconCls / inframe / pageLink / hidden / roles / children`，那是认知性列举，
+  在"新建"场景容易被当成**写入顺序**；而序列化按 dict 插入序输出，键序错则产出与设计器不一致）。
+  涉及 `SKILL.md` 1.4 与此前的 §一 / §六、`references/controls.md` §4.2、`references/sql-fragments.md` §1。
+- `SKILL.md` 3.1 的手写路径示例 `["children",0,"children",0,"sql"]` → 补上 `configs` 层，
+  并加警告：漏这一层 `patch` 不报错、只会写错位置。
+- **文档交叉一致性**（darwin 评审发现，均为"改了这处忘了那处"类）：
+  - `controls.md` §4.2 的**失效引用**「理由见 SKILL.md 1.4」—— 该论证本版已移出 1.4，改指第三章第 0 步。
+  - `measured-data.md` **头部说明与实际章节脱节**：原文只把数字分两类（"一~四、六节"+"第五节"），
+    漏了 §七 / §八 / §九；样本口径只写 2777 未说明 2780；日期未标 §九 为次日新增。已补齐三类归类。
+  - `controls.md` §4.2 与 `measured-data.md` §九 的**样本计数口径混用**（`2750 / 2780` vs 其余处的 `2777`）
+    → 改为定性表述 + 指针。
+  - `measured-data.md` §五与§九各有一个 `patch` diff 规模数字（377 KB → 17 行 / 181 KB → 15 行），
+    均真实但属**两次不同实验** → 已在 §九 标注，避免被读成自相矛盾。
+  - `controls.md` 控件总表的 `(根)` 行称 `module` 是「每个 xwl 的**根节点**、顶层页面钥匙是它的属性」，
+    与同文件 §4.2 的「`children[0]`」矛盾。结构上后者对（前者是设计器面板视角）→ 已改写。
+  - 框架文件名混用（`wb/script/wb.js` vs 源码版名 `wb-debug.js`）→ 已在 `sql-fragments.md` 加注「同一文件的两种形态」。
+- 修 `SKILL.md` 3.1 的错引用 `（见 1.3）` → `（见 1.2）`（控件节点标准形态在 1.2，1.3 是"谁在写它"——
+  既有缺陷，与本次改动无关）；2.4 的伪标题 `**实际逻辑在哪**` 改为引出句。
+
+### Changed
+
+- `selftest` 断言 **54 → 59 项**（新增 5 组：`new` / `folders` / `paths` 原路径 / `schema --skeleton` / 文档守卫）。
+- **README 精简 184 → 146 行**：删掉整节「从零新建一个 xwl」（36 行操作细节，且其中的
+  「新建后必做三件事」表与 `SKILL.md` **逐字重复**）；新建只留「快速开始」里两条命令，
+  并补 `### 造新文件` / `### 改已有文件` 分组标题。另修 `itemId 重名怎么办` 的层级
+  （曾被误挂成「从零新建」的子节）；工具速查表去掉实现细节（使用者不需要动作的信息）；
+  `依赖` 节范围补「不涉及菜单注册（`WB_MENU`）」。
+- `SKILL.md` 结构整改：1.4 标题去掉"唯一权威"这类定位性修饰；删掉与第三章第 0 步**重复**的
+  "为什么不能用种子"论证块（论证与数据归 `measured-data.md` §九，正文只留结论 + 指针）；
+  第 0 步的 `folder.json` 说明由**引用块改为正文**（引用块只放警告与补充说明，不放成段规则正文）。
+- `references/controls.md` §4.2 拆出「页面顶层（7 把钥匙）」与「控件树」两段，并写明**控件节点的键序**
+  （`configs, expanded, children, type`；有事件才加 `events`）；§七 区分「新建文件」与「改结构」两条路，
+  两条分支的形状统一。
+- 文件头 docstring 的子命令清单同步（补 `new` / `patch` / `paths` / `folders`）。
+- **去项目化**（skill 是通用资产，正文不应出现任何具体工程的业务信息）：
+  - **隐去**：业务模块路径（→ `<模块>` / `<业务目录>` 占位）、业务 `.xwl` 文件名、
+    业务字段名（→ `BIZ_TYPE` 这类中性名）、业务后台 bean 名（→ `xxxController`）、
+    **以及该工程自己的目录命名习惯** —— 它给 SQL 载体目录起的名字是项目约定而非平台规范，
+    已统一换成 `xxxSql/`，避免把「某工程的组织方式」当成通用规则传播。
+  - **保留**：平台自带目录（`wb/system/`、`wb/script/`、`wb/libs/`、`dev/`、`examples/`、
+    `modules/dev/template/`）、框架端点（`common/save-all`）、jar 与类名
+    （`WEB-INF/lib/Webplatform-1.0.jar`、`com.wb.interact.IDE`、`com.wb.tool.Query`）——
+    这些是**知识锚点**，读者要靠它们回工程查证，不能删。
+  - 涉及 7 个文件共 **49 处**；复查后业务信息残留 **0 处**。
+
+### 本次实测依据（样本工程 `wb/` 下 2780 个 xwl）
+
+- **顶层键序**：**2750 / 2780** 为 `hidden, children, roles, title, iconCls, inframe, pageLink`；
+  **独立页面与被引用的 SQL 载体完全一样**。取值形态：`hidden:false` / `roles:{"default":1}`（dict）/
+  `iconCls:""`（1480 / 1635）/ `inframe:false` / `pageLink:""`（1593 / 1615）。
+- **种子无关性（决定 `new` 形态的关键实验）**：两个内容毫不相干的种子
+  （`examples/crud/crud-db-access/basic-select.xwl` 313 B 的 SQL 载体、与
+  工程内的一个最小独立页面 179 B）在**完全相同的 ops** 下产出**逐字节相同**；
+  而顶层缺 `inframe` / `pageLink` 的种子（`dev/ide/add-file.xwl`）产出**少 2 把钥匙**，`check` 仍报 ALL OK。
+- **`folder.json`**：565 个含 xwl 的目录中 **558 个**有它；**322 个 xwl 未登记**进 `index`；
+  `index` 里 2440 个带 `.xwl` 项全部对得上文件、488 个不带后缀项全部对得上目录
+  （同名目录与同名文件可并存，55 处）；悬空项 14 处。
+- **`patch` 的高保真**（复核）：181 KB 的多行源页面追加一个按钮，diff 仅 **15 行**
+  （其中 2 行为 `\u201c`→`“` 的语义等价规整）。
+
+---
+
 ## [1.1.0] - 2026-09-15
 
 **「itemId 重名分级」+ 一次全文件深审修复**。
@@ -57,7 +165,7 @@
 - **原「itemId 不唯一就不处理」的判据是错的**。现在按 **控件类型 + 是否被 JS 引用 + 有无 `normalName`** 定级，
   依据是框架源码与样本工程实测。
 - `_node_hint()` 里 `normalName` 与独立字段重复显示；`suggest_normalname()` 对全大写字段名会产生
-  `WAREHOUSE_CODET` 这类粘连（改为按需用 `_` 分隔）；父级名切不出"区分段"时会拼出 `editbutton2tbar`
+  `XXX_CODET` 这类粘连（改为按需用 `_` 分隔）；父级名切不出"区分段"时会拼出 `editbutton2tbar`
   （改为 `editbutton2_tbar`）。
 - `audit_itemids()` 返回值里的 `js_refs` 是 `set`，`itemids --json` **直接崩在 `json.dumps`** ——
   改为 `sorted(list)`。已加断言守住（抽检 120 个真实文件，`--json` / `--suggest` 产物全部可序列化）。
@@ -69,11 +177,11 @@
   并通过新增的 `skipped` 参数回报：`--fix normalName` 会列出被跳过的类型。
 - **文档归因错误**：`SKILL.md` §9.3 曾把 `panelCustomRecord_ID` 当作「改 `itemId` 用父级作前缀」的先例。
   实测它**只以 `normalName` 出现**，**不是任何节点的 `itemId`**。已换成样本工程里真实的 `itemId` 前缀先例（
-  `setupElementWin_find`）并把这个易错点在 `references/measured-data.md` §7.6 记清楚。
+  `panelX_find`）并把这个易错点在 `references/measured-data.md` §7.6 记清楚。
 - `js_refs_of()` **不剔 JS 注释** → 注释里的 `app.X` 被当成引用（会把 benign/warn 组误判为 error）。
   现先过 `strip_js_comments`；并新增 `filtered=False` 供"判定是否被引用"使用。
 - `_APP_REF_RESERVED` **无条件排除** `store` / `add` / `items` / `id`，**遮蔽真实引用** ——
-  `basic.xwl` 的 `store` ×3 明明被 `app.store` 引用，却只判 `warn`。现判定改用未过滤集合
+  某页面里 3 个同名 `store` 明明被 `app.store` 引用，却只判 `warn`。现判定改用未过滤集合
   （理由：名字既已确认是文件内的 `itemId`，保留表那层歧义就不存在）。样本工程里 1 组受影响，已修。
 - **`decode()` 在 12 个子命令里有 10 个未保护** —— 传一个读不到的文件就抛裸 `Traceback`
   （只有 `check` 处理了）。现抽出 `read_xwl_text()` / `load_xwl()` 统一抛 `XwlLoadError`，
@@ -116,7 +224,7 @@
   第九章只保留**规则 + 框架机制 + 怎么查**，数字统一指向 `references/measured-data.md` §7。
 - 原来的 §9.5「全项目基线」表改为「想知道某个工程里实际有多少重名」——教读者**在自己工程上跑**。
 - §7.3 的示例改为与具体工程无关的通用命名（`gridLeft` / `panelX_find`），
-  真实样本证据（`tbarW` / `setupElementWin_find` / `panelCustomRecord_ID` 的辨析）挪进 measured-data §7.6。
+  真实样本证据（`tbarW` / `panelX_find` / `panelCustomRecord_ID` 的辨析）挪进 measured-data §7.6。
 - **命中分类统计全部移出** `SKILL.md`：引用方式表的「实测次数」列（2735/1702/52/132/1534/1）、
   `Wb.requestAg` 的「1534 个调用点」、注册表的「133 个控件」、回放校验的 1875/1830/97.6%/45/902、
   以及「377 KB → diff 17 行」——这些一律只留在 `measured-data.md`，`SKILL.md` 改为**结论 + 指针**。
@@ -163,7 +271,7 @@
 - **逐条复算并修正 5 处数字/表述错误**：
   - `Wb.upload` 的 `success` 回调错位计数：**94 → 101**，并补完整分布
     （首位名为 `action` 101 / `form` 32 / 无参 5 / `resp` 1，共 139 个调用点）。
-  - diff 示例：**15 → 17 行**（377448 B 的 `transTrack.xwl` 加一个带多行 JS 的按钮 + 改标题，实测复现两次）。
+  - diff 示例：**15 → 17 行**（377 KB 的一个多行源页面加一个带多行 JS 的按钮 + 改标题，实测复现两次）。
   - `wb/system/url.json` 短名数：**60 → 54 个**。
   - `bean` / `method` 保留键：**1399 → 1400**；`ID` 参数：**38 → 40**（并注明按 `params: {…}` 键名正则统计的口径）。
 - `SKILL.md` §5.3：`callback` 签名按源码更正为 **`(form, action, value, success)`**；

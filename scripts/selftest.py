@@ -7,6 +7,12 @@
   · `edit` 的锚点拒绝与正例（含 CRLF / BOM 是否保持）
   · `expand` 的排版形态与语义等价（含 `--safe` 模式）
   · `patch` 的结构级编辑（新节点事件 JS、自动续行）
+  · `new` 的从零生成（设计器真实键序 / 拒绝覆盖 / `--from-json` 补齐缺键）
+  · `folders` 的 index 一致性检查与 `--register`（幂等 / 保键序 / 保单行形态）
+  · `paths` 的「原路径」必须带 configs 层（照抄即可改对位置）
+  · `schema --skeleton` 只含该控件允许的键，events 键按该控件实际事件决定
+  · 文档一致性守卫（跨文件）：emoji 未入标题 / README↔SKILL 无逐字重复的表格行 /
+    「见 N.M」的编号引用可解析 / 文档与工具里无业务路径与业务字段名（skill 是通用资产）
   · `@itemId` 寻址（唯一可定位 / 重名拒绝并给候选清单 / `#N` 点名与越界）
   · itemId 重名分级（列 benign / 按钮+被引用 error / 唯一 normalName benign / 未被引用 warn）
   · `params` 的两条通路识别与注释剔除
@@ -22,6 +28,7 @@ import importlib.util
 import io
 import json
 import os
+import re
 import sys
 import tempfile
 
@@ -248,7 +255,7 @@ def main() -> int:
     js_out = "app.grid1.store.load({ out: app.tbar });"
     js_gv = "app.grid1.store.load({ params: Wb.getValue(app.tbar) });"
     js_obj = "app.grid1.store.load({ params: { cId: rec.data.MR_ID, sql: 'a,b:c', nested: {x: 1} } });"
-    js_both = "Wb.request({ url: 'm?xwl=orderCenter/x', out: app.editWin, params: { a: 1 }, success: fn });"
+    js_both = "Wb.request({ url: 'm?xwl=demo/x', out: app.editWin, params: { a: 1 }, success: fn });"
     tr_out = xwl.find_transfers(js_out, FIELD)
     tr_gv = xwl.find_transfers(js_gv, FIELD)
     tr_obj = xwl.find_transfers(js_obj, FIELD)
@@ -550,7 +557,7 @@ def main() -> int:
                  "events": {"click": "app.grid1.store.load({ out: app.tbar });"}},
             ]},
             {"configs": {"itemId": "grid1"}, "expanded": False, "type": "grid", "children": [
-                {"configs": {"itemId": "gridStore", "url": "m?xwl=demo/transSql/demoSql"},
+                {"configs": {"itemId": "gridStore", "url": "m?xwl=demo/xxxSql/demoSql"},
                  "expanded": False, "children": [], "type": "store"},
             ]},
         ]},
@@ -586,6 +593,225 @@ def main() -> int:
         failures.extend(smoke_fail)
     else:
         print("[ok]  子命令冒烟：paths / sqlrefs / params / itemids 均可直接调用")
+
+    # ---- 13. new：从零生成（内置骨架 / 设计器键序 / 拒绝覆盖 / 补齐缺键）----
+    new_fail: list[str] = []
+    a_sql = os.path.join(tmp, "new_sql.xwl")
+    code, _out = _run(xwl.cmd_new, out=a_sql, kind="sql", from_json=None, title="出库单查询",
+                      roles=None, eol="lf", indent=1, force=False, dry_run=False,
+                      node=None, no_js=True)
+    if code != 0:
+        new_fail.append("new --kind sql 返回 %d" % code)
+    else:
+        _t, _b, o = xwl.load_xwl(a_sql)
+        if list(o.keys()) != list(xwl._PAGE_KEYS):
+            new_fail.append("new 生成的顶层键序不是设计器键序: %s" % list(o.keys()))
+        c2, cout = _run_check([a_sql], None)
+        if c2 != 0:
+            new_fail.append("new 的产出没通过 check:\n%s" % cout)
+        cb = io.StringIO()
+        with contextlib.redirect_stdout(cb):
+            rc2 = xwl.cmd_sqlrefs(type("NS", (), {"file": a_sql})())
+        if rc2 != 0:
+            new_fail.append("new --kind sql 的 {#sql#} 与 serverScript 不自洽:\n%s" % cb.getvalue())
+
+    # 默认必须拒绝覆盖已存在文件，且不得改动原文件
+    before = open(a_sql, "rb").read()
+    code, _out = _run(xwl.cmd_new, out=a_sql, kind="page", from_json=None, title="X",
+                      roles=None, eol="lf", indent=1, force=False, dry_run=False,
+                      node=None, no_js=True)
+    if code != 2 or open(a_sql, "rb").read() != before:
+        new_fail.append("new 未拒绝覆盖已存在文件（exit=%d）" % code)
+
+    # --from-json：补齐缺失的页面钥匙，但不许覆盖用户给的值
+    inc_p = os.path.join(tmp, "inc.json")
+    with open(inc_p, "w", encoding="utf-8") as f:
+        json.dump({"hidden": False, "children": [], "roles": {"demo": 1}, "title": "残缺页"},
+                  f, ensure_ascii=False)
+    fixd = os.path.join(tmp, "fixed.xwl")
+    code, _out = _run(xwl.cmd_new, out=fixd, kind="page", from_json=inc_p, title="",
+                      roles=None, eol="lf", indent=1, force=False, dry_run=False,
+                      node=None, no_js=True)
+    _t, _b, o2 = xwl.load_xwl(fixd)
+    if list(o2.keys()) != list(xwl._PAGE_KEYS):
+        new_fail.append("--from-json 未按设计器键序补齐: %s" % list(o2.keys()))
+    if o2.get("roles") != {"demo": 1} or o2.get("title") != "残缺页":
+        new_fail.append("--from-json 覆盖了用户给的值: roles=%s title=%s"
+                        % (o2.get("roles"), o2.get("title")))
+    if new_fail:
+        failures.extend(new_fail)
+    else:
+        print("[ok]  new：生成物可 check + sqlrefs、拒绝覆盖、--from-json 按设计器键序补齐")
+
+    # ---- 14. folders：未登记/悬空检出；--register 幂等、保键序、保单行 ----
+    fd = os.path.join(tmp, "folder_case")
+    os.makedirs(fd, exist_ok=True)
+    fj = os.path.join(fd, "folder.json")
+    with open(fj, "w", encoding="utf-8", newline="") as f:
+        f.write('{"hidden":false,"index":[],"title":"样本目录","iconCls":""}')
+    for nm in ("a.xwl", "b.xwl"):
+        with open(os.path.join(fd, nm), "w", encoding="utf-8", newline="") as f:
+            f.write('{"hidden":false,"children":[],"roles":{},"title":"t","iconCls":""}')
+    fl_fail: list[str] = []
+    code, out = _run(xwl.cmd_folders, path=os.path.join(fd, "a.xwl"), register=None, dry_run=False)
+    if "未登记" not in out:
+        fl_fail.append("folders 未报出未登记: %s" % out)
+    code, out = _run(xwl.cmd_folders, path=os.path.join(fd, "a.xwl"),
+                     register="a.xwl", dry_run=True)
+    if "未写入" not in out or json.load(open(fj, encoding="utf-8")).get("index") != []:
+        fl_fail.append("folders --register --dry-run 竟然写了盘")
+    code, out = _run(xwl.cmd_folders, path=os.path.join(fd, "a.xwl"),
+                     register="a.xwl", dry_run=False)
+    txt = open(fj, "r", encoding="utf-8", newline="").read()
+    j = json.loads(txt)
+    if j.get("index") != ["a.xwl"]:
+        fl_fail.append("register 后 index 不对: %s" % j.get("index"))
+    if list(j.keys()) != ["hidden", "index", "title", "iconCls"]:
+        fl_fail.append("register 改了 folder.json 的键序: %s" % list(j.keys()))
+    if "\n" in txt or "\r" in txt:
+        fl_fail.append("register 把单行 folder.json 写成了多行")
+    code, out = _run(xwl.cmd_folders, path=os.path.join(fd, "a.xwl"),
+                     register="a.xwl", dry_run=False)
+    if open(fj, "r", encoding="utf-8", newline="").read() != txt:
+        fl_fail.append("重复 register 改动了 folder.json（应幂等）")
+    jj = json.loads(txt)
+    jj["index"].append("gone.xwl")
+    with open(fj, "w", encoding="utf-8", newline="") as f:
+        f.write(json.dumps(jj, ensure_ascii=False, separators=(",", ":")))
+    code, out = _run(xwl.cmd_folders, path=fd, register=None, dry_run=False)
+    if "悬空" not in out:
+        fl_fail.append("folders 未检出 index 悬空项: %s" % out)
+    if fl_fail:
+        failures.extend(fl_fail)
+    else:
+        print("[ok]  folders：未登记/悬空检出、register 幂等且保键序保单行形态")
+
+    # ---- 15. paths 的「原路径」必须带 configs 层，照抄就该改对地方 ----
+    p_fail: list[str] = []
+    code, out = _run(xwl.cmd_paths, file=a_sql)
+    if '["children", 0, "configs", "serverScript"]' not in out:
+        p_fail.append("paths 的原路径没带 configs 层（照抄会把字段写到节点根上）:\n%s" % out)
+    if '["children", 0, "children", 0, "configs", "sql"]' not in out:
+        p_fail.append("paths 的 sql 原路径没带 configs 层:\n%s" % out)
+    ops_p = os.path.join(tmp, "ops_from_paths.json")
+    with open(ops_p, "w", encoding="utf-8") as f:
+        json.dump([{"op": "set", "path": ["children", 0, "configs", "serverScript"],
+                    "value": "var sql='PATCHED';"}], f, ensure_ascii=False)
+    pt_target = os.path.join(tmp, "paths_patch.xwl")
+    with open(pt_target, "wb") as f:
+        f.write(open(a_sql, "rb").read())
+    code, _out = _run(xwl.cmd_patch, file=pt_target, ops=ops_p, indent=1, eol="auto",
+                      dry_run=False, backup=False, node=None, no_js=True)
+    _t, _b, o3 = xwl.load_xwl(pt_target)
+    mod = o3["children"][0]
+    if mod.get("configs", {}).get("serverScript") != "var sql='PATCHED';":
+        p_fail.append("照抄 paths 的原路径没改到 configs.serverScript")
+    if "serverScript" in mod:
+        p_fail.append("照抄 paths 的原路径把字段写到了节点根上")
+    if p_fail:
+        failures.extend(p_fail)
+    else:
+        print("[ok]  paths 原路径带 configs 层，照抄即可改到正确位置")
+
+    # ---- 16. schema --skeleton 只输出该控件允许的键 ----
+    reg = os.path.join(tmp, "mini_controls.json")
+    with open(reg, "w", encoding="utf-8") as f:
+        json.dump({"children": [
+            {"id": "dataprovider", "general": {"design": False},
+             "configs": {"itemId": {"type": "string"}, "sql": {"type": "sql"}}, "events": {}},
+            {"id": "button", "general": {"design": True, "xtype": "button"},
+             "configs": {"itemId": {"type": "string"}, "text": {"type": "string"}},
+             "events": {"click": {"type": ""}}},
+        ]}, f, ensure_ascii=False)
+    s_fail: list[str] = []
+    code, out = _run(xwl.cmd_schema, type="dataprovider", controls=reg, list=False,
+                     tree=False, skeleton=True)
+    if '"events"' in out:
+        s_fail.append("dataprovider（0 个 events）的骨架不该带 events 键")
+    if '"text"' in out:
+        s_fail.append("dataprovider 的 configs 里不该有 text（不是它的合法键）")
+    code, out = _run(xwl.cmd_schema, type="button", controls=reg, list=False,
+                     tree=False, skeleton=True)
+    if '"text"' not in out or '"click"' not in out:
+        s_fail.append("button 的骨架应含 text + click:\n%s" % out)
+    if s_fail:
+        failures.extend(s_fail)
+    else:
+        print("[ok]  schema --skeleton：只含该控件允许的键，events 键按该控件实际事件决定")
+
+    # ---- 17. 文档一致性守卫（跨文件）----
+    # 这几类缺陷人眼复核必漏（实测：一轮评审发现的 4 个缺陷里 3 个是"改了这处忘了那处"），所以机械扫。
+    doc_fail: list[str] = []
+    root = os.path.dirname(HERE)
+    doc_names = ["SKILL.md", "README.md", "CHANGELOG.md",
+                 "references/controls.md", "references/sql-fragments.md", "references/measured-data.md"]
+    docs: dict = {}
+    for nm in doc_names:
+        fp = os.path.join(root, nm.replace("/", os.sep))
+        if os.path.exists(fp):
+            with open(fp, "r", encoding="utf-8", newline="") as fh:
+                docs[nm] = fh.read().splitlines()
+
+    # 17a emoji 不得进标题
+    for nm, ls in docs.items():
+        for i, l in enumerate(ls, 1):
+            if l.startswith("#") and any(ch in l for ch in ("⚠", "❗", "✅", "❌")):
+                doc_fail.append("%s:%d 标题里混入 emoji" % (nm, i))
+
+    # 17b README 与 SKILL 不得有逐字重复的表格行（同一张表不该在两处各写一遍）
+    def _trows(ls):
+        return {l.strip() for l in ls
+                if l.strip().startswith("|") and l.strip().endswith("|")
+                and not set(l.strip()) <= set("|-: ")}
+    if "README.md" in docs and "SKILL.md" in docs:
+        dup = _trows(docs["README.md"]) & _trows(docs["SKILL.md"])
+        if dup:
+            doc_fail.append("README 与 SKILL 有 %d 行表格逐字重复（同一张表别写两处）：%s"
+                            % (len(dup), sorted(dup)[0][:70]))
+
+    # 17c 「见 N.M」必须能在本文件里找到对应小节（带文件名线索的行是跨文件引用，跳过）
+    for nm, ls in docs.items():
+        heads = "\n".join(l for l in ls if l.startswith("#"))
+        for i, l in enumerate(ls, 1):
+            if re.search(r"`?[\w-]+\.md`?|references/", l):
+                continue
+            for m in re.finditer(r"见\s*\*{0,2}(\d\.\d)", l):
+                if ("### " + m.group(1)) not in heads:
+                    doc_fail.append("%s:%d 引用「见 %s」但本文件没有该编号小节" % (nm, i, m.group(1)))
+
+    # 17d 去项目化：文档与工具里不得出现任何具体工程的路径（skill 是通用资产）
+    # 判据用**结构**而不是业务名黑名单 —— 后者等于把业务名又写进代码里。
+    #   · `m?xwl=` 后面必须是占位符（`<…>` / `…`），只有框架端点 `common/` 例外；
+    #   · 出现的 `.xwl` 路径若是**多段**且不含占位符标记、又不属于平台自带目录，即视为真实业务路径。
+    mref = re.compile(r"m\?xwl=(?!<|…)([A-Za-z0-9_./-]+)")
+    paths = re.compile(r"[A-Za-z0-9_<>.…/-]+\.xwl")
+    plat = re.compile(r"(^|/)(dev|examples|wb)/", re.I)
+    marks = re.compile(r"[<…]|xxx|Xxx|file\.xwl$|page\.xwl$|out\.xwl$")
+    for nm, ls in docs.items():
+        for i, l in enumerate(ls, 1):
+            for m in mref.finditer(l):
+                g = m.group(1)
+                if not (g.startswith("common/") or g.lower().startswith("xxx")):
+                    doc_fail.append("%s:%d `m?xwl=%s` 不是占位符（换成 <模块>/… 写法）"
+                                    % (nm, i, g[:40]))
+            if marks.search(l):     # 该行已用占位符 / 示意名写法，路径无须再查
+                continue
+            for m in paths.finditer(l):
+                s = m.group(0)
+                if "/" not in s or plat.search(s):
+                    continue
+                doc_fail.append("%s:%d 出现多段真实路径 `%s`（应改成占位符写法）" % (nm, i, s))
+    with open(os.path.join(HERE, "xwl.py"), "r", encoding="utf-8") as fh:
+        for i, l in enumerate(fh.read().splitlines(), 1):
+            for m in mref.finditer(l):
+                g = m.group(1)
+                if not (g.startswith("common/") or g.lower().startswith("xxx")):
+                    doc_fail.append("scripts/xwl.py:%d `m?xwl=%s` 不是占位符" % (i, g[:40]))
+
+    if doc_fail:
+        failures.extend(doc_fail[:12])
+    else:
+        print("[ok]  文档守卫：emoji 未入标题 / README↔SKILL 无重复表格 / 编号引用可解析 / 无业务路径残留")
 
     print()
     if failures:

@@ -1,12 +1,12 @@
 [
   {
     "id": 1,
-    "prompt": "帮我看看 wb/modules/orderCenter/highwayTransportationManagement/transTrack.xwl 这个文件格式有没有问题",
+    "prompt": "帮我看看 wb/modules/<你的模块>/xxxSql/queryBizList.xwl 这个文件格式有没有问题",
     "expected": "用 xwl.py check 跑七项校验（无 BOM / 换行一致 / 无「反斜杠+空白」/ 加载器等价解析 / 末行结构 / 事件 JS 语法 / itemId 重名分级），报告每项结果而不是只给一句『没问题』；不应打开文件手工看"
   },
   {
     "id": 2,
-    "prompt": "给 transTrack.xwl 的查询工具栏加一个「导出」按钮，点击时读表格选中行、没选就提示，然后调后台导出",
+    "prompt": "给这个页面的查询工具栏加一个「导出」按钮，点击时读表格选中行、没选就提示，然后调后台导出",
     "expected": "用结构级 patch（不碰文本层）：先 schema button 取合法字段与骨架、paths/dump 核对路径，写 ops.json 追加节点（标准键序 configs/expanded/children/type/events），事件 JS 用单引号；先 --dry-run 看 diff 再 --backup 落盘，最后 check。产物里不应出现手工拼接的续行符"
   },
   {
@@ -18,5 +18,15 @@
     "id": 4,
     "prompt": "这个页面里两个按钮都叫 findBton，我要改其中一个的点击事件，工具说重名了。是不是得先把名字改掉？",
     "expected": "不要直接下结论改名。用 xwl.py itemids --name findBton（或 --dups-only）拿候选清单与分级：说明判据是「类型 + 是否被事件 JS 引用 + 有无 normalName」，列控件重名无害、取值控件优先补 normalName 而非改 itemId、按钮/面板/承载必须唯一；重名时 @ 不猜顺序，要指名第 N 个用 @findBton#2（N 从 1 起）或串联 @ 段限定；最后把候选列给用户选，而不是替他定"
+  },
+  {
+    "id": 5,
+    "prompt": "我要新建一个 SQL 文件给列表页当数据源，就是那种被 store 用 url 引用的查询文件",
+    "expected": "用 xwl.py new <路径> --kind sql --title … 生成（内置设计器真实顶层键序与 module→dataprovider 两级结构），而不是 cp 一个别的文件当种子、也不是手写顶层键；生成后跑 check 与 sqlrefs 自洽核对，并提示还要把文件登记进所在目录的 folder.json（否则设计器导航树里看不到），以及要让用户能打开还需在数据库里挂菜单（超出本工具范围）"
+  },
+  {
+    "id": 6,
+    "prompt": "我新建的页面写进去了，但在设计器左侧树里找不到它，是不是文件坏了？",
+    "expected": "不应直接判断文件坏了。先想到 folder.json（设计器导航树的目录索引）：用 xwl.py folders <file> 查它是否登记进所在目录的 index（index 里带 .xwl 的是文件、不带后缀的是子目录），未登记则用 --register 追加（保原键序、保单行形态、幂等）；并说明 check 通过只代表「格式能加载」，不代表「设计器能看见 / 页面能用」"
   }
 ]
