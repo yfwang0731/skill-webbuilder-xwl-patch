@@ -48,29 +48,6 @@ python scripts/xwl.py patch page.xwl --ops ops.json --backup    # 确认后落�
 > 文本级 `xwl.py edit` 只是例外手段（改一小段文本、又不希望整份重排时）。
 > 两条路都**禁止**用普通编辑器 / 通用 Edit 工具改 xwl —— 会写成裸 LF。
 
-### itemId 重名怎么办
-
-`itemId` 是事件 JS 取控件的键，但重名**不是一律有问题** —— 判据是**控件类型 + 是否已被 JS 引用 + 有没有 `normalName`**：
-
-| 类型 | 重名 | 规则 |
-|---|---|---|
-| grid 的列（`column` / `tcolumn`） | **允许** | 约定后缀 `_COL` / `Col`；取数走 `grid.getSelection(0).data.XXX`，不直接取列控件 |
-| 取值控件（14 个 `Ext.form.field.*`） | 靠 `normalName` 区分 | 有 `normalName` 就用 `app.<normalName>` |
-| 按钮 / `item` / 面板 / `tab` / `toolbar` / 数据承载 | **不允许** | 新代码必须区分开；老代码**被 JS 引用**时就是真 bug |
-
-```bash
-python scripts/xwl.py itemids page.xwl --dups-only     # 分级 + 候选清单（祖先链 / 其下控件）+ 建议改名
-python scripts/xwl.py itemids page.xwl --name tbar     # 只看一个名字的全部候选
-python scripts/xwl.py itemids page.xwl --suggest       # 出改名 ops 草稿（**需人工确认**）
-```
-
-重名时 `@itemId` **不会猜顺序**：报错并附候选清单；要指名第 N 个用 **`@名字#N`**（N 从 1 起），
-或串联 `@` 段当限定名（`["@grid2", "@tbar"]`）。
-
-> 重名会让 `app.X` 取到别的控件、或在窗口关闭后整体失效（框架按 `normalName || itemId` 注册、
-> 注销时按同名键直接 `delete`；源码见 `wb/libs/ext/ext-all-debug.js` 的 `ComponentManager.register`）——
-> 机制与分级依据见 [`SKILL.md`](SKILL.md) 第七章。
-
 ## 快速开始
 
 ```bash
