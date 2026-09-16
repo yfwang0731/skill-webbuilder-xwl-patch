@@ -135,10 +135,14 @@ diff 只含真正改的内容（实测：377 KB 的一个多行源页面加一�
 | warn | 1919 | 未被事件 JS 引用 —— 老代码可留，新代码须区分 |
 | error | 456 | **已被事件 JS 引用 —— `app.<名字>` 取值不确定** |
 
-`error` 组按控件类型：`text` 184 / `combo` 163 / `toolbar` 46 / `grid` 30 / `item` 28 / `number` 22 /
-`column` 14 / `textarea` 10 / `panel` 6 / `date` 6 …
-`warn` 组 Top：`array` 364 / `item` 362 / `text` 295 / `combo` 272 / `store` 252 / `number` 152 /
-`feature` 144 / `toolbar` 121。
+`error` 组**内的控件**按类型（单位＝**控件节点数**）：`text` 184 / `combo` 163 / `toolbar` 46 /
+`grid` 30 / `item` 28 / `number` 22 / `column` 14 / `textarea` 10 / `panel` 6 / `date` 6 …
+`warn` 组 **Top**（同单位）：`array` 364 / `item` 362 / `text` 295 / `combo` 272 / `store` 252 /
+`number` 152 / `feature` 144 / `toolbar` 121。
+
+> **这两行不能跟上面的组数直接相加** —— 组数是「有多少个重名组」，拆分是「组里有多少个控件节点」，
+> **两套单位**。所以拆分项之和会大于组数（`error` 拆到 `date` 已累计 473 > 456；
+> `warn` 前 8 项累计 1962 > 1919），这不是矛盾。表格里的 `benign` / `warn` / `error` 一律是**组数**。
 
 **关键结论：列控件的 3393 组重名里，被事件 JS 引用的有 0 组。**
 印证了"列控件不直接取、取数走 `app.<grid>.getSelection(0).data.XXX`"这一用法。

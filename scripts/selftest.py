@@ -8,11 +8,20 @@
   · `expand` 的排版形态与语义等价（含 `--safe` 模式）
   · `patch` 的结构级编辑（新节点事件 JS、自动续行）
   · `new` 的从零生成（设计器真实键序 / 拒绝覆盖 / `--from-json` 补齐缺键）
-  · `folders` 的 index 一致性检查与 `--register`（幂等 / 保键序 / 保单行形态）
+  · `folders` 的 index 一致性检查与 `--register`（幂等 / 保键序 / 保单行形态 /
+    **给目录 + `--register` 必须显式报错**——它曾经是静默无效）
   · `paths` 的「原路径」必须带 configs 层（照抄即可改对位置）
   · `schema --skeleton` 只含该控件允许的键，events 键按该控件实际事件决定
+  · `node_check_many` 与逐段 `node_check` **必须逐项等价**（批量优化不许改变结论；
+    守的是 CommonJS 与 Script/ESM 的编译语义差异 —— 顶层 `return` / 顶层 `await`）
+  · SKILL.md 必须声明**平台边界、调用入口与规模约束**（这三样容易被精简掉，钉住）
+  · **非 UTF-8 控制台（cp1252）下输出中文不能崩** —— Windows 上是这个编码，
+    本地开发环境却是 UTF-8，所以只有 CI 的 windows job 能发现（第一次上 CI 就这么挂的）
+  · **跨盘符不能崩**：`os.path.relpath` 不带 `start` 时在 Windows 跨盘符会抛 ValueError
+    （CI 仓库在 D:、TEMP 在 C:），用桩把 relpath 变成必抛来验证兜底（第二次 CI 挂在它上面）
   · 文档一致性守卫（跨文件）：emoji 未入标题 / README↔SKILL 无逐字重复的表格行 /
     「见 N.M」的编号引用可解析 / 文档与工具里无业务路径与业务字段名（skill 是通用资产）
+  · `dump` 冒烟（它是最后一个补上冒烟覆盖的子命令）
   · `@itemId` 寻址（唯一可定位 / 重名拒绝并给候选清单 / `#N` 点名与越界）
   · itemId 重名分级（列 benign / 按钮+被引用 error / 唯一 normalName benign / 未被引用 warn）
   · `params` 的两条通路识别与注释剔除
@@ -29,6 +38,7 @@ import io
 import json
 import os
 import re
+import subprocess
 import sys
 import tempfile
 
@@ -73,6 +83,7 @@ def _run_check(files: list[str], node: str | None):
 
 
 def main() -> int:
+    xwl.ensure_utf8_stdio()     # 输出全是中文；Windows 控制台默认非 UTF-8 会直接 UnicodeEncodeError
     tmp = tempfile.mkdtemp(prefix="xwl_selftest_")
     node = xwl.find_node()
     print(f"node: {node or '(未找到，跳过事件 JS 校验)'}")
@@ -536,7 +547,7 @@ def main() -> int:
         want_order = ["一", "二", "三", "四", "五", "六", "七", "八", "九"]
         got_order = [t[3] for t in titles if len(t) > 4 and t[3] in want_order]
         want_keys = ["是什么", "格式硬规则", "处理流程", "工具", "引用方式", "SQL 片段",
-                     "itemId", "常见坑", "自检清单"]
+                     "itemId", "常见问题", "自检清单"]
         if got_order == want_order and all(k in t for k, t in zip(want_keys, [x for x in titles if x.startswith("## ") and x[3] in want_order])):
             print("[ok]  SKILL.md 章节顺序符合语义分组（认知→格式→操作→专题→经验→收尾）")
         else:
@@ -581,6 +592,8 @@ def main() -> int:
         ("itemids", xwl.cmd_itemids, {"file": page_path, "name": None, "dups_only": True,
                                       "suggest": False, "fix": "auto", "controls": None,
                                       "json": False}, "重名组"),
+        # dump 曾是 14 个子命令里唯一没被冒烟覆盖的（评审发现）
+        ("dump",    xwl.cmd_dump,    {"file": page_path}, "itemId"),
     ):
         try:
             _code, out = _run(fn, **kw)
@@ -743,8 +756,9 @@ def main() -> int:
     # 这几类缺陷人眼复核必漏（实测：一轮评审发现的 4 个缺陷里 3 个是"改了这处忘了那处"），所以机械扫。
     doc_fail: list[str] = []
     root = os.path.dirname(HERE)
-    doc_names = ["SKILL.md", "README.md", "CHANGELOG.md",
-                 "references/controls.md", "references/sql-fragments.md", "references/measured-data.md"]
+    doc_names = ["SKILL.md", "README.md", "CHANGELOG.md", "references/walkthrough.md",
+                 "references/faq.md", "references/checklist.md", "references/controls.md",
+                 "references/sql-fragments.md", "references/measured-data.md"]
     docs: dict = {}
     for nm in doc_names:
         fp = os.path.join(root, nm.replace("/", os.sep))
@@ -808,10 +822,170 @@ def main() -> int:
                 if not (g.startswith("common/") or g.lower().startswith("xxx")):
                     doc_fail.append("scripts/xwl.py:%d `m?xwl=%s` 不是占位符" % (i, g[:40]))
 
+    # 17e 文档里指向本地文件的 Markdown 链接必须真的存在
+    # 起因：把 FAQ / 自检清单外移到 references/ 时，最容易出现的就是"SKILL.md 指了、
+    # 文件却没建 / 后来改名字了"—— 这类断链人眼扫不出来，机械查一下。
+    link = re.compile(r"\]\((?!https?:|#)([^)]+\.(?:md|json|yml|py))\)")
+    for nm, ls in docs.items():
+        base = os.path.dirname(os.path.join(root, nm.replace("/", os.sep)))
+        for i, l in enumerate(ls, 1):
+            for m in link.finditer(l):
+                tgt = os.path.normpath(os.path.join(base, m.group(1)))
+                if not os.path.exists(tgt):
+                    doc_fail.append("%s:%d 链接指向不存在的文件 -> %s" % (nm, i, m.group(1)))
+
     if doc_fail:
         failures.extend(doc_fail[:12])
     else:
-        print("[ok]  文档守卫：emoji 未入标题 / README↔SKILL 无重复表格 / 编号引用可解析 / 无业务路径残留")
+        print("[ok]  文档守卫：emoji 未入标题 / README↔SKILL 无重复表格 / 编号引用可解析 / "
+              "本地链接都存在 / 无业务路径残留")
+
+    # ---- 18. SKILL.md 必须声明平台边界、调用入口与规模约束 ----
+    # 起因：SkillHub TRACE 评测的 adaptability 维给了这两个子项低分 ——
+    # 「未明确声明仅适用 WebBuilder 平台」「未说明输入文件大小等性能约束」「普通用户不知道从哪儿调」。
+    # 这几行很容易在后续精简文档时被删掉，所以钉成断言。
+    b_fail: list[str] = []
+    if "SKILL.md" in docs:
+        body = "\n".join(docs["SKILL.md"])
+        if "WebBuilder" not in body or not re.search(r"不适用|仅适用|仅支持", body):
+            b_fail.append("SKILL.md 未声明平台边界（需同时出现 WebBuilder 与「不适用/仅适用」）")
+        if not re.search(r"^##\s*怎么用", body, re.M):
+            b_fail.append("SKILL.md 缺少「怎么用」小节（调用入口）")
+        if "scripts/xwl.py" not in body:
+            b_fail.append("SKILL.md 的「怎么用」未给出命令行入口（scripts/xwl.py）")
+        if not re.search(r"KB|MB", body):
+            b_fail.append("SKILL.md 未声明输入规模约束（应给出实测文件大小量级）")
+    if b_fail:
+        failures.extend(b_fail)
+    else:
+        print("[ok]  SKILL.md 声明了平台边界、调用入口与规模约束")
+
+    # ---- 19. node_check_many 必须与逐段 node_check 等价（性能优化不许改变结论）----
+    # 背景：把逐段 `node --check` 改成一次进程批量校验，486 KB 页面的 check 从 63 s 降到 1 s。
+    # 但这个优化踩过两次坑，所以用「与权威路径逐项对照」把它钉住：
+    #   ① `vm.Script` 按**脚本**编译，顶层 return 非法；而 `node --check <x.js>` 按 **CommonJS** 编译，合法
+    #      ⇒ 误报 104 项（一个页面 16 → 120）。
+    #   ② Node 22 的 `--check` 在 CJS 解析失败时会自动按 **ESM** 重试，因此接受顶层 await；
+    #      批量驱动不会 ⇒ 又一处误报。
+    # 结论：批量只能用来证明「合法」，报错的必须回 node_check 复核。下面就是守这条。
+    node_bin = xwl.find_node(None)
+    if node_bin:
+        cases = [
+            ("合法语句", "var a = 1; app.log(a);"),
+            ("顶层 return（CJS 合法）", "if (!app.grid1) { return; }\napp.grid1.reload();"),
+            ("顶层 await（--check 按 ESM 重试后合法）", "await foo();"),
+            ("tagEvents 对象字面量", '{"beforeedit": function(e){ e.value = 1; }}'),
+            ("tagEvents 对象-语法错", '{"beforeedit": function(e){ e.value = ; }}'),
+            ("括号不闭合", "app.log(1;"),
+            ("空串", ""),
+        ]
+        codes = [c for _n, c in cases]
+        got = xwl.node_check_many(node_bin, codes)
+        want = [xwl.node_check(node_bin, c) for c in codes]
+        diff = [cases[i][0] for i in range(len(cases)) if got[i][0] != want[i][0]]
+        if len(got) != len(codes):
+            failures.append("node_check_many 返回条数与输入不符：%d vs %d" % (len(got), len(codes)))
+        elif diff:
+            failures.append("node_check_many 与逐段 node_check 结论不一致：%s" % diff)
+        else:
+            print("[ok]  node_check_many 与逐段 node_check 逐项等价（%d 例，含顶层 return / await 语义差异）"
+                  % len(cases))
+        # 批量必须真的快：空输入与规模输入都不能退化
+        got2 = xwl.node_check_many(node_bin, [])
+        if got2 != []:
+            failures.append("node_check_many 对空输入应返回空列表")
+    else:
+        print("[note] 未找到 node，跳过 node_check_many 等价性断言")
+
+    # ---- 20. folders：给目录 + --register 必须显式报错（曾是静默无效）----
+    # 起因：cmd_folders 在 isdir 分支里**直接忽略** --register，只做只读扫描并以 0 退出 ——
+    # 用户以为登记成功了，其实什么都没发生。这类"静默无效"必须钉住。
+    r_fail: list[str] = []
+    rd = os.path.join(tmp, "folder_regdir")
+    os.makedirs(rd, exist_ok=True)
+    rfj = os.path.join(rd, "folder.json")
+    rtxt = '{"hidden":false,"index":[],"title":"样本目录","iconCls":""}'
+    with open(rfj, "w", encoding="utf-8", newline="") as f:
+        f.write(rtxt)
+    with open(os.path.join(rd, "c.xwl"), "w", encoding="utf-8", newline="") as f:
+        f.write('{"hidden":false,"children":[],"roles":{},"title":"t","iconCls":""}')
+    code, out = _run(xwl.cmd_folders, path=rd, register="c.xwl", dry_run=False)
+    if code != 2:
+        r_fail.append("folders <目录> --register 应返回 2（明确报错），实际 %s" % code)
+    if open(rfj, "r", encoding="utf-8", newline="").read() != rtxt:
+        r_fail.append("folders <目录> --register 竟然改了 folder.json（应拒绝且不动文件）")
+    if r_fail:
+        failures.extend(r_fail)
+    else:
+        print("[ok]  folders <目录> --register 显式报错且不动 folder.json（原为静默忽略）")
+
+    # ---- 21. 非 UTF-8 控制台下不能崩（回归守卫）----
+    # 本工具的输出**全是中文**，而 Windows 上 Python 标准流默认跟随控制台代码页：
+    # 实测 GitHub 的 windows-latest runner 是 **cp1252**，一 print 中文就
+    # UnicodeEncodeError 崩掉（而且崩在第一行输出）。ubuntu / git-bash 都是 UTF-8，
+    # 本地开发环境（含本仓工作区）也是 UTF-8 ⇒ **这个坑只在 Windows 上炸，极易漏**。
+    # 第一次上 CI 就是这么挂的（ubuntu 4 格全绿、windows 2 格红）。
+    # 用子进程钉住，本地也能跑到，不必等 CI 反馈。
+    e_fail: list[str] = []
+    env_cp = dict(os.environ)
+    env_cp["PYTHONIOENCODING"] = "cp1252"
+    xwl_py = os.path.join(HERE, "xwl.py")
+    for args in (["--help"], ["check", "--help"], ["folders", "--help"]):
+        try:
+            pr = subprocess.run([sys.executable, xwl_py] + args, capture_output=True,
+                                env=env_cp, timeout=90)
+        except Exception as exc:  # noqa: BLE001
+            e_fail.append("PYTHONIOENCODING=cp1252 下跑 `xwl.py %s` 抛异常：%s"
+                          % (" ".join(args), exc))
+            continue
+        if pr.returncode != 0:
+            tail = (pr.stderr or b"").decode("utf-8", "replace").strip().splitlines()
+            e_fail.append("PYTHONIOENCODING=cp1252 下 `xwl.py %s` 退出 %d：%s"
+                          % (" ".join(args), pr.returncode,
+                             (tail[-1] if tail else "")[:80]))
+    if e_fail:
+        failures.extend(e_fail)
+    else:
+        print("[ok]  非 UTF-8 控制台（cp1252）下输出中文不崩（UTF-8 输出回归守卫）")
+
+    # ---- 22. 跨盘符不能崩：os.path.relpath 不带 start 时跨盘符会抛 ValueError ----
+    # 实测 GitHub 的 windows runner：仓库签出在 `D:\a\...`、TEMP 在 `C:\...` ⇒
+    # `os.path.relpath(target)`（以 cwd 为基准）直接抛
+    # `ValueError: path is on mount 'C:', start on mount 'D:'`，
+    # 把一句"提示用户怎么登记"的 print 变成了致命错误（第二次 CI 就挂在它上面）。
+    # 相对路径在这里只是给人看的，拿不到就该退回绝对路径 —— 用桩把 relpath 变成必抛，
+    # 验证 safe_relpath 的兜底真的接住了（而不是"恰好没触发"）。
+    rp_fail: list[str] = []
+    rd2 = os.path.join(tmp, "relpath_case")
+    os.makedirs(rd2, exist_ok=True)
+    with open(os.path.join(rd2, "folder.json"), "w", encoding="utf-8", newline="") as f:
+        f.write('{"hidden":false,"index":[],"title":"样本目录","iconCls":""}')
+    with open(os.path.join(rd2, "d.xwl"), "w", encoding="utf-8", newline="") as f:
+        f.write('{"hidden":false,"children":[],"roles":{},"title":"t","iconCls":""}')
+    real_relpath = os.path.relpath
+
+    def _boom(*_a, **_k):
+        raise ValueError("path is on mount 'C:', start on mount 'D:'")
+
+    os.path.relpath = _boom
+    try:
+        for label, kw in (("只读扫描", dict(path=rd2, register=None, dry_run=False)),
+                          ("登记", dict(path=os.path.join(rd2, "d.xwl"),
+                                       register="d.xwl", dry_run=True))):
+            try:
+                _run(xwl.cmd_folders, **kw)
+            except Exception as exc:  # noqa: BLE001
+                rp_fail.append("relpath 抛 ValueError 时 cmd_folders(%s) 跟着崩：%s: %s"
+                               % (label, type(exc).__name__, exc))
+        got = xwl.safe_relpath("C:\\a\\b.xwl", "D:\\c")
+        if not (isinstance(got, str) and got):
+            rp_fail.append("safe_relpath 兜底未返回可用字符串：%r" % (got,))
+    finally:
+        os.path.relpath = real_relpath
+    if rp_fail:
+        failures.extend(rp_fail)
+    else:
+        print("[ok]  跨盘符 relpath 抛错时 folders 不崩（safe_relpath 兜底，Windows CI 实测场景）")
 
     print()
     if failures:

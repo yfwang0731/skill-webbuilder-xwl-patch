@@ -1,0 +1,46 @@
+name: selftest
+
+on:
+  push:
+    branches: [main]
+    tags: ["v*"]
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  selftest:
+    name: py${{ matrix.python-version }} / node${{ matrix.node-version }} / ${{ matrix.os }}
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest]
+        python-version: ["3.9", "3.13"]
+        # node 版本要跨代测：⑥ 的 JS 校验语义与 node 版本有关 ——
+        # node 22 的 `--check` 在 CJS 解析失败时会自动按 ESM 重试（`--experimental-detect-module` 默认开），
+        # 因而接受顶层 `await`；node 20 不会。这个差异曾让批量校验误报过，所以要两边都跑。
+        node-version: ["20", "22"]
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python-version }}
+
+      # 事件 JS 语法校验（check 的 ⑥）需要 node。
+      # 没有 node 时 selftest 会跳过对应断言，但那就少守一层 —— 所以这里装上。
+      - uses: actions/setup-node@v4
+        with:
+          node-version: ${{ matrix.node-version }}
+
+      # 注意：windows runner 的 stdout 默认是 cp1252（不是 UTF-8）。
+      # 本工具输出全是中文，所以这个 job 同时也在守"非 UTF-8 控制台下不崩"。
+      # **不要**在这里设 PYTHONUTF8/PYTHONIOENCODING —— 那会把这个问题盖住，CI 就白跑了。
+      - name: Run selftest
+        run: python scripts/selftest.py
+
+      - name: Smoke test CLI
+        run: |
+          python scripts/xwl.py --help
+          python scripts/xwl.py folders --help

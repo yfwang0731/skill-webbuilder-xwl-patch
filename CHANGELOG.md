@@ -3,11 +3,195 @@
 `webbuilder-xwl-patch` 的全部重要变更。格式参考 [Keep a Changelog 1.1.0](https://keepachangelog.com/zh-CN/1.1.0/)，
 版本号遵循 [语义化版本 2.0.0](https://semver.org/lang/zh-CN/)。**按时间倒序**，日期为 `YYYY-MM-DD`。
 
+> **版本号怎么升**（本仓的判定尺子，严格按下面这条来，别凭"改动挺多"就升 minor）：
+>
+> | 升位 | 只在这种情况下 | 例 |
+> |---|---|---|
+> | **patch** `x.y.Z` | 修 bug、改文档、重构、加测试/CI、性能优化 —— **对外能力不变** | `1.2.0 → 1.2.1` |
+> | **minor** `x.Y.0` | **新增对外能力**：新子命令、新参数、新输出、能被用户调用的新东西 | `1.1.0`（`itemids`）、`1.2.0`（`new`/`folders`） |
+> | **major** `X.0.0` | **破坏性变更**：命令行为不兼容、产出格式变了、需要用户改用法 | —（至今没有过） |
+>
+> 反例（真踩过）：一次"文档大整改 + 修两个缺陷 + 性能优化"被错升成 `1.3.0` ——
+> 里面**一个新子命令都没有**，按上表只该是 patch。判据不是"改了多"，而是"**对外能力有没有变**"。
+>
 > **关于本文件里的数字**：凡标「实测 / 复算」的，都是把工具跑在样本工程（`wb/` 下 2777 个 `.xwl`）
 > 上得到的，可用 `scripts/selftest.py` 与 `scripts/xwl.py` 的各子命令复现。
 > 「回放校验」指**把算法跑在既有文件上比对字节**，与某一次编辑的结果无关。
 
 ---
+
+## [1.2.1] - 2026-09-16
+
+**一次评测驱动的整改：按扣分项补文档与守卫 + 修 3 个真缺陷 + 一轮双尺子评审后的收尾。**
+
+起因：把 v1.2.0 放到 SkillHub 上跑了一遍 TRACE 五维评测，得分 **4.6 / 5**。
+本版针对评测里**站得住**的扣分项逐条补齐（边界、入口、FAQ、教程、退出码、CI）；
+核实过程中又挖出 3 个真缺陷，其中**两个是接 CI 后连挂两次**才暴露的
+（Windows 中文输出编码、Windows 跨盘符崩）—— 这两个只在 Windows 上复现，本地一直是绿的。
+最后又跑了一轮独立评审，修掉它指出的 **8 处文档不一致**，并把过重的两章外移出 `SKILL.md`。
+
+**以上改动都没有新增对外能力**（没有新子命令、没有新参数、产出格式不变），
+所以按上面的尺子是 **patch**，不是 minor。
+三类改动都**没有新增对外能力**，所以按上面的尺子是 patch。
+
+### 评测得分结构（先说清楚"分是从哪丢的"）
+
+平台的计分方式是从前端 bundle 里读出来的，**不是推测**：5 维等权、**没有权重表** ——
+`维分 = mean(该维子项)`，`总分 = mean(五维)`。所以**同样是"把 4.0 修到 5.0"，
+在只有 2 个子项的维里值 +0.10，在 4 个子项的维里只值 +0.05** —— 先算杠杆再动手。
+
+| 维度 | 子项 | 维分 |
+|---|---|---|
+| Trust 可信任度 | scan 5.0 · domestic 5.0 | 5.00 |
+| Reliability 可靠性 | func 4.8 · stability 4.8 · errorHandling 4.5 | 4.70 |
+| **Adaptability 适用性** | boundary 4.5 · **trigger 4.0** | **4.25** |
+| **Convention 规范性** | structure 5.0 · progressive 4.5 · docQuality 4.3 · **antiPatternFaq 4.0** | **4.45** |
+| Effectiveness 有效性 | accuracy 4.8 · completeness 4.8 · usability 4.8 · creativity 4.5 | 4.73 |
+
+⇒ 总分 `(5.00+4.70+4.25+4.45+4.73)/5 = 4.625`，显示 4.6。
+杠杆最大的两项是 `trigger`（+0.10）与 `boundary` / `antiPatternFaq`（各 +0.05）。
+
+### Added
+
+- **`SKILL.md` 新增「适用范围与前提」** —— 直接回应 `boundary` 的扣分
+  （原文说"未明确声明仅适用 WebBuilder 平台""未说明输入文件大小等性能约束"，**核实成立**：
+  全文只有一处"不适用"，讲的是点号访问，确无平台边界声明）。现在明确写出：
+  平台（**仅 WebBuilder，其他平台不适用**）、对象（只 `.xwl` 本身，不含后端/打包/部署副本/`WB_MENU`）、
+  环境（Python 3.9+ 纯标准库，`node` 可选）、**规模（实测最大单文件 486 KB，该文件上 `patch` 0.6 s、
+  `check` 全开 1 s）**、以及"能改的前提"。
+- **`SKILL.md` 新增「怎么用」** —— 回应 `trigger` 的扣分（"未明确说明用户从哪儿触发"，**核实成立**）。
+  给出两个入口：① 对话里直接描述任务（列出会命中的说法）；② 命令行直调。
+  并**明说本 skill 不提供 GUI / 菜单入口**，非技术用户让 Agent 代跑 ——
+  与其含糊其辞，不如把定位讲清楚（评测用"普通用户找入口"的框架来评有偏差，但把话说白没有坏处）。
+- **`SKILL.md` 新增「按任务找章节」导航表** —— 部分回应 `progressive` 的扣分（880 行偏重）。
+- **`references/walkthrough.md`（新文件）** —— 回应 `docQuality` 的扣分
+  （"缺少 step-by-step 实践指南，如完整的新建页面→加控件→挂事件→验证流程"，**核实成立**）。
+  一次端到端实操，9 步、每步一条命令一个预期输出，末尾附回退处置表。
+  **本文件里的每条命令都在临时目录里逐字跑过**，命令与预期输出一致。
+- **`SKILL.md` 4.1「退出码与输出约定」** —— 回应 `errorHandling` 的扣分（无系统化错误码）。
+  退出码 0/1/2 的语义 + `[ok]/[FAIL]/[warn]/[note]` 标记 + "判断成败看退出码别 grep 文本"。
+  并诚实标注一处不一致：同是"文件不存在"，`check` 给 1（检查结论）、`patch` 给 2（前置条件）。
+- **`.github/workflows/selftest.yml`** —— 回应评测 summary 点名的"selftest 未见与 CI 集成"。
+  ubuntu + windows × Python 3.9 / 3.13 四格矩阵（两个脚本都有 `from __future__ import annotations`，
+  3.9 可跑），并装 node 以免 ⑥ 的断言被跳过。
+
+### Fixed
+
+- **`check` 的 ⑥ 事件 JS 校验：逐段调 node → 一次性批量校验。**
+  实测 486 KB 页面有 **246 个事件段**，原来每段起一次 `node --check` 子进程
+  （本机冷启动 ~250 ms）⇒ **63 s**，占了整个 `check` 的 99%；批量后 **~1 s**。
+  - 批量驱动用 `new Function(code)` 编译（函数体语义），以对齐 `node --check <x.js>` 的
+    **CommonJS** 行为。这里踩过两次坑，都是**用等价性对照测出来的**：
+    ① 先写成 `vm.Script`（**脚本**语义）⇒ 顶层 `return` 被判非法，一个页面的 FAIL 数从 16 涨到 120，全是误报；
+    ② 换成 `new Function` 后仍有一处：Node 22 的 `--check` 在 CJS 解析失败时会**自动按 ESM 重试**
+       （`--experimental-detect-module` 默认开），因此接受**顶层 `await`**，而批量驱动不接受。
+  - 最终设计：**批量只用来证明「合法」**（能过 `new Function` 就一定能过 `node --check`），
+    凡是批量判不合法的**一律回权威路径 `node_check` 逐段复核** —— 代价只在真有报错时才付。
+  - 回归证据：486 KB 页面改动前后 FAIL 集合**完全一致**（16 项，全为 ⑦ 重名）；
+    18 项语义边界用例（顶层 return / await / tagEvents 对象字面量 / `with` 与严格模式 /
+    `new.target` / 重复 `let` / 正则 / 模板串 …）批量与逐段**逐项一致**。
+- **`folders <目录> --register` 是静默无效的**（真缺陷）：`cmd_folders` 在 `isdir` 分支里
+  **直接忽略** `--register`，只做只读扫描并以退出码 0 结束 —— 用户以为登记成功了，其实什么都没发生。
+  现在改为**明确报错并退出 2**，并提示正确写法（`--register` 只接文件路径；
+  一个目录里可能有好几个文件，工具不该猜）。断言已钉住：给目录必须返回 2 且**不得改动 `folder.json`**。
+- **`--register` 必须带值才能用**（易用性缺陷）：`argparse` 原本要求 `--register NAME`，
+  于是最自然的写法 `folders <file.xwl> --register --dry-run` 会被判成"缺参数"而失败。
+  改为 `nargs="?"`，**裸 `--register` 与 `--register NAME` 都接受**（向后兼容）。
+- **`new` 之后 `--register` 的前提没写清**：实测目录里没有 `folder.json` 时它会明确报错退出 2
+  （**不会**替你创建）。这条既是正确行为也该写进文档 —— 已补进 SKILL.md 第三章第 0 步与 walkthrough。
+- **Windows 上输出中文会直接崩**（真缺陷，**只在 Windows 上复现** —— 由第一次接 CI 暴露）：
+  Python 在 Windows 的标准流编码跟随控制台代码页，实测 GitHub 的 `windows-latest` runner 是
+  **cp1252**；而本工具的输出**全是中文**，于是 `print` **第一行**就
+  `UnicodeEncodeError: 'charmap' codec can't encode characters...`，进程退出 1。
+  ubuntu（UTF-8）、git-bash、以及本机工作区（`PYTHONIOENCODING=utf-8`）都不会暴露
+  ⇒ **本地怎么测都是绿的，一上 CI 的 windows job 就红**。首跑结果：ubuntu 4 格全绿、windows 2 格全红。
+  - 修法：`xwl.py` 新增 `ensure_utf8_stdio()`，把 stdout/stderr 显式 `reconfigure` 到
+    UTF-8 + `errors="replace"`（**编码问题不该让工具崩掉**）；Windows 上顺带
+    `SetConsoleOutputCP(65001)`，让 cmd.exe / PowerShell 也能正确显示中文而不是乱码。
+    `selftest.py` 在 `main()` 开头复用同一个函数。
+  - 同类隐患一并修：`_node_check_once` 调 `node --check` 时用了 `text=True` 却没指定编码 ——
+    node 的报错里若有非 ASCII，在 cp1252 下解码同样出问题。已补 `encoding="utf-8", errors="replace"`。
+  - **回归守卫**：`selftest` 新增第 21 组断言 —— 用子进程把 `PYTHONIOENCODING` 设为 `cp1252`
+    跑 `xwl.py --help` / `check --help` / `folders --help`，要求全部退出 0。
+    这样**本地就能复现 Windows runner 的条件**，不必等 CI 反馈。
+  - CI 里**故意不设** `PYTHONUTF8` / `PYTHONIOENCODING` —— 设了就把这个问题盖住了，windows job 就白跑。
+- CI 矩阵的 node 版本扩成 `["20", "22"]`：⑥ 的 JS 校验语义与 node 版本相关 ——
+  node 22 的 `--check` 在 CJS 解析失败时会自动按 ESM 重试（`--experimental-detect-module` 默认开），
+  因而接受顶层 `await`；node 20 不会。这个差异正是本轮批量优化踩过的坑，所以两边都要测。
+- - **Windows 上跨盘符执行会崩**（接 CI 第二次才暴露）：`os.path.relpath(p)` 不带 `start` 时以**当前工作目录**为基准，
+  只要 `p` 与 cwd **不在同一个盘符**就抛
+  `ValueError: path is on mount 'C:', start on mount 'D:'`。
+  GitHub 的 `windows-latest` runner 正好命中：仓库签出在 `D:\a\...`，而 `TEMP` 在 `C:\...` ——
+  **一句"提示用户怎么登记"的 print 就把 `folders` 整个打死了**。
+  影响面不止 CI：任何用户在 D 盘放代码、从 C 盘终端执行（或反之）都会撞上。
+  - 修法：`xwl.py` 新增 `safe_relpath()` —— 拿不到相对路径就**退回绝对路径**，绝不抛
+    （相对路径在这个工具里的用途只是"缩短显示"，不该成为致命错误）。**4 处调用点全部替换**。
+  - **回归守卫**：`selftest` 新增第 22 组断言 —— 把 `os.path.relpath` 换成**必抛 ValueError 的桩**，
+    再跑 `folders`（只读扫描 + 登记两条路径），要求不崩、且 `safe_relpath` 兜底返回可用字符串。
+    用桩是因为**本机只有一个盘符**，没法真实构造跨盘符场景；桩能把"恰好没触发"这种假阴性排掉。
+
+### Documentation
+
+- `SKILL.md` 第八章「常见坑」**重写为 FAQ** —— 回应 `antiPatternFaq` 的扣分
+  （"没有独立 FAQ 章节，高频问题分散在各章节"，**核实成立**）。
+  改成 **14 条**问答式，**内容是搬运不是新增**：原 6 条坑一条不少（含"别用严格 JSON 解析器判加载"
+  与"不是所有 xwl 都由设计器写过"这两条容易丢的），另从 2.3 / 3.3 / 第五章 / 第七章归拢 7 条。
+  **这一版它是净增的**：第八章 16 → 69 行，整个 `SKILL.md` **880 → 1009 行** ——
+  而 `progressive` 的扣分理由恰恰是"880 行偏重"，等于**修一个子项的同时加重了另一个**。
+  这个矛盾在本版末尾用**外移**解决（见下方 Documentation）。
+- `SKILL.md` 2.5 补 **`expand` 忠实模式 vs `--safe` 的决策规则** —— 回应 `creativity` 的扣分
+  （"多行 JS 的续行美学仍依赖用户判断"）。按"这个文件给谁看"决定而非"哪个好看"：
+  要提交/要给设计器继续编辑 → 忠实；只想人读一遍 → `--safe`。
+- `SKILL.md` 顶部补 `## 适用范围与前提` 后，删掉原来那段只有两行的 `> 范围：` 引用块（内容已并入表格）。
+- **`test-prompts.json` 6 → 10 条** —— 评测 summary 另点了"测试用例仅 6 条且偏基础"。
+  新增 4 条覆盖过去没测到的面：端到端走一遍全流程、大文件 `check` 的性能取舍、
+  SQL 抽取的正确姿势（别用朴素替换）、以及"能不能批量文本替换"这类**用户会提出但答案是否**的情形。
+- README：`--register` 写法同步；目录结构补 `references/walkthrough.md`；快速开始指向 walkthrough；
+  补 CI 徽章。
+
+- **把过重的两章外移出 `SKILL.md`**（本版末的收尾）—— 独立评审指出 `progressive` 仍是全表最低项，
+  而根因正是上一段"补 FAQ"把主文档推到了 1009 行。解法不是继续加，而是**分层**：
+  - 第八章 FAQ（69 行）→ [`references/faq.md`](references/faq.md)（14 条，内容一条不少）
+  - 第九章自检清单（34 行）→ [`references/checklist.md`](references/checklist.md)
+    （29 项，按「改文件 / 改引用与结构 / SQL 与传参 / `itemId` 命名 / 新建文件」分五组重排）
+  - `SKILL.md` 两章只留**指针 + 索引**（并点明"出问题第一站是那份 FAQ"）
+  - 结果：`SKILL.md` **1009 → 926 行**（v1.2.0 是 880 行）。这样 `antiPatternFaq` 与 `progressive`
+    不再互相拉扯 —— 前者要"集中"、后者要"短"，分到两个文件后同时满足。
+- **修掉独立评审指出的 8 处文档不一致**（都属"改了这处忘了那处"，靠机械审计才翻出来）：
+  - `CHANGELOG` 的 `## [1.2.1]` 与 `## [1.2.0]` 两个版本头曾被误删（**正文还在、标题没了**）—— 已补齐，`[1.2.2]` 段合并进来。
+  - 上面那条"净增行数接近 0"的自述**不实**，已改成实测数字。
+  - FAQ 条数自述 13 条 → 实际 **14 条**，已改。
+  - `SKILL.md` frontmatter 的子命令清单漏 `itemids`（列了 13 个 / 实际 14 个），已补。
+  - `xwl.py` 模块 docstring 只列 9 个子命令，漏 `expand / itemids / params / schema / sqlrefs` —— 已补全 14 个；
+    顺带修正其中 `check` 的说明（原文写"五项格式校验"，实际是**七项**）。
+  - `measured-data.md` §7.2 的类型拆分与组总数**单位不同却没标**（`error` 拆到 `date` 已累计 473 > 组总数 456；
+    `warn` 前 8 项累计 1962 > 1919）。差额不是矛盾：拆分是**控件节点数**、总数是**组数**。已就地标注单位。
+  - `controls.md` 表头「用过的次数」未标单位 → 改成「用过的次数（**节点数**）」，并在章首加口径说明，
+    顺带解释 `dataprovider` **1143 个节点 / 1142 个文件**为什么两个数都对。
+  - `controls.md` §4.1 的「次数」列 → 「出现次数（节点数）」。
+
+### selftest
+
+断言 **59 → 63 项**，新增四组：
+
+- **18 · SKILL.md 必须声明平台边界、调用入口与规模约束** —— 这三样正是评测扣分点，
+  而它们**在后续精简文档时最容易被删掉**，所以钉成断言。
+- **19 · `node_check_many` 必须与逐段 `node_check` 逐项等价** —— 守性能优化不许改变结论，
+  用例覆盖 CommonJS 与 Script/ESM 的语义差异（顶层 `return` / 顶层 `await`）。
+  这条断言就是上面那两个坑的"防腐层"。
+- **20 · `folders <目录> --register` 必须显式报错且不动文件** —— 守"静默无效"不复发。
+- **21 · 非 UTF-8 控制台（cp1252）下输出中文不能崩** —— 守的就是上面那条 Windows 编码缺陷。
+  本地开发环境是 UTF-8、只有 CI 的 windows job 能发现，所以用子进程把条件造出来，本地也能跑到。
+- 文档守卫的扫描清单补入 `references/walkthrough.md`（否则新文件里的去项目化问题没人守）。
+- 章节顺序守卫的期望键从「常见坑」改为「常见问题」（第八章重命名为 FAQ 后它会误报 —— 实测被它挡住了）。
+
+
+
+- 子命令冒烟补上 **`dump`** —— 它曾是 14 个子命令里唯一没被真跑过的（评审发现）。
+- 文档守卫新增 **17e：文档里指向本地文件的 Markdown 链接必须真的存在** ——
+  守的正是"外移时 `SKILL.md` 指了、文件却没建 / 后来改名"这类断链，人眼扫不出来。
+  **负向测试**：故意插一条指向 `references/not_exist.md` 的链接 → 守卫报 FAIL；移除后恢复 ALL OK。
+- 文档守卫的扫描清单补入 `references/faq.md` 与 `references/checklist.md`。
 
 ## [1.2.0] - 2026-09-16
 

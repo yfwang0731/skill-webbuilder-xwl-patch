@@ -4,13 +4,18 @@
 
 设计目标：把「安全编辑 + 格式校验」从"凭记忆手工做"固化成可复跑的命令。
 
-子命令：
-  check   <file...>                              五项格式校验 + 事件 JS 语法校验
+子命令（14 个）：
+  check   <file...>                              七项校验：格式五项 + 事件 JS 语法 + itemId 重名分级
   new     <out.xwl> [--kind page|sql]            **从零生成** xwl（内置设计器骨架）
   patch   <file> --ops ops.json                  结构级编辑（改对象 → 按设计器规则重建）
   edit    <file> --old-file O --new-file N       安全替换（保留 CRLF，断言出现次数）
+  expand  <file> [--safe]                        单行源 → 设计器同款多行（写盘前语义等价比对）
   paths   <file>                                 列出 sql / serverScript / url 等字段位置
-  folders <path> [--register NAME]               folder.json（导航树索引）一致性检查 / 登记
+  params  <page.xwl>                             核对「页面 → store → SQL」的传参链路
+  itemids <file>                                 itemId 重名报告（分级 + 候选清单 + 建议改名）
+  sqlrefs <file>                                 校验 {#名字#} 与 serverScript 是否自洽
+  folders <path> [--register [NAME]]             folder.json（导航树索引）一致性检查 / 登记
+  schema  [<type>] --controls <…controls.json>   查控件注册表（合法 configs / events / 骨架）
   dump    <file>                                 按加载器规则解析后美化输出
   sql     <file>                                 抽取 SQL 文本（正确反转义）
   events  <file> [--outdir DIR]                  抽取事件 JS 到文件
@@ -35,6 +40,46 @@ import tempfile
 
 BOM = b"\xef\xbb\xbf"
 CRLF = "\r\n"
+
+
+def ensure_utf8_stdio() -> None:
+    """把 stdout / stderr 切到 UTF-8，并尽量把 Windows 控制台也切过去。
+
+    本工具的输出**全是中文**，而 Windows 上 Python 的标准流默认跟随控制台代码页
+    （实测 GitHub 的 `windows-latest` runner 是 **cp1252**），一 `print` 中文就
+    `UnicodeEncodeError: 'charmap' codec can't encode ...` —— 直接崩，且**第一行输出就崩**。
+    ubuntu / git-bash 都是 UTF-8，所以这个坑只在 Windows 上炸，很容易漏。
+    这里显式切到 UTF-8 + `errors="replace"`：**编码问题不该让工具崩掉**。
+    """
+    for stream in (sys.stdout, sys.stderr):
+        try:
+            stream.reconfigure(encoding="utf-8", errors="replace")
+        except Exception:  # noqa: BLE001  （流被替换过 / 不支持 reconfigure 时忽略）
+            pass
+    if os.name == "nt":
+        # 让 cmd.exe / PowerShell 也按 UTF-8 解释这些字节，否则中文显示为乱码（等价于 chcp 65001）
+        try:
+            import ctypes
+            ctypes.windll.kernel32.SetConsoleOutputCP(65001)
+        except Exception:  # noqa: BLE001
+            pass
+
+
+def safe_relpath(path: str, start: str | None = None) -> str:
+    """`os.path.relpath` 的安全版：拿不到相对路径就退回原路径，**绝不抛**。
+
+    Windows 上 `os.path.relpath(p)` 不带 `start` 时会以**当前工作目录**为基准；
+    只要 `p` 与 cwd **不在同一个盘符**就抛
+    `ValueError: path is on mount 'C:', start on mount 'D:'`。
+    实测 GitHub 的 `windows-latest` runner 正好命中：仓库签出在 `D:\\a\\...`、
+    而 `TEMP` 在 `C:\\...` —— 一句"提示用户怎么登记"的 print 就把命令打死了。
+
+    相对路径在这里只是**给人看的**（缩短显示），所以拿不到就用绝对路径，不要崩。
+    """
+    try:
+        return os.path.relpath(path, start)
+    except ValueError:
+        return path
 
 
 # --------------------------------------------------------------------------- #
@@ -355,7 +400,8 @@ def _node_check_once(node: str, code: str) -> tuple[bool, str]:
         with os.fdopen(fd, "w", encoding="utf-8", newline="") as f:
             f.write(code)
         proc = subprocess.run(
-            [node, "--check", tmp], capture_output=True, text=True, timeout=60
+            [node, "--check", tmp], capture_output=True, text=True,
+            encoding="utf-8", errors="replace", timeout=60
         )
         if proc.returncode == 0:
             return True, ""
@@ -367,6 +413,77 @@ def _node_check_once(node: str, code: str) -> tuple[bool, str]:
             os.remove(tmp)
         except OSError:
             pass
+
+
+# 批量 JS 校验驱动：一次 node 进程里把 N 段代码全验完。
+#
+# **编译语义必须与 `node --check <x.js>` 对齐** —— 后者把 .js 当 **CommonJS 模块**
+# （包一层函数），所以顶层 `return` 是**合法**的；而 `vm.Script` 是当**脚本**编译的，
+# 会把 `return` 判成 Illegal return statement。
+# 实测教训：用 `vm.Script` 写这版时，一个 486 KB 页面的 FAIL 数从 16 涨到 120 —— 全是误报。
+# 所以这里用 `new Function(code)`（函数体语义），才与 CommonJS 行为一致。
+_NODE_BATCH_JS = """
+let raw = '';
+process.stdin.setEncoding('utf8');
+process.stdin.on('data', d => { raw += d; });
+process.stdin.on('end', () => {
+  let segs;
+  try { segs = JSON.parse(raw); } catch (e) { process.exit(3); }
+  const out = [];
+  for (const s of segs) {
+    let ok = false, err = '';
+    const tries = [s.code];
+    const t = (s.code || '').trim();
+    if (t.startsWith('{') && t.endsWith('}')) tries.push('(' + s.code + ')');
+    for (const c of tries) {
+      try { new Function(c); ok = true; err = ''; break; }
+      catch (e) { err = (e && e.message) ? e.message : String(e); }
+    }
+    out.push({ ok: ok, err: err });
+  }
+  process.stdout.write(JSON.stringify(out));
+});
+"""
+
+
+def node_check_many(node: str, codes: list) -> list:
+    """批量校验多段 JS，返回与 `codes` 等长的 [(ok, err)]。
+
+    **为什么批量**：逐段调 `node --check` 每次都要付 node 冷启动（本机实测 ~250 ms）。
+    实测一个 486 KB 的页面有 246 个事件段 ⇒ 逐段校验要 63 s，占了整个 `check` 的 99%。
+    批量后同样内容一次进程搞定（实测 63 s → 1.0 s）。
+
+    **正确性怎么保证**：批量结果只用来**证明「合法」** —— 能让 `new Function` 编译过就一定
+    也能过 `node --check`（后者是把 .js 包一层函数体编译，与 `new Function` 同语义）。
+    凡是批量判**不合法**的，一律回到权威路径 `node_check`（真的 `node --check`）逐段复核。
+    代价只在"确实有报错"时才付，而那种情况本来就很少。
+
+    这条复核不能省：`new Function` 比 `node --check` **更严** —— Node 22 的 `--check`
+    在 CJS 解析失败时会**自动按 ESM 重试**（`--experimental-detect-module` 默认开），
+    因此接受**顶层 `await` / `import` / `export`**，而 `new Function` 不接受。
+    实测：漏掉复核会把一个 486 KB 页面的 FAIL 数从 16 顶到 120（全是误报）。
+    """
+    if not codes:
+        return []
+    results = None
+    try:
+        proc = subprocess.run(
+            [node, "-e", _NODE_BATCH_JS],
+            input=json.dumps([{"code": c} for c in codes]),
+            capture_output=True, text=True, encoding="utf-8", timeout=300,
+        )
+        if proc.returncode == 0:
+            got = json.loads(proc.stdout)
+            if isinstance(got, list) and len(got) == len(codes):
+                results = [(bool(g.get("ok")), (g.get("err") or "").strip()) for g in got]
+    except Exception:  # noqa: BLE001
+        results = None
+    if results is None:
+        return [node_check(node, c) for c in codes]
+    for i, (ok, _err) in enumerate(results):
+        if not ok:
+            results[i] = node_check(node, codes[i])
+    return results
 
 
 # --------------------------------------------------------------------------- #
@@ -435,8 +552,8 @@ def cmd_check(args) -> int:
         events: list[tuple[str, str]] = []
         if obj is not None and node and not args.no_js:
             events = collect_events(obj)
-            for name, code in events:
-                ok, err = node_check(node, code)
+            results = node_check_many(node, [code for _name, code in events])
+            for (name, _code), (ok, err) in zip(events, results):
                 if not ok:
                     head = err.splitlines()[0] if err else "语法错误"
                     errors.append(f"⑥ events.{name} JS 语法错误: {head}")
@@ -1761,7 +1878,7 @@ def _register_one(target: str, args) -> int:
     idx.append(name)
     out = json.dumps(data, ensure_ascii=False, separators=(",", ":")) + tail
 
-    print(f"将追加 index 项 {name!r} → {os.path.relpath(jp)}（登记后共 {len(idx)} 项）")
+    print(f"将追加 index 项 {name!r} → {safe_relpath(jp)}（登记后共 {len(idx)} 项）")
     if args.dry_run:
         print(f"  before: {text.rstrip()[:140]}")
         print(f"  after : {out.rstrip()[:140]}")
@@ -1798,6 +1915,13 @@ def cmd_folders(args) -> int:
         base = os.path.dirname(target)
         recursive = False
     elif os.path.isdir(target):
+        if args.register is not None:
+            # 原来这里会**静默忽略** --register、只做只读扫描并以 0 退出 —— 用户以为登记了、其实没有。
+            hint = (os.path.join(target, args.register) if args.register
+                    else os.path.join(target, "<文件名>.xwl"))
+            print(f"[FAIL] --register 要指到具体文件上：给一个目录，工具不知道该登记哪一个。")
+            print(f"       正确写法：xwl.py folders {hint} --register")
+            return 2
         jobs = []
         base = target
         recursive = True
@@ -1817,7 +1941,7 @@ def cmd_folders(args) -> int:
     registered_at = None
     for d, names in sorted(jobs):
         n_dir += 1
-        rel = os.path.relpath(d, base) if recursive else os.path.basename(d)
+        rel = safe_relpath(d, base) if recursive else os.path.basename(d)
         data, jp = _read_folder_json(d)
         if data is None:
             n_unreg += len(names)
@@ -1851,11 +1975,11 @@ def cmd_folders(args) -> int:
             print(f"  ...（另有 {len(detail) - 40} 条）")
     elif registered_at:
         nm, jp, pos = registered_at
-        print(f"[ok]   {nm} 已登记在 {os.path.relpath(jp)} 的 index 第 {pos} 项。")
+        print(f"[ok]   {nm} 已登记在 {safe_relpath(jp)} 的 index 第 {pos} 项。")
     else:
         print("[ok]   index 与实际文件一致。")
     if n_unreg and not recursive:
-        print(f"\n登记：xwl.py folders {os.path.relpath(target)} --register {os.path.basename(target)}")
+        print(f"\n登记：xwl.py folders {safe_relpath(target)} --register {os.path.basename(target)}")
     if n_unreg:
         print("\n> index 里带 `.xwl` 的是文件、不带后缀的是子目录；顺序 = 导航树显示顺序。")
     return 0
@@ -2458,8 +2582,9 @@ def build_parser() -> argparse.ArgumentParser:
 
     fld = sub.add_parser("folders", help="folder.json（设计器导航树索引）一致性检查 / 登记")
     fld.add_argument("path", help=".xwl 文件，或要递归检查的目录")
-    fld.add_argument("--register", metavar="NAME",
-                     help="写操作：把 NAME（一般是该 .xwl 的文件名）追加到所在目录 folder.json 的 index 末尾")
+    fld.add_argument("--register", nargs="?", const="", default=None, metavar="NAME",
+                     help="写操作：把文件登记到所在目录 folder.json 的 index 末尾。"
+                          "可裸用（--register）；NAME 值在 path 已指到文件时会被忽略，仅为兼容保留")
     fld.add_argument("--dry-run", action="store_true")
     fld.set_defaults(func=cmd_folders)
 
@@ -2517,6 +2642,7 @@ def build_parser() -> argparse.ArgumentParser:
 
 
 def main(argv: list[str] | None = None) -> int:
+    ensure_utf8_stdio()
     args = build_parser().parse_args(argv)
     return args.func(args)
 

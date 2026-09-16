@@ -1,5 +1,7 @@
 # webbuilder-xwl-patch
 
+[![selftest](https://github.com/yfwang0731/skill-webbuilder-xwl-patch/actions/workflows/selftest.yml/badge.svg)](https://github.com/yfwang0731/skill-webbuilder-xwl-patch/actions/workflows/selftest.yml)
+
 处理 **WebBuilder（wb）平台 `.xwl` 定义文件**的 WorkBuddy Skill ——
 **用结构级 `patch` 改 xwl，不碰文本层。**
 
@@ -59,8 +61,11 @@ git clone <this-repo> ~/.workbuddy/skills/webbuilder-xwl-patch   # 或直接把�
 ```bash
 python scripts/xwl.py new wb/modules/<模块>/myPage.xwl --kind page --title "我的页面"
 python scripts/xwl.py new wb/modules/<模块>/xxxSql/queryXxx.xwl --kind sql --title "出库单查询"
-python scripts/xwl.py folders wb/modules/<模块>/myPage.xwl        # 登记检查（否则设计器里看不到）
+python scripts/xwl.py folders wb/modules/<模块>/myPage.xwl --register   # 登记（否则设计器里看不到）
 ```
+
+> 一次完整的实操（新建页面 + 配套 SQL + 挂事件 + 校验 + 登记）见
+> [`references/walkthrough.md`](references/walkthrough.md)。
 
 ### 改已有文件
 
@@ -79,7 +84,7 @@ python scripts/xwl.py check page.xwl                             # 5) 改完必�
 |---|---|
 | `new <out.xwl> --kind page\|sql [--from-json F]` | **从零生成**：内置设计器真实键序的骨架（页面 / SQL 载体）；默认拒绝覆盖已有文件 |
 | `patch <file> --ops ops.json` | **结构级编辑（默认方式）**：只给值/子树，按设计器算法重建整份文件 |
-| `folders <path> [--register NAME]` | `folder.json`（设计器导航树索引）一致性检查（**只读**）：未登记 / index 悬空 / 缺 folder.json；`--register` 才写 |
+| `folders <path> [--register]` | `folder.json`（设计器导航树索引）一致性检查（**只读**）：未登记 / index 悬空 / 缺 folder.json；`--register` 才写（只接文件路径） |
 | `check <file...>` | 七项校验：格式五项 + 事件 JS `node --check` + **itemId 重名分级**；任一 FAIL 返回非 0 |
 | `itemids <file>` | **itemId 重名报告（只读）**：分级（无害 / 待区分 / 需处理）+ 候选清单（祖先链、其下控件）+ 建议改名；`--suggest` 出 ops 草稿 |
 | `paths <file>` | 列出 `sql` / `totalSql` / `serverScript` / `url` 四类字段的位置，给「原路径 + `@itemId` 写法」（重名时给 `@名字#N` 点名写法） |
@@ -96,10 +101,13 @@ python scripts/xwl.py check page.xwl                             # 5) 改完必�
 
 ```
 webbuilder-xwl-patch/
-├── SKILL.md                  # 完整流程与规则：格式硬规则、新建/编辑流程、SQL 片段要点、引用方式、工具、坑
+├── SKILL.md                  # 完整规范：适用范围、格式硬规则、新建/编辑流程、引用方式、SQL 片段、itemId（FAQ 与清单见 references/）
 ├── CHANGELOG.md              # 变更历史（倒序，含每一步的依据与实测数字）
-├── test-prompts.json         # 6 条典型 prompt（供 skill 评估用）
+├── test-prompts.json         # 10 条典型 prompt（供 skill 评估用）
 ├── references/
+│   ├── walkthrough.md        # 手把手实操：从零造页面 + SQL 载体，一步一命令一预期
+│   ├── faq.md                # 14 条常见问题与排错（出问题第一站）
+│   ├── checklist.md          # 29 项改完自检清单（交活前过一遍）
 │   ├── controls.md           # 控件清单：有哪些 / 干什么 / 该挂哪里 / 怎么选
 │   ├── sql-fragments.md      # SQL 片段：两级结构、字段全集、{#…#} 引用、页面传参两条通路
 │   └── measured-data.md      # 实测数据：引用次数 / 传参分布 / 各频次与统计口径
