@@ -1,5 +1,9 @@
 ---
 name: webbuilder-xwl-patch
+slug: skill-webbuilder-xwl-patch
+displayName: webbuilder-xwl-patch
+version: 1.2.2
+license: MIT
 description: >-
   WebBuilder（wb）平台 .xwl 定义文件的处理与安全编辑。核心手段是**结构级 patch**：
   只提供「值 / 子树」，工具按设计器自己的算法重建整份文件，续行符、转义、缩进、换行全部自动产出
@@ -46,7 +50,7 @@ WebBuilder 的页面与查询定义都写在 `.xwl` 里。它**看起来像 JSON
 | **能改的前提** | 目标文件能被加载器解析（即 `check` 的 ④ 通过）。已经是坏文件的，先用 `edit` 做文本级修复 |
 
 > 上表「规模」是**样本实测值，不是硬上限** —— 换工程要自己测。
-> 大文件为什么慢、怎么绕开，见 4.1。
+> 大文件上 `check` 为什么慢、耗时花在哪、怎么绕开 —— 见 [`references/faq.md`](references/faq.md)「`check` 慢，或者本机根本没装 `node`？」。
 
 ## 怎么用
 
@@ -64,8 +68,9 @@ WebBuilder 的页面与查询定义都写在 `.xwl` 里。它**看起来像 JSON
 | 先搞懂 xwl 是什么、有哪些硬规则 | 第一章、第二章 |
 | 动手改（第一次用） | **第三章**，照 0 → 4 步走 |
 | 查某个子命令 / 退出码怎么写 | 第四章 |
-| 改数据源、传参、调后台方法 | 第五章、第六章 |
+| 改数据源、传参、调后台方法（写 `events` 里的 JS） | 第五章 + [`references/js-api.md`](references/js-api.md)、第六章 |
 | 处理 `itemId` 重名 | 第七章 |
+| 动手前扫一眼"别这么干" | [`references/anti-patterns.md`](references/anti-patterns.md) |
 | 出问题了 | 第八章 FAQ |
 | 交活前过一遍 | 第九章自检清单 |
 | 想看一次完整的实操 | [`references/walkthrough.md`](references/walkthrough.md) |
@@ -110,12 +115,10 @@ WebBuilder 的页面与查询定义都写在 `.xwl` 里。它**看起来像 JSON
 
 ### 1.2 控件节点的标准形态（权威来源：设计器的控件注册表）
 
-**别凭印象拼节点字段**。设计器自带一份控件注册表，工程里的位置是
-**`wb/system/controls.json`** —— 设计器自己的控件注册表，对每个控件 id 给出：
-
-- `general` —— `xtype` / ExtJS 类 / 是否容器 / `tag.lib`；
-- `configs` —— **该控件允许的全部 configs 键**及类型（`string` / `enum`(带取值列表) / `expBool` / `expJson` / `exp` …）；
-- `events` —— **该控件允许的全部事件名**（含参数与类型，`hidden` 的表示面板不暴露）。
+**别凭印象拼节点字段** —— 设计器自带一份控件注册表，工程里的位置是 **`wb/system/controls.json`**：
+对每个控件 id 给出 `xtype` / ExtJS 类 / 是否容器 / `tag.lib`，**该控件允许的全部 `configs` 键**及类型，
+以及**允许的全部事件名**。三套控件库的清单、配置载体说明与选型建议见
+[`references/controls.md`](references/controls.md)。
 
 查它（工具已内置）：
 
@@ -147,8 +150,8 @@ python scripts/xwl.py schema button --controls <工程>/wb/system/controls.json 
 
 ### 1.3 谁在写它
 
-xwl 是**图形化页面设计器的持久化格式**，设计器保存时会按自己的规则重新排版
-（写回算法已破解，见**第二章**）。所以手工把文件压成一行**维护不住**。
+xwl 是**图形化页面设计器的持久化格式**，设计器保存时会按自己的规则重新排版（写回算法见 2.4）。
+所以手工把文件压成一行**维护不住**。
 
 ### 1.4 页面顶层骨架（7 把钥匙，键序固定）
 
@@ -206,12 +209,10 @@ if (!rec) {\
    （推论：字符串里的空行 = 该行只有 `\` 一个字符。）
 5. **字符串内的 `"` 必须写成 `\"`** → 所以 **xwl 里的 JS 一律用单引号 `'`**，可完全避免转义地狱。
 
-> 为什么是"反斜杠 + 真实换行"：加载器先做
-> `text.replaceAll("\\\\(\r\n|\r|\n)", "\\\\n")`，把「反斜杠 + 真实换行」还原成 JSON 的 `\n` 转义，
-> 再 `new JSONObject(text.substring(indexOf('{')))`。所以磁盘形态与运行时形态不是一回事。
->
-> **加载器用的是 org.json，它比标准 JSON 宽容**：字符串里出现未转义的裸控制字符（如裸换行）
-> 它也照收。所以判"能不能加载"别用严格的 JSON 解析器下结论。
+> **原理**：加载器先把「反斜杠 + 换行」换回 JSON 的 `\n` 转义
+> （`text.replaceAll("\\\\(\r\n|\r|\n)", "\\\\n")`），再按 JSON 解析 ——
+> 所以磁盘形态与运行时形态不是一回事。另外**加载器是 org.json、比标准 JSON 宽容**（字符串里的
+> 裸控制字符照收）⇒ 判"能不能加载"别用严格 JSON 解析器下结论。
 
 ### 2.2 单行源 vs 多行源（**决定性规则**）
 
@@ -224,58 +225,35 @@ if (!rec) {\
 
 ### 2.3 多行源为什么绝不能压成一行
 
-「压缩」有两种，只有第一种是对的：
+「压缩」有两种，**只有第一种是对的**：
 
-| 做法 | 替换内容 | JSON 合法？ | 加载后的 JS | 格式/语法校验能拦住吗 |
+| 做法 | 替换内容 | JSON 合法？ | 加载后的 JS | 校验能拦住吗 |
 |---|---|---|---|---|
 | **A 正确** | `\`+换行 → `\n`（两个字符的转义） | ✅ | 换行**保留**，语义等价 | — |
 | **B 错误** | `\`+换行 → **直接删除**（"合并行"） | ✅ **依然合法** | 换行**消失**，代码粘连 | ❌ **拦不住** |
 
-做法 B 是**静默语义损坏**：
+做法 B 是**静默语义损坏**：`//` 行注释会把后面的代码整段注释掉（实测这类结果 `node --check`
+**返回 0** —— "只剩一句注释"本身是合法 JS）；ASI 依赖的换行一旦消失，`return` / `throw` /
+`++` / `--` 的含义就变（`return` 换行 `{...}` 从"返回 undefined"变成"返回对象"）；
+SQL 侧 token 会粘连（`select 1from dual`）。
 
-- `//` 行注释会**把后面的代码整段注释掉** → 实测这类结果 `node --check` **返回 0（语法通过）**，
-  因为"只剩一句注释"本身是合法 JS。**格式校验、语法校验全都放行。**
-- 依赖换行的 ASI 语义会静默改变：`return` / `throw` / `++` / `--` 后面的换行一旦消失，含义就变
-  （如 `return` 换行 `{...}` 从"返回 undefined"变成"返回对象"）。
-- SQL 侧 token 会粘连（`select 1from dual`）。
-
-→ 所以"有没有被改坏"**只能靠 `git diff` 判断**（`git diff -w` 可忽略空白差异）。
+→ "有没有被改坏"**只能靠 `git diff` 判断**（`git diff -w` 可忽略空白差异）。
 
 ### 2.4 单行源怎么转多行 —— **可行，且能字节级还原**
 
-**结论：可行。** 设计器的写回逻辑已反编译确认并完整复刻，不需要猜排版。
+**结论：可行。** 设计器的写回逻辑已反编译确认并完整复刻（`IDE.updateModule` 四步），不需要猜排版。
+**判读排版时要知道的两条**：缩进是 **1 个空格**；**只有 0 或 1 个元素的容器不换行**
+（`{"itemId": "x"}`、`[3]` 内联在一行）—— 所以会看到 `[{`、`}]` 这类紧凑写法，
+那是**设计器的原样，不是被压坏了**。
 
-关键位置：
-
-| 项 | 位置 |
-|---|---|
-| jar | `WEB-INF/lib/Webplatform-1.0.jar` |
-| 入口 | `com.wb.interact.IDE#saveFile(...)` —— 按扩展名分派，`.xwl` 交给 `updateModule` |
-| 真正写文件 | `com.wb.interact.IDE#updateModule(File, JSONObject, String[], boolean)` |
-
-反编译出的四步（`javap -c -p com.wb.interact.IDE` 可见）：
-
-```java
-String s = json.toString(1);                                        // ① org.json 序列化，缩进因子 1
-s = s.replaceAll("\\n", "\\\n");                                    // ② 字符串内的 \n 转义 → 反斜杠 + 换行
-s = s.replaceAll(System.getProperty("line.separator", "\n"), "\n"); // ③ 换行归一
-FileUtil.syncSave(file, s, "utf-8");                                // ④ UTF-8 落盘，不加尾换行
+```bash
+python scripts/xwl.py expand <file.xwl>             # 默认沿用原文件换行
+python scripts/xwl.py expand <file.xwl> --eol lf    # 取设计器服务器上的原始产物
 ```
 
-**① 不是标准 JSON 美化，是老版 org.json 的 `toString(1)`**，有三条反直觉规则：
-
-1. 每级缩进 **1 个空格**（不是 2/4）。
-2. **只有 0 或 1 个元素的容器不换行** → `{"itemId": "x"}`、`[3]` 内联在一行。
-3. 单元素容器递归时传的是**当前缩进**而非加一层的缩进 —— 直接产生 `[{`、`}]` 的紧凑写法。
-
-org.json 的字符串转义还有两条：**非 ASCII 原样保留**（中文不转 `\uXXXX`），
-但 **`</` 写成 `<\/`**（防 `</script>`）。
-
-**回放校验**（把复刻出的算法跑在既有文件上，看能否还原原字节）：绝大多数与原文件**逐字节相同**
-→ 说明复刻正确；少数不一致的都有明确外因（手工改过缩进等）。完整口径与数字见
+反编译出的四步 Java 原文、`org.json toString(1)` 的三条排版规则、以及回放校验的完整口径与数字
+（凭什么说"复刻正确"、少数不一致的外因是什么）见
 [`references/measured-data.md`](references/measured-data.md) §五。
-
-→ 工具已内置：`xwl.py expand`（默认沿用原文件换行；`--eol lf` 取设计器服务器上的原始产物）。
 
 ### 2.5 值里的「字面反斜杠 + n」为什么长得别扭
 
@@ -287,9 +265,9 @@ org.json 的字符串转义还有两条：**非 ASCII 原样保留**（中文不
 所以这段在重新加载时会精确还原回原来的 `\n`。回放校验（两个多行源文件）：
 忠实模式产出与原文件**逐字节相同**，且两种模式的回读值都与原值一致。
 
-- `expand` 默认**忠实复刻**，产出与设计器逐字节一致；
-- `expand --safe` 写成更直观的 `\\n`（语义同样无损，但与设计器产物不同）。
-- 两种模式都在写盘前强制做「**重新解析 == 原对象**」的语义等价比对，**对不上就中止**。
+> `expand` 默认**忠实复刻**（产出与设计器逐字节一致）；`--safe` 写成更直观的 `\\n`
+> （语义同样无损，但与设计器产物不同）。两种模式都在写盘前强制做
+> 「**重新解析 == 原对象**」的语义等价比对，**对不上就中止**。
 
 **该选哪个 —— 按"这个文件给谁看"决定，不要按"哪个好看"决定：**
 
@@ -461,7 +439,9 @@ python scripts/xwl.py edit <file.xwl> --old-file old.txt --new-file new.txt --ex
 
 ### 第 4 步 · 格式校验（**改完必跑**）
 
-七项检查（不通过时先用 `--backup` 的 `<file>.bak` 回退再排查）：
+七项 = **①–⑥ 格式**（无 BOM / 换行一致 / 无「反斜杠 + 空白」行 / **加载器等价解析** /
+末行结构 / 事件 JS 语法）+ **⑦ `itemId` 重名分级**。逐项判据与报错处置见
+[`references/faq.md`](references/faq.md)；不通过时先用 `--backup` 的 `<file>.bak` 回退再排查。
 
 ```bash
 python scripts/xwl.py check <file.xwl> [more.xwl ...]
@@ -469,24 +449,15 @@ python scripts/xwl.py check <file.xwl> --no-js              # 本机没有 node 
 python scripts/xwl.py check <file.xwl> --no-itemid          # 跳过 itemId 重名分级（只查格式）
 ```
 
-| # | 检查 | 判定 |
-|---|---|---|
-| ① | 无 BOM | 文件不以 `EF BB BF` 开头 |
-| ② | **换行一致（不混用）** | LF-only 与 CRLF-only **都合法**（加载器都收），只有「同一文件里混用」才判失败；单独的裸 CR 也判失败 |
-| ③ | 无「反斜杠 + 空白」行 | 任何行都不以 `\` + 空格/Tab 结尾 |
-| ④ | **加载器等价解析** | 归一化后 `json.loads` 通过（**解析通过 ⇔ 格式没问题**） |
-| ⑤ | 续行结构 | 末行不以 `\` 结尾 |
-| ⑥ | 事件 JS 语法 | 抽出所有 `events.*` 的 JS 值 → `node --check` |
-| ⑦ | **itemId 重名分级** | **只有「重名 且 已被事件 JS 引用」判 FAIL**；其余重名只出 `[warn]`，不影响结论（分级与处置见第七章） |
+三点必须记住：
 
-> ④ 的写法是**替换成「反斜杠 + 字母 n」两个字符**，不是替换成换行符 —— 写错会误报。
-> 等价实现：`re.sub(r'\\(?:\r\n|\r|\n)', r'\\n', text)`，再对 `text[text.index('{'):]` 做 `json.loads`。
->
-> ② 别写成「必须 CRLF」—— 设计器与仓库里存的都是 **LF**，那样会把合法文件判成失败。
->
-> ⑦ 的 `[FAIL]` 与 ①–⑥ 性质不同：①–⑥ 是**格式**（文件坏了），⑦ 是**命名质量**（文件能用但取值有风险）。
-> 所以 `patch` / `edit` / `expand` **写盘后的自动校验只判 ①–⑥** —— 否则会出现"写盘成功却返回非 0"。
-> 要看 ⑦ 请单独跑 `check`，或直接 `itemids`。
+- **④ 是最强的校验手段**：加载器等价解析通过 ⇔ 格式没问题。
+- **⑦ 的 `[FAIL]` 与 ①–⑥ 性质不同** —— ①–⑥ 是**格式**（文件坏了），⑦ 是**命名质量**
+  （文件能用但取值有风险）。所以 `patch` / `edit` / `expand` **写盘后的自动校验只判 ①–⑥**，
+  否则会出现"写盘成功却返回非 0"。要看 ⑦ 请单独跑 `check`，或直接 `itemids`。
+- **自己写校验脚本时别踩两个坑**：② 别写成"必须 CRLF"（设计器与仓库存的都是 LF，
+  那样会把合法文件判失败）；④ 是把「反斜杠 + 换行」替换成「**反斜杠 + 字母 n**」两个字符，
+  **不是**替换成换行符。
 
 ## 四、工具
 
@@ -511,37 +482,31 @@ python scripts/xwl.py check <file.xwl> --no-itemid          # 跳过 itemId 重�
 
 `node` 定位顺序：`--node <path>` → 环境变量 `NODE_BIN` → `PATH` 里的 `node`；找不到时 JS 校验降级为警告。
 
-### 4.1 退出码与输出约定（写脚本 / CI 时用）
+### 4.1 退出码与输出约定
 
-| 退出码 | 含义 | 实测场景 |
-|---|---|---|
-| `0` | 成功 | 命令跑完、结论为通过 |
-| `1` | **被检查对象或查询结果有问题** | `check` 有 `[FAIL]`；`paths` / `sqlrefs` 一个目标字段都没找到；`check` 传了不存在的文件 |
-| `2` | **用法或前置条件不满足** | 未知子命令、缺必填参数；`edit` 锚点次数不符；`new` 拒绝覆盖；`patch` 读不到目标文件 |
+| 退出码 | 含义 |
+|---|---|
+| `0` | 成功 |
+| `1` | **被检查对象或查询结果有问题**（`check` 有 `[FAIL]`；`paths` / `sqlrefs` 没找到目标字段） |
+| `2` | **用法或前置条件不满足**（缺必填参数、`edit` 锚点次数不符、`new` 拒绝覆盖、读不到目标文件） |
 
-行首标记：`[ok]` 通过 / `[FAIL]` 失败 / `[warn]` 提示（**不影响退出码**）/ `[note]` 补充说明。
+行首标记：`[ok]` / `[FAIL]` / `[warn]`（**不影响退出码**）/ `[note]`。
 带结论的命令最后一行为 `-> OK` 或 `-> FAIL`，便于脚本匹配。
 
-> 判断成败**看退出码，不要 grep 输出文本**：`[warn]` 是有意设计成不阻塞的
-> （老代码里的无害重名，见第七章），按文本匹配会把"通过但有提示"误判成失败。
+> **判断成败看退出码，不要 grep 输出文本** —— `[warn]` 是有意设计成不阻塞的
+> （老代码里的无害重名，见第七章）。
 >
-> 退出码不是"1 与 2 严格二分"：同为"文件不存在"，`check` 给 1、`patch` 给 2
-> （前者是检查结论、后者是前置条件）。要精确判断还是认子命令自己的输出，别只看码。
+> 退出码也不是"1 与 2 严格二分"：同为"文件不存在"，`check` 给 1、`patch` 给 2
+> （前者是检查结论、后者是前置条件）。要精确判断还是认子命令自己的输出。
 
-**大文件上 `check` 的耗时构成**（实测 486 KB 多行源 / 246 个事件段）：
+八份参考材料（**不必通读，按需查**；顺序即大致的使用时机）：
 
-| 命令 | 耗时 | 说明 |
-|---|---|---|
-| `check --no-js --no-itemid` | ~0.4 s | 只跑格式五项 |
-| `check --no-js` | ~0.4 s | 加上 ⑦ 重名分级 |
-| `check`（全开） | **~1 s** | ⑥ 会把**全部事件段一次**交给 node 校验 |
-
-⇒ ⑤ 与 ⑥ 的成本差异很大：**只想确认"文件本身没坏"就先跑 `check --no-js`**；
-需要 JS 语法校验时再跑全量。规模再大（MB 级）时 ⑥ 的占比会继续上升。
-
-三份参考材料（**不必通读，按需查**）：
-
+- [`references/walkthrough.md`](references/walkthrough.md) —— **手把手实操**：从零造 SQL 载体 + 页面，一步一命令一预期，跟着做一遍最快建立手感。
+- [`references/anti-patterns.md`](references/anti-patterns.md) —— **反模式清单（动手前扫）**：20 条"看起来对、实际有害"的做法，逐条给出「错误做法 / 为什么诱人 / 实际后果 / 正确做法」，并标出哪些是**静默**的（`check` 放行）。
+- [`references/faq.md`](references/faq.md) —— **常见问题（排错第一站）**：15 条问答，按症状查 —— 出问题了先来这里。
+- [`references/checklist.md`](references/checklist.md) —— **改完自检清单**：29 项（改已有文件 23 + 新建文件 6），交活前过一遍。
 - [`references/controls.md`](references/controls.md) —— **控件清单**：按设计器面板分组的总表、三套控件库、配置载体说明、实测父子结构 Top 45、典型骨架与选型建议。
+- [`references/js-api.md`](references/js-api.md) —— **事件 JS 四条引用通路**：`Wb.request` / `Wb.open` / `Wb.upload` / `Wb.requestAg` 各自的完整写法、回传四种形态怎么收、选项与回调签名、上传两步链。
 - [`references/sql-fragments.md`](references/sql-fragments.md) —— **SQL 片段**：两级结构、字段全集、`{#…#}` / `{?…?}` 与 serverScript 的引用关系、执行器与源码依据、页面传参两条通路的完整规则与优先级、`sqlrefs` / `params` 用法。
 - [`references/measured-data.md`](references/measured-data.md) —— **实测数据**：引用方式次数、传参两条通路分布、`Wb.requestAg` 参数名与回调动作频次、设计器复刻的回放校验结果、统计口径。
 
@@ -551,7 +516,8 @@ python scripts/xwl.py check <file.xwl> --no-itemid          # 跳过 itemId 重�
 ## 五、xwl 的引用方式（数据源 / 子页面 / 后台方法）
 
 一个 `.xwl` 向外引用别的 xwl 或后台方法，只有下面这几条通路。
-**先看总表**；`m?xwl=` 写法的读法见 5.1；再按小节看每条怎么写、以及「回传后前台怎么处理」。
+**先看总表**；`m?xwl=` 写法的读法见 5.1；各条的**完整写法与「回传后前台怎么处理」**见 5.4
+与 [`references/js-api.md`](references/js-api.md)。
 
 | 引用什么 | 写法 | 写在哪里 |
 |---|---|---|
@@ -582,7 +548,7 @@ m?xwl=<模块>/<业务目录>/xxxSql/queryBizList
 
 | 写法 | 例 | 说明 |
 |---|---|---|
-| `m?xwl=<模块相对路径，**不带 `.xwl`**>` | `m?xwl=<模块>/…/xxxSql/queryBizList` | **最常用**。相对 `wb/modules/`，补 `.xwl` 就是文件路径（见 §1） |
+| `m?xwl=<模块相对路径，**不带 `.xwl`**>` | `m?xwl=<模块>/…/xxxSql/queryBizList` | **最常用**。相对 `wb/modules/`，补 `.xwl` 就是文件路径（见 5.1） |
 | `/<短名>` | `/upload`、`/get-file`、`/download` | 短名注册表 **`wb/system/url.json`**，框架内部端点。改动时别自己编短名 |
 | `http://…` 或任意 url | `Wb.open({url:'http://…', inframe:true})` | 外部地址必须 `inframe:true` |
 
@@ -600,160 +566,32 @@ m?xwl=<模块>/<业务目录>/xxxSql/queryBizList
 | `module.configs.serverScript` | 服务端 `app.get` / `app.run` / `app.send` / `app.rundomain` / **`app.execute(url)`** |
 | xwl 顶层 `inframe` / `pageLink` | 页面本身的打开方式（是否 iframe、菜单/链接地址） |
 
-> 事件 JS 一律用**单引号**（xwl 的字符串转义规则，见 §2）。
+> 事件 JS 一律用**单引号**（xwl 的字符串转义规则，见第二章）。
 
-### 5.4 `Wb.request`：请求一个服务端片段
+### 5.4 四条通路怎么写
 
-```js
-// 查询/校验/取数：不建页面，只要结果
-Wb.request({
-  url: 'm?xwl=<模块>/<业务目录>/selectBizStatus',
-  params: values,                 // 或 out: app.editWin（整包收容器内控件值）
-  // async: false,                // 需要同步拿结果时
-  success: function (resp) {
-    var data = Wb.decode(resp.responseText);   // ← 回传后前台的标准取法
-    ...
-  },
-  failure: function (resp) {
-    Wb.info('失败：' + resp.responseText);
-  }
-});
-```
+**什么时候用哪条**见上面的总表。完整写法（代码模板、回传怎么收、参数全表与坑）见
+[`references/js-api.md`](references/js-api.md)；这里只给「最短骨架 + 最容易踩的」：
 
-回传后前台怎么处理（**四种响应形态对应四种取法**）：
-
-| 响应的来源节点 | `resp.responseText` 是什么 | 前台怎么写 |
+| 通路 | 什么时候用 | 最短骨架 |
 |---|---|---|
-| `dataprovider`（执行 SQL） | JSON：`{"success":true,"rows":[…],"total":n}` | `Wb.decode(resp.responseText).rows` / `.total` |
-| `serverScript` + `app.send(x)` | `x` 本身（字符串/数字/JSON 文本） | 直接比较或用 `Wb.decode` |
-| `app.run(sql)`（serverScript 里执行 SQL） | 结果集（框架已处理 null） | `Wb.decode(...)` 后按 rows 用 |
-| 出错 | 错误文本 / `{"msg":"…"}` | 交给默认 `Wb.except`，或自己 `Wb.info(...)` |
+| `Wb.request` | 不建页面，只要结果（查询 / 校验 / 取数） | `Wb.request({url:'m?xwl=…', params, success:function(resp){…}})` |
+| `Wb.open` | 打开子页面（列表页 / 弹窗） | `Wb.open({url:'m?xwl=…', title:'…', params:{…}})` |
+| `Wb.upload` | 文件上传 / 导入（`form` 里必须有 `file` 控件） | `Wb.upload({form: app.form1, url:'m?xwl=…', success:function(form,action,value){…}})` |
+| `Wb.requestAg` | 调后台 Spring 方法（保存 / 落库） | `Wb.requestAg({params:{bean:'…', method:'…', …}})` |
 
-要点：
+**回传怎么取**（写 `success` 回调时最常用的一条）：`dataprovider` 出的数据是
+`Wb.decode(resp.responseText).rows` / `.total`；`serverScript` 里 `app.send(x)` 出来的是 `x` 本身。
+四种响应形态的对照表、四条通路各自的选项与回调签名见
+[`references/js-api.md`](references/js-api.md)。
 
-- **参数怎么给**：`params: {...}` 或 `out: app.<容器>` —— 完整规则（收哪些控件、两个 API 覆盖方向相反）
-  见 [`references/sql-fragments.md`](references/sql-fragments.md) 第五节。
-- **别用 `Wb.request` 代替 store**：列表/分页/排序要用 `store.load(...)`（框架会带上 `page`/`start`/`limit` 并处理返回）。
-- 默认**失败自动弹错**；不想弹就 `showError: false`，自己处理 `failure`。
-- `callback` 会先于 `success`/`failure` 被调用，签名是 **`(form, action, value, success)`**（比 `success` 多一个布尔），**返回 `false` 可跳过**后续处理（用于统一拦截）。
-- 返回值是请求对象，可用于取消：`var req = Wb.request({...}); req.abort?` → 实际用 `Ext.Ajax.abort(req)`。
-- 相关近亲：`Wb.submit(url, params, target, method, isUpload)`（常规表单提交，涉及文件必须用它）、`Wb.download(url, params, isUpload, method)`（下载）。
+三条最容易踩的：
 
-### 5.5 `Wb.open`：打开子页面（列表页 / 弹窗）
-
-```js
-Wb.open({
-  url: 'm?xwl=<模块>/<业务目录>/bizPayList',
-  title: '业务单据',
-  iconCls: '',
-  params: { BIZ_NO: data.bizNo }              // 子页面里 app.get('BIZ_NO') 可取
-});
-```
-
-- 在首页 / IDE 环境下**开成 tab 页并复用**；否则新窗口打开。同路径已打开时**默认激活已有 tab**；
-  想强制新开就带 `params`（或显式 `newTab: true`）。
-- 常用选项：`title` / `iconCls` / `icon` / `params` / `mask` / `showError` /
-  `inframe`（外部 url 用）/ `frameOnly`（只建 tab 不加载）/ `reload`（已存在则重载）/
-  `container`（挂到指定容器）/ `newWin`（新窗口表单提交）/ `download`。
-- 回调：`success(appScope, responseText)` / `failure(appScope, responseText)`，`this` 指向那个 tab 卡片。
-- **只想请求不要 tab** → `Wb.run({url, params, success})`（= `Wb.open` + `container:false`）。
-
-### 5.6 `Wb.upload`：文件上传 / 导入入口
-
-```js
-// ① 先把文件传到"上传承载页"，拿回服务端返回的值（通常是文件路径/新文件名）
-Wb.upload({
-  form: app.form1,                 // 必填：含 file 控件的 form 面板
-  url: 'm?xwl=<模块>/<业务目录>/fileUpload',
-  showProgress: true,
-  // out: app.form1,               // 也可显式指定取值的容器
-  success: function (form, action, value) {
-    app.DOWNLOAD_URL.setValue(value);   // ← value = action.result.value
-  },
-  failure: function (form, action, value) {
-    var d = Wb.decode(action.response.responseText);
-    Wb.info('导入失败：' + d.msg);
-  }
-});
-```
-
-**回调签名（框架改过 ExtJS，官方就是三参）** —— `ext-all-debug.js` 的
-`Ext.form.Basic.afterAction`：`Ext.callback(action.success, scope, [me, action, value])`，
-其中 `value = action.result.value`（服务端返回值），`action` 是 form action 对象：
-
-| 回调 | 签名 | 关键取值 |
-|---|---|---|
-| `success` | `(form, action, value)` | `value` = 服务端返回值 |
-| `failure` | `(form, action, value)` | `action.response.responseText` → `Wb.decode(...).msg` |
-| `callback` | `(form, action, value, success)` | 返回 `false` 可跳过 success/failure |
-
-> 样本工程里大量写成 `success: function(action, form1, value)`——**参数名与实际顺序错位一位**
-> （`action` 实际是 form、`form1` 实际是 action）。只用到第 3 个参数 `value` 时**照样能跑**，
-> 但新写代码请按官方顺序 `(form, action, value)`。失败分支里的 `failure: function(resp, action)`
-> 同理：`action` 才是 action 对象，所以 `action.response.responseText` 能取到。
-> 另外 `form.form.submit` 走的是 form 提交通道，`_jsonresp=1` 由框架自动加。
-
-**导入类页面的典型两步链**（样本工程里最标准的导入写法）：
-
-```text
-① Wb.upload  → 上传承载页 xwl（如 <模块>/…/fileUpload.xwl）→ 拿到文件在服务端的值
-② Wb.request → 校验页 xwl（可多个，如 selectXxxInsertStatus / …UpdateStatus）
-③ Wb.requestAg → 落库（bean/method），成功回调里关窗 + store.load() + Wb.tip
-```
-
-### 5.7 `Wb.requestAg`：调后台 Spring 方法
-
-**只看前台这一侧** —— 后台方法怎么写属于后端范围，不在本 skill 内；这里只说"怎么调、怎么收"。
-
-```js
-Wb.requestAg({
-  params: {
-    bean: 'xxxController',       // 后台 bean 名（必须）
-    method: 'saveMethod',        // 方法名（必须）
-    BIZ_DATA: values,            // 业务参数：键名就是后台取参名
-    data: Wb.encode(rows)        // 表格批量数据用 data 键（JSON 字符串）
-  },
-  success: function (resp) {
-    win.close();
-    app.grid1.store.load();
-    Wb.tip('保存成功');
-  }
-});
-```
-
-前台侧的约定：
-
-| 项 | 约定 |
-|---|---|
-| url | **不用写**，框架固定改成 `m?xwl=common/save-all`（`wb-debug.js` 里写死） |
-| 保留键 | `bean` / `method` —— 必须给，且与业务参数平铺在同一层 |
-| 业务参数 | 其余键原样变成请求参数；**后台按同名取**（`app.get('x')` 同源）。参数名必须与后台一致，否则取到空 |
-| `out` | 同样支持，合并规则与 `Wb.request` 一致（`out` 覆盖 `params`） |
-| 表格批量增删改 | 用 `data`（`Wb.encode(...)` 的 JSON 字符串）+ 配套键 `datatable` / `className` / `insertSql` / `updateSql` / `deleteSql`（实测 Top 组合） |
-| 同一 bean 多方法 | 只改 `method` 即可，`bean` 复用 |
-
-> 实测常用业务参数名与频次（`idList` / `datatable` / `className` / `insertSql` / `updateSql` / `deleteSql`…）见 [`references/measured-data.md`](references/measured-data.md) §三。
-
-**后台传回后，前台怎么处理**（统计见 [`references/measured-data.md`](references/measured-data.md) §四）：
-
-| 处理动作 | 占比 | 说明 |
-|---|---|---|
-| `Wb.tip('保存成功')` / `Wb.info` 提示 | 91% | 最普遍 —— **多数场景根本不看返回值** |
-| `store.load()` / `store.reload()` 刷新 | 78% | 列表/明细重新取数 |
-| `win.close()` 关窗 | 29% | 弹窗式新增/编辑保存后的标配 |
-| 读 `resp.responseText` | 66% | 返回值常是**普通文本/数字**，直接 `if (data == 1)` |
-| `Wb.decode(resp.responseText)` | 43% | 返回值是 JSON 时才解析 |
-| `Wb.warn(...)` 走失败分支 | — | 后台返回非预期值时常自己判 `else` 分支 |
-
-要点：
-
-- **成功/失败的分界由响应决定**：框架判断为成功才走 `success`；业务上的"失败"往往由后台返回一个
-  非预期值，**前台自己 `if/else` 判**（例：`if (data == 1) {…} else { Wb.warn('操作失败') }`）。
-- `failure` 回调拿到的是 `(resp, options)`；错误文本在 `resp.responseText`。
-  默认**框架会自动弹错**（`Wb.except`），要自己接管就 `showError: false`。
-- 上传类失败的错误对象不同（`action.response.responseText` → `{msg}`），见 §5.6 —— **别混用**。
-- 保存成功后的标准三连：**关窗 → 刷新来源 store → `Wb.tip` 提示**。来源 store 可能是父页面
-  （`app.grid1.store.load()`）或当前弹窗（`win.close()` 前先拿引用）。
+1. **别用 `Wb.request` 代替 store** —— 列表 / 分页 / 排序要用 `store.load(...)`，
+   框架会带上 `page` / `start` / `limit` 并处理返回。
+2. **`Wb.requestAg` 不用写 `url`**（框架固定改成 `m?xwl=common/save-all`），但 `bean` / `method`
+   必须给；业务参数名要与后台取参名一致，否则取到空。
+3. **上传类失败的错误对象与别的通路不同**（`action.response.responseText` → `{msg}`），别混用。
 
 ## 六、SQL 片段：`module.serverScript` ↔ `dataprovider`
 
@@ -807,26 +645,9 @@ python scripts/xwl.py sqlrefs <file.xwl>                            # 改完验 
 
 ### 7.1 框架怎么把控件交给 JS（这决定了重名的后果）
 
-WebBuilder 改过的 `Ext.ComponentManager`（`wb/libs/ext/ext-all-debug.js:21689`，原文）：
-
-```js
-register: function (item) {
-    this.all.add(item);
-    if (item.appScope && (item.normalName || item.itemId))
-        item.appScope[item.normalName || item.itemId] = item;      // 普通赋值，不检重
-},
-unregister: function (item) {
-    var all = this.all;
-    all.removeAtKey(all.getKey(item));
-    if (item.appScope && (item.normalName || item.itemId))
-        delete item.appScope[item.normalName || item.itemId];      // 按同名键直接删
-},
-```
-
-> 行号按某个版本的 `ext-all-debug.js` —— **换版本请按符号名 `ComponentManager.register`
-> 去搜**，别按行号找。
-
-两条结论，各自对应一类现象：
+WebBuilder 改过的 `Ext.ComponentManager`（在 `wb/libs/ext/ext-all-debug.js` 里，
+**按符号名 `ComponentManager.register` 搜，别按行号找**）。源码原文见
+[`references/measured-data.md`](references/measured-data.md) §7.5。两条结论各自对应一类现象：
 
 1. **注册键是 `normalName || itemId`** —— `normalName` **优先**。所以只要每个同名控件各有互不相同的
    `normalName`，就根本不会撞车，JS 走 `app.<normalName>`。（这就是第二条规则的由来。）
@@ -852,7 +673,7 @@ unregister: function (item) {
 > `xwl.py schema <type> --controls wb/system/controls.json`。
 
 各类在**样本工程**里的实测组数、比例与按类型的分布见
-[`references/measured-data.md`](references/measured-data.md) §7。那些数字只是**一个样本的量级参考**，
+[`references/measured-data.md`](references/measured-data.md) §七。那些数字只是**一个样本的量级参考**，
 不要当成通用阈值 —— **在你自己的工程上跑 `itemids` / `check` 才是该工程的真实情况**。
 
 ### 7.3 遇到重名：先读父子关系，再把候选交给用户选
@@ -877,6 +698,12 @@ python scripts/xwl.py itemids <file.xwl> --suggest         # 生成改名 ops �
 > 优先级：**能用 `normalName` 就用 `normalName`**（`--fix auto` 已如此）—— 它不动 `itemId`，
 > 不会破坏任何已有引用；只有类型不接受 `normalName` 时才回退到改 `itemId`。
 
+> 想知道**某个工程整体**有多少重名：在**你自己的工程**上跑一遍就是最新结果 ——
+> `itemids <file> --dups-only`（单文件明细）、`check`（该文件的 error / warn 计数）、
+> `itemids <file> --json`（机器可读，便于汇总）。
+> 样本工程的一份完整分布（各档组数 + 按控件类型的 Top）见
+> [`references/measured-data.md`](references/measured-data.md) §7.2，只作**量级参考**。
+
 ### 7.4 精确定位某一个：`@itemId#N` 与「串联 `@` 限定」
 
 `path` 里 `@itemId` 段要求唯一；重名时**不猜顺序**，报错并附候选清单。想指名第 N 个（**N 从 1 起**）：
@@ -891,33 +718,20 @@ python scripts/xwl.py itemids <file.xwl> --suggest         # 生成改名 ops �
 [{"op": "set", "path": ["@gridUser", "@tbar", "configs", "normalName"], "value": "tbarUser"}]
 ```
 
-### 7.5 想知道「某个工程里实际有多少重名」
-
-不用问别人要数字 —— 在**你自己的工程**上跑一遍就是最新结果：
-
-```bash
-python scripts/xwl.py itemids <file.xwl> --dups-only      # 单文件：分级 + 候选 + 建议值
-python scripts/xwl.py check <file.xwl>                    # ⑦ 给出该文件的 error / warn 计数
-python scripts/xwl.py itemids <file.xwl> --json           # 机器可读，便于自己汇总
-```
-
-样本工程的一份完整分布（各档组数 + 按控件类型的 Top）见
-[`references/measured-data.md`](references/measured-data.md) §7.2，可作**量级参考**。
-
 ## 八、常见问题（FAQ）
 
-**14 条**高频问题与排错处置全部移到了 [`references/faq.md`](references/faq.md)：
-`check` 报 FAIL 怎么排查、`app.X` 取不到值、页面白屏 / 解析错误、能不能压成一行、压成一行有什么后果、
+**15 条**高频问题与排错处置在 [`references/faq.md`](references/faq.md)：
+`check` 报 FAIL 怎么排查、`app.X` 取不到值、页面白屏 / 解析错误、能不能压成一行（以及压行的后果）、
 设计器里看不到新文件、SQL 抽取报 `1064`、`node --check` 误报、改了 SQL 参数查询不对、
 能不能批量文本替换、怎么确认没改坏、为什么不能用严格 JSON 解析器、`expand` 没变化、
-`check` 慢或没装 `node`、`new` 骨架的 `itemId` 能不能改。
+`check` 慢或没装 `node`、`new` 骨架的 `itemId` 能不能改、脚本 / CI 里怎么判断成败。
 
-> 出问题**第一站是那份 FAQ**：先按症状找，再去它指到的章节看细节。
-> 放在独立文件里是为了让本规范保持可扫读 —— 内容一条没少。
+> 出问题**第一站是那份 FAQ**（按症状查）；**动手前**想避开已知的坑，看
+> [`references/anti-patterns.md`](references/anti-patterns.md)。
 
 ## 九、改完的自检清单
 
-**29 项**清单（改已有文件 23 项 + 新建文件 6 项）移到了 [`references/checklist.md`](references/checklist.md) ——
+**29 项**清单（改已有文件 23 项 + 新建文件 6 项）在 [`references/checklist.md`](references/checklist.md) ——
 交活前逐条过一遍。按主题分了五组：改文件 / 改引用与结构 / SQL 与传参 / `itemId` 命名 / 新建文件。
 
 > 其中最容易跳过、后果最重的三条：① 多行源**绝不能**压成一行；

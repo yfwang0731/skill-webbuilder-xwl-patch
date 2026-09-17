@@ -99,10 +99,41 @@ def decode(path: str) -> tuple[str, bool]:
     return raw.decode("utf-8"), has_bom
 
 
+class XwlWriteError(Exception):
+    """写盘失败（目标只读 / 目录不存在 / 路径过长 / 磁盘只读等）。
+
+    单独一个类型，是为了让 `main()` 统一转成可读的 `[FAIL]` + 退出码 2；
+    也方便自检脚本断言「写不进去时不冒裸 OSError」。
+    """
+
+
+def _write_file(path: str, data, binary: bool = False) -> None:
+    """**所有写盘动作的唯一出口** —— 写不进去时抛 `XwlWriteError`，不冒裸 `OSError`。
+
+    为什么要有这一层：`open(..., "w")` 失败会抛 `OSError`（`PermissionError` /
+    `FileNotFoundError` / 路径过长…），使用者看到的会是一段 Python traceback。
+    而"目标只读 / 父目录不存在"属于**前置条件不满足**，该给可读提示 + 退出码 2。
+    兜在这一层，等于 6 个写盘调用点全部兜住。
+    """
+    try:
+        if binary:
+            with open(path, "wb") as f:
+                f.write(data)
+        else:
+            with open(path, "w", encoding="utf-8", newline="") as f:
+                f.write(data)
+    except OSError as exc:
+        raise XwlWriteError(f"无法写入 {path}：{exc.strerror or exc}") from None
+
+
 def write_text(path: str, text: str) -> None:
     """按 CRLF 落盘，UTF-8 无 BOM。newline='' 关掉自动换行转换。"""
-    with open(path, "w", encoding="utf-8", newline="") as f:
-        f.write(text)
+    _write_file(path, text)
+
+
+def write_bytes(path: str, data: bytes) -> None:
+    """二进制落盘（目前只用于 `.bak` 备份），失败同样抛 `XwlWriteError`。"""
+    _write_file(path, data, binary=True)
 
 
 def normalize_eol(text: str) -> str:
@@ -561,7 +592,8 @@ def cmd_check(args) -> int:
         # ⑦ itemId 重名（分级）—— 只有「重名 **且** 已被事件 JS 引用」才算 FAIL
         itemid_warns: list[str] = []
         itemid_note = ""
-        if obj is not None and not getattr(args, "no_itemid", False):
+        no_itemid = bool(getattr(args, "no_itemid", False))
+        if obj is not None and not no_itemid:
             rep = audit_itemids(obj, controls_path=discover_controls(path))
             for m in rep["errors"]:
                 errors.append(f"⑦ {m}")
@@ -579,12 +611,22 @@ def cmd_check(args) -> int:
             failed = True
         else:
             print("  [ok]   ① BOM  ② 换行一致  ③ 续行空白  ④ 解析  ⑤ 末行结构")
-            if events:
+            # ⑥⑦ 无论跑没跑都要留一行 —— 否则用户看到 6 行、文档写「七项」，
+            # 而且 `--no-js` 与 `--no-js --no-itemid` 的输出会长得一模一样。
+            if args.no_js:
+                print("  [note] ⑥ 事件 JS 语法校验：已按 `--no-js` 跳过")
+            elif node is None:
+                print("  [note] ⑥ 事件 JS 语法校验：未找到 node，已跳过（见上方 warn）")
+            elif events:
                 print(f"  [ok]   ⑥ {len(events)} 个事件 JS 语法全部通过")
-            elif obj is not None and not args.no_js and node:
+            else:
                 print("  [ok]   ⑥ 无 events 节点")
-            if itemid_note:
+            if no_itemid:
+                print("  [note] ⑦ itemId 重名分级：已按 `--no-itemid` 跳过")
+            elif itemid_note:
                 print("  [ok]   " + itemid_note)
+            else:
+                print("  [ok]   ⑦ 无重名")
             print("  -> OK")
         for w in itemid_warns:
             print(f"  [warn] {w}")
@@ -640,8 +682,7 @@ def cmd_edit(args) -> int:
 
     if args.backup:
         bak = args.target + ".bak"
-        with open(bak, "wb") as f:
-            f.write(read_bytes(args.target))
+        write_bytes(bak, read_bytes(args.target))
         print(f"备份 -> {bak}")
 
     write_text(args.target, text.replace(old, new))
@@ -697,8 +738,7 @@ def cmd_expand(args) -> int:
     dest = args.out or args.file
     if args.backup and dest == args.file:
         bak = args.file + ".bak"
-        with open(bak, "wb") as f:
-            f.write(read_bytes(args.file))
+        write_bytes(bak, read_bytes(args.file))
         print(f"备份 -> {bak}")
     write_text(dest, out)
     print(f"已写入: {dest}")
@@ -714,7 +754,7 @@ def cmd_expand(args) -> int:
 # patch（结构级编辑：改对象 + 按设计器规则重建，不碰文本层）
 # --------------------------------------------------------------------------- #
 # itemId 的「重名严重度」不是一刀切 —— 取决于「控件类型 + 是否已被 JS 引用 + 字段有无 normalName」。
-# 分级依据来自 TSHT 全项目实测（2780 个 xwl / 59791 个含 itemId 的控件节点 / 12304 段事件 JS）：
+# 分级依据来自样本工程全量实测（2780 个 xwl / 59791 个含 itemId 的控件节点 / 12304 段事件 JS）：
 #
 #   benign — 重名在实践中无害
 #     · 列控件 column / tcolumn：实测 3393 组重名，**0 组**被事件 JS 引用。
@@ -745,7 +785,7 @@ _APP_REF_RESERVED = frozenset({
 })
 
 # 合法接受 `normalName` 的控件类型 —— 权威来源是控件注册表（wb/system/controls.json）里
-# 该控件 `configs` 是否含 `normalName` 键。下面这份内置清单取自 TSHT 工程实测
+# 该控件 `configs` 是否含 `normalName` 键。下面这份内置清单取自样本工程实测
 # （注册表 133 个节点，其中 **89 个**接受 normalName、44 个不接受）。给了 --controls 就从注册表现算。
 _NORMALNAME_FALLBACK = (
     "axis button buttongroup chart chartlabel check checkgroup colorfield column combo comp "
@@ -1467,8 +1507,7 @@ def cmd_patch(args) -> int:
 
     if args.backup:
         bak = args.file + ".bak"
-        with open(bak, "wb") as f:
-            f.write(read_bytes(args.file))
+        write_bytes(bak, read_bytes(args.file))
         print(f"备份 -> {bak}")
     write_text(args.file, out)
     print(f"已写入: {args.file}")
@@ -1886,8 +1925,7 @@ def _register_one(target: str, args) -> int:
         return 0
 
     bak = jp + ".bak"
-    with open(bak, "wb") as f:
-        f.write(read_bytes(jp))
+    write_bytes(bak, read_bytes(jp))
     write_text(jp, out)
     print(f"备份 -> {bak}")
     print(f"已写入: {jp}")
@@ -2644,7 +2682,14 @@ def build_parser() -> argparse.ArgumentParser:
 def main(argv: list[str] | None = None) -> int:
     ensure_utf8_stdio()
     args = build_parser().parse_args(argv)
-    return args.func(args)
+    try:
+        return args.func(args)
+    except XwlWriteError as exc:
+        # 写盘失败属「前置条件不满足」——给可读提示 + 退出码 2，而不是抛 traceback
+        print(f"[FAIL] {exc}")
+        print("       可能原因：目标只读 / 所在目录不存在 / 路径过长 / 磁盘只读；")
+        print("       若目标正被编辑器或同步工具占用，先关掉再试。")
+        return 2
 
 
 if __name__ == "__main__":

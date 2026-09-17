@@ -79,7 +79,7 @@
 
 | 第一个参数名 | 处数 | 含义 |
 |---|---|---|
-| `action` | **101** | **错位一位**（`action` 实际是 form），见 SKILL.md §5.6 |
+| `action` | **101** | **错位一位**（`action` 实际是 form），见 [`js-api.md`](js-api.md) §3 |
 | `form` | 32 | 顺序正确 |
 | （无参） | 5 | 不需要返回值 |
 | `resp` | 1 | 命名不规范 |
@@ -100,6 +100,39 @@
 
 → 结论：**算法复刻正确**，因此 `patch` 重排**不会顺带改动无关内容**，
 diff 只含真正改的内容（实测：377 KB 的一个多行源页面加一个带多行 JS 的按钮 + 改标题，diff **17 行**）。
+
+### 5.1 写回算法的四个步骤（反编译原文）
+
+关键位置：
+
+| 项 | 位置 |
+|---|---|
+| jar | `WEB-INF/lib/Webplatform-1.0.jar` |
+| 入口 | `com.wb.interact.IDE#saveFile(...)` —— 按扩展名分派，`.xwl` 交给 `updateModule` |
+| 真正写文件 | `com.wb.interact.IDE#updateModule(File, JSONObject, String[], boolean)` |
+
+`javap -c -p com.wb.interact.IDE` 可见的四步：
+
+```java
+String s = json.toString(1);                                        // ① org.json 序列化，缩进因子 1
+s = s.replaceAll("\\n", "\\\n");                                    // ② 字符串内的 \n 转义 → 反斜杠 + 换行
+s = s.replaceAll(System.getProperty("line.separator", "\n"), "\n"); // ③ 换行归一
+FileUtil.syncSave(file, s, "utf-8");                                // ④ UTF-8 落盘，不加尾换行
+```
+
+### 5.2 `org.json toString(1)` 的三条排版规则
+
+**① 不是标准 JSON 美化，是老版 org.json 的 `toString(1)`**，有三条反直觉规则：
+
+1. 每级缩进 **1 个空格**（不是 2/4）。
+2. **只有 0 或 1 个元素的容器不换行** → `{"itemId": "x"}`、`[3]` 内联在一行。
+3. 单元素容器递归时传的是**当前缩进**而非加一层的缩进 —— 直接产生 `[{`、`}]` 的紧凑写法。
+
+字符串转义另有两条：**非 ASCII 原样保留**（中文不转 `\uXXXX`），但 **`</` 写成 `<\/`**（防 `</script>`）。
+
+> ② 的正则是「**字面反斜杠 + n**」，所以值里本来就有这种序列时（SQL / JS 源码里写的 `\n`，
+> 在 JSON 里是 `\\n`），磁盘上会呈现成「`\\` + 反斜杠 + 换行」的别扭形态 ——
+> **语义无损**，加载器的正则 `\\(?:\r\n|\r|\n)` 恰好只吃「一个反斜杠 + 换行」。
 
 ## 六、控件使用频次与父子结构
 
@@ -175,8 +208,26 @@ diff 只含真正改的内容（实测：377 KB 的一个多行源页面加一�
 
 ### 7.5 框架侧机制（源码原文）
 
-源码原文见 `SKILL.md` §7.1（`wb/libs/ext/ext-all-debug.js:21689`，WebBuilder 改过的
-`Ext.ComponentManager.register` / `unregister`）—— 那里是**规则依据**，这里只记结论，不重复贴。
+WebBuilder 改过的 `Ext.ComponentManager`（`wb/libs/ext/ext-all-debug.js`，原文）：
+
+```js
+register: function (item) {
+    this.all.add(item);
+    if (item.appScope && (item.normalName || item.itemId))
+        item.appScope[item.normalName || item.itemId] = item;      // 普通赋值，不检重
+},
+unregister: function (item) {
+    var all = this.all;
+    all.removeAtKey(all.getKey(item));
+    if (item.appScope && (item.normalName || item.itemId))
+        delete item.appScope[item.normalName || item.itemId];      // 按同名键直接删
+},
+```
+
+> 行号按某个版本的 `ext-all-debug.js`（实测为 `:21689`）——
+> **换版本请按符号名 `ComponentManager.register` 去搜**，别按行号找。
+
+规则本身（谁优先、为什么会"取不到值"）见 `SKILL.md` 7.1。
 
 注册键 = **`normalName || itemId`**（normalName 优先）。
 `unregister` 的 `delete` 是"重复会取不到值"的**确切机制**：任一重复项被销毁，

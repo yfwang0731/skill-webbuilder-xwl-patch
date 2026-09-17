@@ -19,12 +19,22 @@
     本地开发环境却是 UTF-8，所以只有 CI 的 windows job 能发现（第一次上 CI 就这么挂的）
   · **跨盘符不能崩**：`os.path.relpath` 不带 `start` 时在 Windows 跨盘符会抛 ValueError
     （CI 仓库在 D:、TEMP 在 C:），用桩把 relpath 变成必抛来验证兜底（第二次 CI 挂在它上面）
-  · 文档一致性守卫（跨文件）：emoji 未入标题 / README↔SKILL 无逐字重复的表格行 /
-    「见 N.M」的编号引用可解析 / 文档与工具里无业务路径与业务字段名（skill 是通用资产）
+  · 文档一致性守卫（跨文件）：emoji 未入标题 / **任意两文档间**无逐字重复的表格行 /
+    「§N.M」「见 N.M」「第 N 章」「第 N 步」引用可解析（**含跨文件**：`见 SKILL.md 2.1`、
+    `controls.md §4.2`、`§五`）/ 本地链接都存在 / **外移点两侧都在**（主文档有指针 + references 有承载内容）/
+    **格式五项**（表格列数 / 标题跳级 / 代码块闭合 / 行尾空白 / 末尾换行）/
+    **自称数字与实际一致**（FAQ / 清单 / 反模式 / prompt 条数、清单拆分、工具表覆盖全部子命令）/
+     **索引一致**（导航表目标存在、references 无孤儿无悬空、README 目录树 ↔ 磁盘、
+     SKILL 的「N 份参考材料」其 N = 清单条数 = 磁盘文件数）/
+     文档与工具里无业务路径与业务字段名（skill 是通用资产）
   · `dump` 冒烟（它是最后一个补上冒烟覆盖的子命令）
   · `@itemId` 寻址（唯一可定位 / 重名拒绝并给候选清单 / `#N` 点名与越界）
   · itemId 重名分级（列 benign / 按钮+被引用 error / 唯一 normalName benign / 未被引用 warn）
   · `params` 的两条通路识别与注释剔除
+  · **写盘失败必须给可读 `[FAIL]` + 退出码 2，不得冒 Python traceback** ——
+    目标只读 / 父目录不存在 / 路径过长都属「前置条件不满足」。
+    （原先 `write_text()` 没兜 `OSError`，5 个子命令 9 个场景抛 traceback，
+    而 64 项断言一条都没覆盖写失败 —— 这条就是为此加的）
 
 改完 xwl.py 先跑它；输出末尾应为 `selftest ALL OK`：
 
@@ -82,20 +92,20 @@ def _run_check(files: list[str], node: str | None):
     return code, buf.getvalue()
 
 
-def main() -> int:
-    xwl.ensure_utf8_stdio()     # 输出全是中文；Windows 控制台默认非 UTF-8 会直接 UnicodeEncodeError
-    tmp = tempfile.mkdtemp(prefix="xwl_selftest_")
-    node = xwl.find_node()
-    print(f"node: {node or '(未找到，跳过事件 JS 校验)'}")
-    failures: list[str] = []
+def _run(fn, **kw):
+    """跑一个 `cmd_xxx` 并把它的 stdout 收进 buffer，返回 (rc, text)。
 
-    def write(name: str, text: str, bom: bool = False) -> str:
-        p = os.path.join(tmp, name)
-        with open(p, "wb") as f:
-            if bom:
-                f.write(b"\xef\xbb\xbf")
-            f.write(text.encode("utf-8"))
-        return p
+    放在模块级是因为它被两组以上用到（子命令冒烟 / 平台回归）——
+    原先是 main 里的嵌套函数，main 拆成多个函数后就跨了作用域。
+    """
+    buf = io.StringIO()
+    with contextlib.redirect_stdout(buf):
+        code = fn(type("NS", (), kw)())
+    return code, buf.getvalue()
+
+
+def _check_basics(tmp, node, failures, write) -> None:
+    """前置样本 + check 破坏用例 + edit + expand + patch（第 0~7 组）"""
 
     # ---- 0. 前置：合法样本必须能被解析，且 JS 是真实换行 ----
     try:
@@ -261,6 +271,10 @@ def main() -> int:
         else:
             failures.append(f"{name} 失败（产出前 200 字符={after[:200]!r}）")
 
+
+def _check_params_paths(tmp, node, failures, write) -> None:
+    """params 两条通路 + 注释剔除与多容器 out（第 8~9 组）"""
+
     # ---- 8. params：两条通路的识别（out / params） ----
     FIELD = xwl.field_types(None)
     js_out = "app.grid1.store.load({ out: app.tbar });"
@@ -289,7 +303,7 @@ def main() -> int:
             failures.append(
                 f"{name} 失败（out={tr_out} gv={tr_gv} obj={tr_obj} both={tr_both}）")
 
-            # ---- 9. 注释剔除与多容器 out ----
+    # ---- 9–10. 注释剔除 / 多容器 out / 剔注释不粘连 ----
     for name, cond in {
         "行注释里的 out 不被误判":
             [t[1] for t in xwl.find_transfers(
@@ -309,6 +323,10 @@ def main() -> int:
             print(f"[ok]  {name}")
         else:
             failures.append(f"{name} 失败")
+
+
+def _check_itemids(tmp, node, failures, write) -> None:
+    """@itemId 寻址、重名分级、引用判定、防御性取值、章节顺序（第 11a~11k 组）"""
 
     # ---- 11. @itemId 寻址：唯一可定位、重名拒绝 ----
     dup_tree = {"children": [
@@ -557,6 +575,10 @@ def main() -> int:
     else:
         print("[note] 未找到 SKILL.md，跳过章节顺序守卫")
 
+
+def _check_subcommands(tmp, node, failures, write) -> None:
+    """子命令冒烟 paths/sqlrefs/params + new + folders + paths 原路径 + schema 骨架（第 12~16 组）"""
+
     # ---- 12. 子命令冒烟：paths / sqlrefs / params 真跑一遍（防“改了内部函数名漏改调用”）----
     page_obj = {"title": "参数页", "children": [
         {"configs": {"itemId": "viewport"}, "expanded": False, "type": "viewport", "children": [
@@ -576,12 +598,6 @@ def main() -> int:
     page_path = os.path.join(tmp, "page_smoke.xwl")
     with open(page_path, "w", encoding="utf-8", newline="") as f:
         f.write(xwl.dumps_designer(page_obj, 1, CRLF))
-
-    def _run(fn, **kw):
-        buf = io.StringIO()
-        with contextlib.redirect_stdout(buf):
-            code = fn(type("NS", (), kw)())
-        return code, buf.getvalue()
 
     smoke_fail = []
     for label, fn, kw, want in (
@@ -752,13 +768,20 @@ def main() -> int:
     else:
         print("[ok]  schema --skeleton：只含该控件允许的键，events 键按该控件实际事件决定")
 
+
+def _check_docs(tmp, node, failures, write) -> None:
+    """文档一致性守卫（跨文件）：重复表格 / 引用可解析 / 格式 / 自称数字 / 索引与节号（第 17~18 组）"""
+
     # ---- 17. 文档一致性守卫（跨文件）----
     # 这几类缺陷人眼复核必漏（实测：一轮评审发现的 4 个缺陷里 3 个是"改了这处忘了那处"），所以机械扫。
     doc_fail: list[str] = []
     root = os.path.dirname(HERE)
     doc_names = ["SKILL.md", "README.md", "CHANGELOG.md", "references/walkthrough.md",
-                 "references/faq.md", "references/checklist.md", "references/controls.md",
-                 "references/sql-fragments.md", "references/measured-data.md"]
+                 "references/faq.md", "references/checklist.md", "references/anti-patterns.md",
+                 "references/controls.md",
+                 "references/sql-fragments.md", "references/measured-data.md",
+                 "references/js-api.md",
+                 ]
     docs: dict = {}
     for nm in doc_names:
         fp = os.path.join(root, nm.replace("/", os.sep))
@@ -772,26 +795,70 @@ def main() -> int:
             if l.startswith("#") and any(ch in l for ch in ("⚠", "❗", "✅", "❌")):
                 doc_fail.append("%s:%d 标题里混入 emoji" % (nm, i))
 
-    # 17b README 与 SKILL 不得有逐字重复的表格行（同一张表不该在两处各写一遍）
+    # 17b **任意两份文档**之间不得有逐字重复的表格行（同一张表不该在两处各写一遍）。
+    #     原来只比 README↔SKILL —— 实测 SKILL↔faq 也会重复（退出码表就是这么漏掉的）。
     def _trows(ls):
         return {l.strip() for l in ls
                 if l.strip().startswith("|") and l.strip().endswith("|")
                 and not set(l.strip()) <= set("|-: ")}
-    if "README.md" in docs and "SKILL.md" in docs:
-        dup = _trows(docs["README.md"]) & _trows(docs["SKILL.md"])
-        if dup:
-            doc_fail.append("README 与 SKILL 有 %d 行表格逐字重复（同一张表别写两处）：%s"
-                            % (len(dup), sorted(dup)[0][:70]))
+    _names = [k for k in docs if k != "CHANGELOG.md"]
+    for _i in range(len(_names)):
+        for _j in range(_i + 1, len(_names)):
+            _dup = _trows(docs[_names[_i]]) & _trows(docs[_names[_j]])
+            if _dup:
+                doc_fail.append("%s 与 %s 有 %d 行表格逐字重复（同一张表别写两处）：%s"
+                                % (_names[_i], _names[_j], len(_dup), sorted(_dup)[0][:60]))
 
-    # 17c 「见 N.M」必须能在本文件里找到对应小节（带文件名线索的行是跨文件引用，跳过）
+    # 17c 「§N.M」/「见 N.M」引用必须可解析 —— **本文件与跨文件都查**。
+    #     原来含 `.md` 的行整行跳过 ⇒ 跨文件引用无人管：把 §五/§四 外移时漏掉两处
+    #     （SKILL.md 还指向语义已变的小节、measured-data 指向已搬走的 §5.6）。
+    #     判定：以该引用**左侧最近的文档名**为归属；没有则归属本文件。
+    _fn = re.compile(r"([\w-]+\.md)")
+    _heads = {k: "\n".join(l for l in v if l.startswith("#")) for k, v in docs.items()}
+    _base = {k: k.split("/")[-1] for k in docs}
     for nm, ls in docs.items():
-        heads = "\n".join(l for l in ls if l.startswith("#"))
+        # CHANGELOG 是**历史记录**：里面的 `§5.5`→`§5.6` 是「当时的」编号，不按当前结构校验
+        # （否则每次重排章节都得回头改历史，而历史本来就该原样留着）。
+        if nm == "CHANGELOG.md":
+            continue
         for i, l in enumerate(ls, 1):
-            if re.search(r"`?[\w-]+\.md`?|references/", l):
+            for m in re.finditer(r"§(\d)\.(\d)|见\s*\*{0,2}(\d)\.(\d)", l):
+                g = m.groups()
+                a, b = (g[0], g[1]) if g[0] else (g[2], g[3])
+                tgt = nm
+                near = list(_fn.finditer(l[: m.start()]))
+                if near:
+                    cand = [k for k, v in _base.items() if v == near[-1].group(1)]
+                    if cand:
+                        tgt = cand[0]
+                if ("### %s.%s" % (a, b)) not in _heads.get(tgt, ""):
+                    doc_fail.append("%s:%d 引用 %s §%s.%s，但该文件没有这个编号小节"
+                                    % (nm, i, _base.get(tgt, tgt), a, b))
+
+    # 17c-2 「第 N 章」「第 N 步」也要能解析 —— 原来完全没查这一类引用。
+    #     只在**能确定归属 SKILL.md** 时判：本文件是 SKILL，或该行里出现了 SKILL.md。
+    #     references 里不带文档名的「第 N 步」多指该文件自己的步骤（如 walkthrough 的教程步骤），不判。
+    _cn = "一二三四五六七八九十"
+    _sk_lab = set()
+    for _l in docs.get("SKILL.md", []):
+        _m = re.match(r"^##\s*([" + _cn + r"]+)、", _l)
+        if _m:
+            _sk_lab.add(_m.group(1))
+        _m = re.match(r"^###\s*第\s*(\d)\s*步", _l)
+        if _m:
+            _sk_lab.add("第" + _m.group(1) + "步")
+    for nm, ls in docs.items():
+        if nm == "CHANGELOG.md":
+            continue
+        for i, l in enumerate(ls, 1):
+            if nm != "SKILL.md" and "SKILL.md" not in l:
                 continue
-            for m in re.finditer(r"见\s*\*{0,2}(\d\.\d)", l):
-                if ("### " + m.group(1)) not in heads:
-                    doc_fail.append("%s:%d 引用「见 %s」但本文件没有该编号小节" % (nm, i, m.group(1)))
+            for _m in re.finditer(r"第\s*([" + _cn + r"]+)\s*章", l):
+                if _m.group(1) not in _sk_lab:
+                    doc_fail.append("%s:%d 引用「第%s章」但 SKILL.md 没有该章" % (nm, i, _m.group(1)))
+            for _m in re.finditer(r"第\s*(\d)\s*步", l):
+                if ("第" + _m.group(1) + "步") not in _sk_lab:
+                    doc_fail.append("%s:%d 引用「第%s步」但 SKILL.md 没有该步" % (nm, i, _m.group(1)))
 
     # 17d 去项目化：文档与工具里不得出现任何具体工程的路径（skill 是通用资产）
     # 判据用**结构**而不是业务名黑名单 —— 后者等于把业务名又写进代码里。
@@ -834,11 +901,201 @@ def main() -> int:
                 if not os.path.exists(tgt):
                     doc_fail.append("%s:%d 链接指向不存在的文件 -> %s" % (nm, i, m.group(1)))
 
+    # 17f SKILL.md 必须给出「反模式」的入口
+    # 起因：SkillHub 评测的 antiPatternFaq 只给 4.5，理由是"反模式内容散在各章、缺少集中章节"。
+    # 内容搬到独立文件后，若主文档没有入口 = 等于没搬，所以钉住。
+    if "SKILL.md" in docs:
+        if not any("anti-patterns.md" in l for l in docs["SKILL.md"]):
+            doc_fail.append("SKILL.md 没有指向 references/anti-patterns.md 的入口")
+
+    # 17g **外移点两侧都还在**：主文档留了指针 + 目标文件有承载内容。
+    # 起因：把 §五 5.4 / §四 4.1 / §二 2.4 / §七 7.1 的正文搬进 references 后，
+    # 任何一侧后来被删或改名，都会变成「主文档说去哪看、去了却没有」—— 这类失义机器可查。
+    _splits = [
+        ("第五章 5.4 四条通路", "SKILL.md", "references/js-api.md",
+         ["Wb.request", "Wb.open", "Wb.upload", "Wb.requestAg"]),
+        ("第 4 步 逐项判据", "SKILL.md", "references/faq.md", ["无 BOM", "换行一致", "重名"]),
+        ("4.1 退出码与约定", "SKILL.md", "references/faq.md", ["退出码"]),
+        ("2.4 写回算法", "SKILL.md", "references/measured-data.md",
+         ["toString(1)", "syncSave", "updateModule"]),
+        ("7.1 框架侧源码", "SKILL.md", "references/measured-data.md",
+         ["ComponentManager", "unregister"]),
+        ("FAQ 全量问答", "SKILL.md", "references/faq.md", ["怎么排查"]),
+        ("改完自检清单", "SKILL.md", "references/checklist.md", ["- [ ]"]),
+        ("反模式清单", "SKILL.md", "references/anti-patterns.md", ["为什么诱人"]),
+        ("端到端实操", "SKILL.md", "references/walkthrough.md", ["第 1 步"]),
+    ]
+    for _lab, _src, _dst, _keys in _splits:
+        if _dst not in "\n".join(docs.get(_src, [])):
+            doc_fail.append("外移点「%s」：%s 里没有指向 %s 的指针" % (_lab, _src, _dst))
+        _body = "\n".join(docs.get(_dst, []))
+        _miss = [k for k in _keys if k not in _body]
+        if _miss:
+            doc_fail.append("外移点「%s」：%s 里找不到承载内容 %s" % (_lab, _dst, _miss))
+
+    # 17h 文档格式：表格列数一致 / 标题不跳级 / 代码块闭合 / 无行尾空白 / 末尾有换行。
+    #     起因：外移与重排章节时最容易留下这五类瑕疵，而且人眼扫不出来。
+    for nm, _lines in docs.items():
+        _cur = None
+        _fence = 0
+        _prev = 0
+        for i, l in enumerate(_lines, 1):
+            s = l.strip()
+            if s.startswith("```"):
+                _fence += 1
+            if s.startswith("|") and s.endswith("|"):
+                _body = s.replace("\\|", "\x00")
+                _nc = _body.count("|") - 1
+                if set(_body) <= set("|-: "):
+                    _cur = _nc
+                elif _cur is not None and _nc != _cur:
+                    doc_fail.append("%s:%d 表格本行 %d 格、表头 %d 格（表格会渲染错）" % (nm, i, _nc, _cur))
+            else:
+                _cur = None
+            if _fence % 2 == 0 and re.match(r"^#{1,6} ", l):
+                _lv = len(l) - len(l.lstrip("#"))
+                if _prev and _lv > _prev + 1:
+                    doc_fail.append("%s:%d 标题跳级（%s→%s）" % (nm, i, "#" * _prev, "#" * _lv))
+                _prev = _lv
+            if l != l.rstrip():
+                doc_fail.append("%s:%d 行尾有多余空白" % (nm, i))
+        if _fence % 2:
+            doc_fail.append("%s 代码块未闭合（``` 出现 %d 次）" % (nm, _fence))
+        with open(os.path.join(root, nm.replace("/", os.sep)), "rb") as _fh:
+            if not _fh.read().endswith(b"\n"):
+                doc_fail.append("%s 末尾没有换行" % nm)
+
+    # 17i 文档自称的数字必须与实际一致 —— 外移/增删内容后最容易过期的一类。
+    #     只按**具体句式**精确核对，不用「N 条」这类粗匹配（那会把反模式条数套到清单上）。
+    import json as _json
+    _txt = {k: "\n".join(v) for k, v in docs.items()}
+    _real = {
+        "faq": len(re.findall(r"^\*\*Q：", _txt.get("references/faq.md", ""), re.M)),
+        "ck": len(re.findall(r"- \[ \]", _txt.get("references/checklist.md", ""))),
+        "ap": len(re.findall(r"^### ", _txt.get("references/anti-patterns.md", ""), re.M)),
+    }
+    with open(os.path.join(root, "test-prompts.json"), "r", encoding="utf-8") as _fh:
+        _real["tp"] = len(_json.loads(_fh.read()))
+    _sk_txt = _txt.get("SKILL.md", "")
+    _rm_txt = _txt.get("README.md", "")
+    _claims = []
+    for _m in re.finditer(r"\*\*(\d+)\s*条\*\*高频问题", _sk_txt):
+        _claims.append(("SKILL §八 FAQ 条数", int(_m.group(1)), _real["faq"]))
+    for _m in re.finditer(r"faq\.md\s+#\s*(\d+)\s*条", _rm_txt):
+        _claims.append(("README 的 FAQ 条数", int(_m.group(1)), _real["faq"]))
+    for _m in re.finditer(r"\*\*(\d+)\s*项\*\*清单", _sk_txt):
+        _claims.append(("SKILL §九 清单项数", int(_m.group(1)), _real["ck"]))
+    for _m in re.finditer(r"checklist\.md\s+#\s*(\d+)\s*项", _rm_txt):
+        _claims.append(("README 的清单项数", int(_m.group(1)), _real["ck"]))
+    for _m in re.finditer(r"anti-patterns\.md\s+#\s*(\d+)\s*条", _rm_txt):
+        _claims.append(("README 的反模式条数", int(_m.group(1)), _real["ap"]))
+    for _m in re.finditer(r"test-prompts\.json\s+#\s*(\d+)\s*条", _rm_txt):
+        _claims.append(("README 的 prompt 条数", int(_m.group(1)), _real["tp"]))
+    for _lab, _got, _exp in _claims:
+        if _got != _exp:
+            doc_fail.append("自称数字不符：%s 写 %d，实际 %d" % (_lab, _got, _exp))
+    _m = re.search(r"\*\*(\d+)\s*项\*\*清单（改已有文件\s*(\d+)\s*项\s*\+\s*新建文件\s*(\d+)\s*项）", _sk_txt)
+    if _m:
+        _grp, _g = {}, None
+        for _l in _txt.get("references/checklist.md", "").split("\n"):
+            if _l.startswith("## "):
+                _g = _l[3:].strip()
+                _grp[_g] = 0
+            elif _g and re.match(r"^- \[ \]", _l):
+                _grp[_g] += 1
+        _new = sum(v for k, v in _grp.items() if "新建" in k)
+        _old = sum(_grp.values()) - _new
+        if _old != int(_m.group(2)) or _new != int(_m.group(3)):
+            doc_fail.append("清单拆分不符：写「%s + %s」，实际「%d + %d」"
+                            % (_m.group(2), _m.group(3), _old, _new))
+    with open(os.path.join(HERE, "xwl.py"), "r", encoding="utf-8") as _fh:
+        _subs = set(re.findall(r'sub\.add_parser\(\s*"([a-z]+)"', _fh.read()))
+    _tbl = set(re.findall(r"^\|\s*`([a-z]+)\s", _sk_txt, re.M))
+    if _subs - _tbl:
+        doc_fail.append("SKILL 工具表没覆盖这些子命令：%s" % sorted(_subs - _tbl))
+
+    # 17j 索引与节号：中文节号（`§五` / `§7`）可解析 + 导航表目标存在 +
+    #     references 无孤儿/悬空 + README 目录树里的文件都在磁盘上。
+    def _has_sec(relp, key):
+        for _l in docs.get(relp, []):
+            if re.match(r"^##\s*" + re.escape(key) + r"\s*[、.]", _l):
+                return True
+        return False
+
+    _cn2 = "一二三四五六七八九十"
+    for nm, ls in docs.items():
+        if nm == "CHANGELOG.md":
+            continue
+        for i, l in enumerate(ls, 1):
+            for _m in re.finditer(r"§\s*([" + _cn2 + r"]+|\d+)(?!\s*\.\d)", l):
+                _near = list(_fn.finditer(l[: _m.start()]))
+                _tg = None
+                if _near:
+                    _c = [k for k, v in _base.items() if v == _near[-1].group(1)]
+                    if _c:
+                        _tg = _c[0]
+                elif nm.startswith("references/") and "SKILL.md" in l:
+                    _tg = "SKILL.md"
+                if _tg is None:
+                    continue      # 「见 §1」这类缩写没有文档名，判不了归属，放过
+                if not _has_sec(_tg, _m.group(1)):
+                    doc_fail.append("%s:%d 引用 §%s，但 %s 没有该编号小节"
+                                    % (nm, i, _m.group(1), _base.get(_tg, _tg)))
+    for i, l in enumerate(docs.get("SKILL.md", []), 1):
+        _m = re.match(r"^\|\s*[^|]+\|\s*([^|]+)\|\s*$", l)
+        if not _m:
+            continue
+        for _cm in re.finditer(r"第\s*([" + _cn2 + r"]+)\s*章", _m.group(1)):
+            if not _has_sec("SKILL.md", _cm.group(1)):
+                doc_fail.append("SKILL.md:%d 导航表指向「第%s章」，但没有这一章" % (i, _cm.group(1)))
+        for _fm in re.finditer(r"references/([a-z0-9-]+\.md)", _m.group(1)):
+            if not os.path.exists(os.path.join(root, "references", _fm.group(1))):
+                doc_fail.append("SKILL.md:%d 导航表指向 %s，但文件不存在" % (i, _fm.group(1)))
+    _listed = set(re.findall(r"references/([a-z0-9-]+\.md)", _sk_txt))
+    _on_disk = set(f for f in os.listdir(os.path.join(root, "references")) if f.endswith(".md"))
+    if _on_disk - _listed:
+        doc_fail.append("references 里有 SKILL.md 从未提到的文件（孤儿）：%s" % sorted(_on_disk - _listed))
+    if _listed - _on_disk:
+        doc_fail.append("SKILL.md 提到的 references 文件不存在：%s" % sorted(_listed - _on_disk))
+    # 17j-2 「N 份参考材料」的 N、清单条数、磁盘文件数 三者必须相等。
+    #   曾漏过一次：写「五份」只列 5 条，而磁盘上已经有 8 个 —— 读者会以为只有五份。
+    _cn_map = {c: i + 1 for i, c in enumerate(_cn2)}
+    _sks = _sk_txt.split("\n")
+    for _i, _l in enumerate(_sks):
+        _m = re.search(r"([一二三四五六七八九十]+|\d+)\s*份参考材料", _l)
+        if not _m:
+            continue
+        _raw = _m.group(1)
+        _n = _cn_map.get(_raw) or (int(_raw) if _raw.isdigit() else -1)
+        _cnt = 0
+        for _j in range(_i + 1, len(_sks)):
+            _s = _sks[_j]
+            if _s.startswith("- [`references/"):
+                _cnt += 1
+            elif _s.strip() and not _s.startswith(("- ", " ", ">")):
+                break
+        if _n != _cnt or _cnt != len(_on_disk):
+            doc_fail.append("SKILL.md 的「%s 份参考材料」与清单 %d 条 / 磁盘 %d 个不一致"
+                            % (_raw, _cnt, len(_on_disk)))
+        break
+    _tree = re.findall(r"[├└]──\s+([A-Za-z0-9_.\-]+\.(?:md|py|json))", _rm_txt)
+    _disk = set()
+    for _r, _dn, _fs in os.walk(root):
+        if ".git" in _r or "__pycache__" in _r:
+            continue
+        for _x in _fs:
+            _disk.add(_x)
+            _disk.add(os.path.relpath(os.path.join(_r, _x), root).replace(os.sep, "/"))
+    _ghost = [x for x in _tree if x not in _disk]
+    if _ghost:
+        doc_fail.append("README 目录树列了磁盘上没有的文件：%s" % _ghost)
+
     if doc_fail:
         failures.extend(doc_fail[:12])
     else:
-        print("[ok]  文档守卫：emoji 未入标题 / README↔SKILL 无重复表格 / 编号引用可解析 / "
-              "本地链接都存在 / 无业务路径残留")
+        print("[ok]  文档守卫：emoji 未入标题 / 任意两文档间无重复表格 / 编号·章·步·节号引用可解析（含跨文件）/ "
+              "链接存在 / 外移点两侧都在 / 格式五项（表格·跳级·代码块·行尾·末尾）/ 自称数字一致 / "
+              "导航表与目录索引一致 / **「N 份参考材料」清单完整** / 无业务路径残留 / 反模式有入口")
 
     # ---- 18. SKILL.md 必须声明平台边界、调用入口与规模约束 ----
     # 起因：SkillHub TRACE 评测的 adaptability 维给了这两个子项低分 ——
@@ -859,6 +1116,10 @@ def main() -> int:
         failures.extend(b_fail)
     else:
         print("[ok]  SKILL.md 声明了平台边界、调用入口与规模约束")
+
+
+def _check_platform(tmp, node, failures, write) -> None:
+    """node_check_many 等价性 + folders 给目录须报错 + 非 UTF-8 控制台 + 跨盘符 relpath（第 19~22 组）"""
 
     # ---- 19. node_check_many 必须与逐段 node_check 等价（性能优化不许改变结论）----
     # 背景：把逐段 `node --check` 改成一次进程批量校验，486 KB 页面的 check 从 63 s 降到 1 s。
@@ -986,6 +1247,92 @@ def main() -> int:
         failures.extend(rp_fail)
     else:
         print("[ok]  跨盘符 relpath 抛错时 folders 不崩（safe_relpath 兜底，Windows CI 实测场景）")
+
+
+
+def _check_write_failures(tmp, node, failures, write) -> None:
+    """写盘失败必须给可读 [FAIL] + 退出码 2，不得冒 Python traceback（第 23 组）。
+
+    起因：`write_text()` 原先没兜 `OSError` —— 目标只读 / 父目录不存在 / 路径过长
+    都会抛 traceback，而 SKILL.md 4.1 承诺的是「前置条件不满足 → rc=2 + 提示」。
+    实测 5 个子命令 9 个场景中招，而当时的 64 项断言**一条都没覆盖写失败**。
+    所以这里用子进程跑真实 CLI，逐一确认「不冒 traceback + rc=2 + 有 [FAIL]」。
+    """
+    print("[23] 写失败路径不得冒 traceback")
+    xwl_py = os.path.join(os.path.dirname(os.path.abspath(__file__)), "xwl.py")
+    ro = write("wf_ro.xwl", VALID)
+    ops_p = os.path.join(tmp, "wf_ops.json")
+    with open(ops_p, "w", encoding="utf-8", newline="") as fh:
+        fh.write('[{"op": "set", "path": ["title"], "value": "x"}]')
+    fdir = os.path.join(tmp, "wf_fld")
+    os.makedirs(fdir, exist_ok=True)
+    fpage = os.path.join(fdir, "p.xwl")
+    with open(fpage, "w", encoding="utf-8", newline="") as fh:
+        fh.write(VALID)
+    fj = os.path.join(fdir, "folder.json")
+    with open(fj, "w", encoding="utf-8", newline="") as fh:
+        fh.write('{"hidden":false,"index":[],"title":"t","iconCls":""}')
+    nodir = os.path.join(tmp, "wf_nodir")
+
+    def _cli(argv):
+        pr = subprocess.run([sys.executable, xwl_py] + argv, capture_output=True,
+                            text=True, encoding="utf-8", errors="replace", timeout=180)
+        return pr.returncode, (pr.stdout or "") + (pr.stderr or "")
+
+    wf: list[str] = []
+    try:
+        os.chmod(ro, 0o444)
+        os.chmod(fj, 0o444)
+        for label, argv in (
+            ("patch → 目标只读", ["patch", ro, "--ops", ops_p]),
+            ("expand --out → 目录不存在",
+             ["expand", ro, "--out", os.path.join(nodir, "o.xwl")]),
+            ("new → 父目录不存在", ["new", os.path.join(nodir, "a.xwl"), "--kind", "page"]),
+            ("folders --register → folder.json 只读", ["folders", fpage, "--register"]),
+        ):
+            rc, out = _cli(argv)
+            if "Traceback" in out:
+                wf.append("%s：抛了 Python traceback（应给 [FAIL] + rc=2）" % label)
+            elif rc != 2:
+                wf.append("%s：退出码 %d（应为 2）" % (label, rc))
+            elif "[FAIL]" not in out:
+                wf.append("%s：没有 [FAIL] 提示" % label)
+    finally:
+        for f in (ro, fj):
+            try:
+                os.chmod(f, 0o666)
+            except OSError:
+                pass
+
+    if wf:
+        failures.extend(wf)
+    else:
+        print("[ok]  写失败给可读 [FAIL] + rc=2，不冒 traceback"
+              "（patch / expand / new / folders 四类）")
+
+def main() -> int:
+    xwl.ensure_utf8_stdio()     # 输出全是中文；Windows 控制台默认非 UTF-8 会直接 UnicodeEncodeError
+    tmp = tempfile.mkdtemp(prefix="xwl_selftest_")
+    node = xwl.find_node()
+    print(f"node: {node or '(未找到，跳过事件 JS 校验)'}")
+    failures: list[str] = []
+
+    def write(name: str, text: str, bom: bool = False) -> str:
+        p = os.path.join(tmp, name)
+        with open(p, "wb") as f:
+            if bom:
+                f.write(b"\xef\xbb\xbf")
+            f.write(text.encode("utf-8"))
+        return p
+
+    _check_basics(tmp, node, failures, write)
+    _check_params_paths(tmp, node, failures, write)
+    _check_itemids(tmp, node, failures, write)
+    _check_subcommands(tmp, node, failures, write)
+    _check_docs(tmp, node, failures, write)
+    _check_platform(tmp, node, failures, write)
+    _check_write_failures(tmp, node, failures, write)
+
 
     print()
     if failures:

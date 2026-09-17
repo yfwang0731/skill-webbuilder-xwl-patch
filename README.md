@@ -106,9 +106,11 @@ webbuilder-xwl-patch/
 ├── test-prompts.json         # 10 条典型 prompt（供 skill 评估用）
 ├── references/
 │   ├── walkthrough.md        # 手把手实操：从零造页面 + SQL 载体，一步一命令一预期
-│   ├── faq.md                # 14 条常见问题与排错（出问题第一站）
+│   ├── anti-patterns.md      # 20 条反模式：看起来对、实际有害的做法（动手前扫）
+│   ├── faq.md                # 15 条常见问题与排错（出问题第一站）
 │   ├── checklist.md          # 29 项改完自检清单（交活前过一遍）
 │   ├── controls.md           # 控件清单：有哪些 / 干什么 / 该挂哪里 / 怎么选
+│   ├── js-api.md             # 事件 JS 四条引用通路：写法 / 回传处理 / 回调签名
 │   ├── sql-fragments.md      # SQL 片段：两级结构、字段全集、{#…#} 引用、页面传参两条通路
 │   └── measured-data.md      # 实测数据：引用次数 / 传参分布 / 各频次与统计口径
 └── scripts/
