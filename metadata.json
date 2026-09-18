@@ -1,0 +1,79 @@
+{
+  "name": "webbuilder-xwl-patch",
+  "name_en": "webbuilder-xwl-patch",
+  "version": "1.3.0",
+  "schema_version": "1.0",
+  "description": "WebBuilder（wb）平台 .xwl 定义文件的处理与安全编辑：结构级 patch（只给值/子树，工具按设计器算法重建整份文件）+ 七项格式校验 + 相对 git 基线的压平检测。",
+  "core_capabilities": [
+    "结构级 patch 编辑（不碰文本层，格式错误在构造上不会发生）",
+    "check 七项校验（BOM / 换行一致 / 续行空白 / 加载器等价解析 / 末行结构 / 事件 JS 语法 / itemId 重名分级）",
+    "从零新建页面与 SQL 载体（内置设计器真实键序骨架）",
+    "itemId 重名分级报告（候选清单 + 建议改名）",
+    "SQL 片段自洽核对与页面传参链路核对（sqlrefs / params）",
+    "diffguard：相对 git 基线检测「多行内容被压平」"
+  ],
+  "trace_dimensions": {
+    "T": { "name": "Trust", "name_cn": "可信任度", "core_question": "用着放心吗？" },
+    "R": { "name": "Reliability", "name_cn": "可靠性", "core_question": "每次都稳吗？" },
+    "A": { "name": "Adaptability", "name_cn": "适用性", "core_question": "该出手时出得来吗？" },
+    "C": { "name": "Convention", "name_cn": "规范性", "core_question": "写得清楚、改得动吗？" },
+    "E": { "name": "Effectiveness", "name_cn": "有效性", "core_question": "最终交付的结果好用吗？" }
+  },
+  "input_schema": {
+    "type": "object",
+    "properties": {
+      "file": { "type": "string", "description": "目标 .xwl 路径（或目录）" },
+      "ops": { "type": "string", "description": "patch 用的 ops.json 路径" }
+    }
+  },
+  "output_schema": {
+    "type": "object",
+    "properties": {
+      "status": { "type": "string", "enum": ["ok", "fail"] },
+      "exit_code": { "type": "integer", "description": "0 成功 / 1 检查未通过 / 2 用法或前置条件不满足" },
+      "marks": { "type": "string", "description": "行首标记：[ok] / [FAIL] / [warn]（不阻塞）/ [note]" }
+    }
+  },
+  "error_handling": {
+    "strategy": "统一 [ok]/[FAIL]/[warn]/[note] 分级；退出码 0/1/2；写盘失败与编码失败一律转可读 [FAIL] + rc=2，不冒 Python traceback",
+    "degradation": [
+      "找不到 node → 事件 JS 语法校验降级为提示，不阻塞",
+      "不是 git 仓库 / 文件不在基线里 → diffguard 以 [note] 跳过",
+      "非 UTF-8 文本 → 明确报错并说明修法，不猜编码"
+    ]
+  },
+  "retry": {
+    "max_attempts": 1,
+    "note": "纯本地离线工具，无网络调用与外部服务依赖，故不设重试；失败即给出可读原因与回退指引（--backup 的 .bak / git checkout --）"
+  },
+  "security_checks": {
+    "network": "无任何网络请求（diffguard 仅调用本地 git show）",
+    "file_ops": "只读写用户显式指定的 .xwl 与 folder.json，不遍历、不批量删除",
+    "secrets": "不读取、不打印任何凭据"
+  },
+  "applicable_scenarios": [
+    "改 wb/modules 下的页面 .xwl（加删控件、挂改事件、改配置、改网格列）",
+    "改被 store 引用的 SQL 片段 .xwl",
+    "从零新建页面或 SQL 载体",
+    "排查 xwl 加载报解析错误、页面白屏、app.X 取不到值",
+    "提交前确认没人把多行内容悄悄压平"
+  ],
+  "limitations": [
+    "仅 WebBuilder（wb）平台的 .xwl；其他低代码平台页面定义、.vue、普通 .json 不适用",
+    "不含后端 Java、模块打包、target/ 部署副本同步、数据库菜单注册（WB_MENU）",
+    "diffguard 需要 git 仓库；压平同时改内容且增量不足时不报，仍需 git diff 复核"
+  ],
+  "references": [
+    "references/walkthrough.md",
+    "references/anti-patterns.md",
+    "references/faq.md",
+    "references/checklist.md",
+    "references/controls.md",
+    "references/js-api.md",
+    "references/sql-fragments.md",
+    "references/measured-data.md"
+  ],
+  "update_history": [
+    { "version": "1.3.0", "date": "2026-09-18", "summary": "新增 diffguard（相对 git 基线检测压平）" }
+  ]
+}

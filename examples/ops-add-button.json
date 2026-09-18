@@ -1,0 +1,13 @@
+[
+  {"op": "append",
+   "path": ["children", 0, "children"],
+   "value": {
+     "configs": {"itemId": "queryBtn", "text": "查询", "iconCls": "query_icon"},
+     "expanded": false,
+     "children": [],
+     "type": "button",
+     "events": {
+       "click": "var rec = app.demoGrid.getSelection()[0];\nif (!rec) {\n  Wb.info('请先选择一条记录');\n  return;\n}\nWb.info('已选：' + rec.data.ID);"
+     }
+   }}
+]

@@ -4,12 +4,13 @@
 
 设计目标：把「安全编辑 + 格式校验」从"凭记忆手工做"固化成可复跑的命令。
 
-子命令（14 个）：
+子命令（15 个）：
   check   <file...>                              七项校验：格式五项 + 事件 JS 语法 + itemId 重名分级
   new     <out.xwl> [--kind page|sql]            **从零生成** xwl（内置设计器骨架）
   patch   <file> --ops ops.json                  结构级编辑（改对象 → 按设计器规则重建）
   edit    <file> --old-file O --new-file N       文本级安全替换（锚点按目标换行归一、断言出现次数、拍平多行时警示）
   expand  <file> [--safe]                        单行源 → 设计器同款多行（写盘前语义等价比对）
+  diffguard <path...> [--strict]                 相对 git 基线检测「多行内容被压平」（check 查不出的那类）
   paths   <file>                                 列出 sql / serverScript / url 等字段位置
   params  <page.xwl>                             核对「页面 → store → SQL」的传参链路
   itemids <file>                                 itemId 重名报告（分级 + 候选清单 + 建议改名）
@@ -40,6 +41,12 @@ import tempfile
 
 BOM = b"\xef\xbb\xbf"
 CRLF = "\r\n"
+# 任意一种换行（加载器接受三种：`\r\n` / `\r` / `\n`）。
+# **切行必须用它，不能用 `text.split(CRLF)`** —— 后者在纯 LF 文件上切不出行
+# （整份文件成一个元素），会让逐行检查静默退化成"只看最后一行"。
+# 纯 LF 恰恰是设计器原样、仓库存的格式、`new` 的默认产出；
+# 样本工程 2780 个 xwl 里 LF **恰好是 0 个**，所以这条长期没被测到。
+ANY_EOL_RE = re.compile(r"\r\n|\r|\n")
 
 
 def ensure_utf8_stdio() -> None:
@@ -114,6 +121,10 @@ def _write_file(path: str, data, binary: bool = False) -> None:
     `FileNotFoundError` / 路径过长…），使用者看到的会是一段 Python traceback。
     而"目标只读 / 父目录不存在"属于**前置条件不满足**，该给可读提示 + 退出码 2。
     兜在这一层，等于 6 个写盘调用点全部兜住。
+
+    `UnicodeError` 一并兜：它**不是** `OSError` 的子类，所以原来漏在外面。
+    正常路径下 `_quote` 已把孤立代理项转义掉，这里是第二道防线
+    （写盘出口不该有任何一类"裸异常"漏出去）。
     """
     try:
         if binary:
@@ -122,8 +133,9 @@ def _write_file(path: str, data, binary: bool = False) -> None:
         else:
             with open(path, "w", encoding="utf-8", newline="") as f:
                 f.write(data)
-    except OSError as exc:
-        raise XwlWriteError(f"无法写入 {path}：{exc.strerror or exc}") from None
+    except (OSError, UnicodeError) as exc:
+        # UnicodeError 没有 .strerror，所以用 getattr 取
+        raise XwlWriteError(f"无法写入 {path}：{getattr(exc, 'strerror', None) or exc}") from None
 
 
 def write_text(path: str, text: str) -> None:
@@ -157,6 +169,20 @@ CONT_RE = re.compile(r"\\(?:\r\n|\r|\n)")
 def count_cont(text: str) -> int:
     """数片段里「续行符」的个数 —— 用于识别「把多行拍平」这种静默语义损坏。"""
     return len(CONT_RE.findall(text))
+
+
+def _byte_len(s: str) -> int:
+    """字符串落盘后的字节数（**只用于打印进度**）。
+
+    为什么不能直接 `len(s.encode("utf-8"))`：值里若含孤立代理项会抛
+    UnicodeEncodeError —— 而"打印一行进度"绝不该是崩溃点。实测这在
+    `patch` 的半途（已打印 `[ok] 已应用 N 个 op`、还没写盘）就把进程打崩，
+    退出码 1、并附一段 Python traceback。这里兜住：代理项按 WTF-8 的 3 字节计。
+    """
+    try:
+        return len(s.encode("utf-8"))
+    except UnicodeEncodeError:
+        return len(s.encode("utf-8", "surrogatepass"))
 
 
 # --------------------------------------------------------------------------- #
@@ -200,10 +226,11 @@ _CTRL = {"\b": "\\b", "\f": "\\f", "\n": "\\n", "\r": "\\r", "\t": "\\t"}
 def _quote(s: str) -> str:
     """复刻 org.json 的 quote。
 
-    三条容易被忽略的规则：
+    四条容易被忽略的规则：
       1. 只转义 `"`、`\\` 与 <0x20 的控制符；**非 ASCII 原样保留**（中文不转成 \\uXXXX）。
       2. `</`（斜杠紧跟左尖括号之后）会写成 `\\/` —— org.json 防 `</script>` 的经典行为。
       3. 其余 `/` 不转义。
+      4. **孤立代理项（U+D800–U+DFFF）转成 `\\uXXXX`**（见下方注释）。
     """
     out = ['"']
     prev = ""
@@ -214,7 +241,12 @@ def _quote(s: str) -> str:
             out.append("\\/" if prev == "<" else "/")
         elif ch in _CTRL:
             out.append(_CTRL[ch])
-        elif ord(ch) < 0x20:
+        elif ord(ch) < 0x20 or 0xD800 <= ord(ch) <= 0xDFFF:
+            # 孤立代理项：Python 3 的 str 里 astral 字符（如 emoji）**就是一个字符**，
+            # 不会拆成代理对 ⇒ 值里出现 U+D800–U+DFFF 必然是**未配对**的。
+            # 原样输出的话任何 .encode("utf-8") 都会抛 UnicodeEncodeError；
+            # 实测 `patch` 会在打印字节数时就冒 traceback（rc=1，违反 4.1 的承诺）。
+            # 转义成 \uXXXX 后：JSON 合法、能被加载器原样读回、语义等价比对仍成立。
             out.append("\\u%04x" % ord(ch))
         else:
             out.append(ch)
@@ -569,15 +601,18 @@ def cmd_check(args) -> int:
             errors.append(f"② 存在 {bare_cr} 处裸 CR（单独的 CR 不是合法换行）")
 
         notes: list[str] = []
-        if n_crlf == 0 and n_lf == 0 and text.strip():
+        # 「单行形态」的判据必须是**任何换行都没有**。原判据只看 `\n` / `\r\n`，
+        # 于是纯 CR 文件会同时得到「存在 N 处裸 CR」的 FAIL 和「无任何换行」的 note
+        # —— 自相矛盾（实测）。
+        if not n_crlf and not n_lf and not n_cr and text.strip():
             notes.append(
                 "该文件是单行形态（无任何换行）。可用 `xwl.py expand` 转成规范多行；"
                 "**不要**把多行文件改成单行。"
             )
-        elif n_crlf == 0 and n_lf:
+        elif not n_crlf and n_lf:
             notes.append("该文件是 LF 换行（设计器/仓库的原始形态），合法。")
 
-        lines = text.split(CRLF)
+        lines = ANY_EOL_RE.split(text)
 
         # ③ 反斜杠 + 空白
         bad_ws = [i + 1 for i, ln in enumerate(lines) if re.search(r"\\[ \t]+$", ln)]
@@ -750,10 +785,18 @@ def cmd_expand(args) -> int:
         eol = CRLF if text.count(CRLF) else "\n"
     else:
         eol = "\n" if args.eol == "lf" else CRLF
+    if args.indent != 1:
+        print(f"[warn] --indent {args.indent} ≠ 设计器缩进（1 个空格）：产出与设计器不一致，"
+              f"设计器下次保存会产生整份 diff。除非在做排版复刻实验，否则用默认值")
 
     out = dumps_designer(obj, args.indent, eol, safe=args.safe)
-    print(f"原文件: {len(text.encode('utf-8'))} B, CRLF={text.count(CRLF)}, LF={text.count(chr(10))}")
-    print(f"规范化后: {len(out.encode('utf-8'))} B, 换行={'CRLF' if eol == CRLF else 'LF'}"
+    # 换行统计要和 `check` 的 ② 用**同一口径**：`n_lf - n_crlf` 才是"裸 LF"个数。
+    # 原先这里打的是 `LF=text.count("\n")`，那会把 CRLF 里的 `\n` 也算进去 ——
+    # 一份纯 CRLF 文件会显示成「CRLF=17101, LF=17101」，读者极易误读成"混用了"。
+    n_crlf = text.count(CRLF)
+    print(f"原文件: {_byte_len(text)} B, CRLF={n_crlf}, "
+          f"裸LF={text.count(chr(10)) - n_crlf}, 裸CR={text.count(chr(13)) - n_crlf}")
+    print(f"规范化后: {_byte_len(out)} B, 换行={'CRLF' if eol == CRLF else 'LF'}"
           f"{', 安全模式(--safe)' if args.safe else ''}")
 
     # 语义等价比对（必须过，否则不写）
@@ -1489,8 +1532,25 @@ def cmd_patch(args) -> int:
     eol = (CRLF if text.count(CRLF) else "\n") if args.eol == "auto" else ("\n" if args.eol == "lf" else CRLF)
 
     canonical = text == dumps_designer(obj, args.indent, eol)
-    print(f"源文件: {len(text.encode('utf-8'))} B | 换行={'CRLF' if eol == CRLF else 'LF'} | "
+    n_crlf, n_lf = text.count(CRLF), text.count("\n") - text.count(CRLF)
+    eol_note = ""
+    if args.eol == "auto" and not n_crlf and not n_lf:
+        # 「源连一个换行符都没有」时 auto 无从沿用 → 回退 LF（与 expand 同一条规则）。
+        # 这类文件（紧凑单行源）在 CRLF 工作区里跑完 patch 会变成 LF 文件，必须说清楚。
+        eol_note = "（源无换行符，auto 回退 LF）"
+    print(f"源文件: {_byte_len(text)} B | 换行={'CRLF' if eol == CRLF else 'LF'}{eol_note} | "
           f"是否设计器原样排版: {'是（重排后与原文逐字节一致，diff 只含本次改动）' if canonical else '否（重排会顺带规整格式）'}")
+    if n_crlf and n_lf:
+        # 与 `edit` 对齐：混用换行在源文件里是既有的格式问题，patch 会**静默统一**成一种，
+        # 所以这里必须报出来（否则用户只能靠 diff 发现换行被动了）。
+        print(f"[warn] 源文件换行混用（{n_crlf} 个 CRLF + {n_lf} 个 LF，见 `check` 第 ② 项）："
+              f"重排后整份统一为 {'CRLF' if eol == CRLF else 'LF'}，diff 会含换行差异")
+    if args.indent != 1:
+        print(f"[warn] --indent {args.indent} ≠ 设计器缩进（1 个空格）：产出与设计器不一致，"
+              f"设计器下次保存会产生整份 diff。除非在做排版复刻实验，否则用默认值")
+    if not canonical and not text.count("\n"):
+        print("[warn] 源是紧凑单行形态：重排会把它整份展开成多行（diff 是**整个文件**）。"
+              "要把改动压到最小，改用 `edit` 做定点插入")
 
     try:
         with open(args.ops, "r", encoding="utf-8") as f:
@@ -1521,8 +1581,8 @@ def cmd_patch(args) -> int:
     except Exception as exc:  # noqa: BLE001
         print(f"[FAIL] 重建结果无法解析，已中止: {exc}")
         return 2
-    print(f"[ok]   语义等价比对通过 | 变更后 {len(out.encode('utf-8'))} B "
-          f"({len(out.encode('utf-8')) - len(text.encode('utf-8')):+d})")
+    print(f"[ok]   语义等价比对通过 | 变更后 {_byte_len(out)} B "
+          f"({_byte_len(out) - _byte_len(text):+d})")
 
     if args.dry_run:
         import difflib
@@ -1881,7 +1941,7 @@ def cmd_new(args) -> int:
         print("       缺这些键的文件 `check` 也是 ALL OK（只查格式），但设计器/框架行为会不一致。")
     if extra:
         print(f"[note] 保留了非标准顶层键（原样追加在末尾）：{extra}")
-    print(f"[ok]   语义等价比对通过 | {len(out.encode('utf-8'))} B | 换行={eol_name}")
+    print(f"[ok]   语义等价比对通过 | {_byte_len(out)} B | 换行={eol_name}")
 
     if args.dry_run:
         print("\n--- 将写入的内容 ---")
@@ -2055,6 +2115,270 @@ def cmd_folders(args) -> int:
         print(f"\n登记：xwl.py folders {safe_relpath(target)} --register {os.path.basename(target)}")
     if n_unreg:
         print("\n> index 里带 `.xwl` 的是文件、不带后缀的是子目录；顺序 = 导航树显示顺序。")
+    return 0
+
+
+# --------------------------------------------------------------------------- #
+# diffguard（相对 git 基线，检测「多行内容被压平」这种静默语义损坏）
+# --------------------------------------------------------------------------- #
+# 为什么需要它：SKILL.md 2.3 承认——把「反斜杠 + 换行」直接删掉（"合并行"）之后，
+# 文件**依然是合法 JSON**、`check` 七项全绿、`node --check` 也可能返回 0，
+# 唯一的发现手段是人工 `git diff`。这是本工具唯一"没有自动化防线"的损坏类型。
+#
+# 判据为什么是**两个条件**而不是"续行符变少"：
+#   · 合法地删掉一段多行 JS / 删一个控件，续行符**也会**净减少 —— 只看数量必然误报；
+#   · 压平的真正指纹是「**原来好几行的内容挤进了同一行**」⇒ **最长行长度暴增**。
+#   两者同时成立才判疑似。实测对照：压平 → 最长行 96 → 412（+316，3.3 倍）；
+#   而"删掉一段多行 JS" → 续行符减少但最长行长度基本不变 ⇒ 不报。
+_FLAT_RATIO = 1.5      # 最长行至少变成原来的 1.5 倍
+_FLAT_DELTA = 40       # 且绝对增量至少 40 字符（避免短行上比值虚高）
+
+
+def _merged_line_hits(head_text: str, wd_text: str) -> list:
+    """精确判据：找出「基线里**连续多行**被拼成了工作区的某一行」的位置。
+
+    这是"压平"的**定义本身** —— 压平就是删掉「续行符 + 换行」，
+    于是基线里 `line_i\\` `line_{i+1}\\` … `line_j` 会原样变成工作区的一条物理行：
+        工作区该行 == (line_i 去掉续行符) + (line_{i+1} 去掉续行符) + … + line_j
+
+    返回 [(起始行号, 结束行号, 工作区行号, 该行开头), …]（行号均 1-based）。
+
+    为什么不能只用「最长行长度」当指纹（这是本函数存在的理由，实测两个漏报面）：
+      · 被压平的内容若**短于文件里已有的最长行** ⇒ 最长行纹丝不动 ⇒ 完全看不见
+        （实测：3 行短 JS 压平，续行符 2→0，最长行 62→62，旧判据不报）；
+      · 压平增量 < 最长行 × 0.5 ⇒ 被 ratio 门槛吃掉
+        （实测：文件已有 205 字符长行时并入 3 行，205→217，旧判据不报）。
+
+    为什么不会误报「合法删减」与「单行改长」：
+      · 起点必须是**以续行符结尾**的行（只有多行字符串内部的续行才长这样，
+        JSON 结构行永远不会）；
+      · 必须**至少跨过一条续行**（拼接 ≥2 行）才判；
+      · 拼接结果必须与工作区的**某条物理行逐字相同** —— 删行会少内容、单行改长会多内容，
+        两者都拼不出这条等式。
+    """
+    hl = ANY_EOL_RE.split(head_text)
+    wl = ANY_EOL_RE.split(wd_text)
+    if not hl or not wl:
+        return []
+    wset = set(wl)
+    wset_r = {l.rstrip() for l in wl}
+    wpos = {}
+    for k, l in enumerate(wl, 1):
+        wpos.setdefault(l, k)
+    max_w = max((len(l) for l in wl), default=0)
+
+    hits = []
+    n = len(hl)
+    for i in range(n - 1, -1, -1):          # 倒序：便于"跳过已合并组"的剪枝
+        if not hl[i].endswith("\\"):
+            continue                        # 起点必须是续行（字符串内部）
+        acc = hl[i][:-1]                    # 去掉续行符
+        for j in range(i + 1, n):
+            acc += hl[j][:-1] if hl[j].endswith("\\") else hl[j]
+            if len(acc) > max_w:
+                break                       # 工作区不可能有这么长的行
+            key = acc if acc in wset else (acc.rstrip() if acc.rstrip() in wset_r else None)
+            if key is not None:
+                hits.append((i + 1, j + 1, wpos.get(acc, wpos.get(acc.rstrip(), 0)),
+                             acc[:70]))
+                break
+            if not hl[j].endswith("\\"):
+                break                       # 组到头了（这一行没有续行符）
+    return hits
+
+
+def _norm_lf(text: str) -> str:
+    """换行归一成 LF —— 只用于"两侧是否同一份内容"的比较。
+
+    必须归一：git index 存 LF、工作区可能是 CRLF（`core.autocrlf`），
+    不归一会把"仅仅换了行尾"误报成"内容变了"。
+    """
+    return text.replace("\r\n", "\n").replace("\r", "\n")
+
+
+def _longest_line(text: str) -> tuple:
+    """返回 (最长行的长度, 该行的 1-based 行号)。"""
+    best, best_no = 0, 0
+    for i, ln in enumerate(ANY_EOL_RE.split(text), 1):
+        if len(ln) > best:
+            best, best_no = len(ln), i
+    return best, best_no
+
+
+def _git_toplevel(cwd: str):
+    """返回仓库根目录；不在仓库 / 调不到 git 都返回 None（不抛）。"""
+    try:
+        p = subprocess.run(["git", "rev-parse", "--show-toplevel"], cwd=cwd,
+                           capture_output=True, timeout=30)
+    except (OSError, subprocess.SubprocessError):
+        return None
+    if p.returncode != 0:
+        return None
+    return p.stdout.decode("utf-8", "replace").strip() or None
+
+
+def _git_show(rev: str, rel: str, cwd: str, top: str):
+    """取 `<rev>:<rel>` 的内容。返回 (ok, bytes|None, 失败原因|None)。
+
+    找不到 git / 不在仓库 / 路径不在该 rev 里 —— 一律转成"跳过并说明"，
+    因为这几件事都不是使用者的用法错误。
+    `--rev` **本身不存在**是例外：那是用法错误，用哨兵 `"BADREV"` 报给调用方转成 rc=2。
+    """
+    if not top:
+        return False, None, "不在 git 仓库里（或调不到 git）"
+    if not rel or rel.startswith(".."):
+        return False, None, "路径不在该仓库内"
+    try:
+        if subprocess.run(["git", "rev-parse", "--verify", "--quiet", rev],
+                          cwd=cwd, capture_output=True, timeout=30).returncode != 0:
+            return False, None, "BADREV"
+        got = subprocess.run(["git", "show", f"{rev}:{rel}"], cwd=cwd,
+                             capture_output=True, timeout=60)
+    except (OSError, subprocess.SubprocessError) as exc:
+        return False, None, f"git show 失败（{type(exc).__name__}）"
+    if got.returncode != 0:
+        return False, None, f"在 `{rev}` 里没有这个文件（新增文件？）"
+    return True, got.stdout, None
+
+
+def _expand_targets(targets: list) -> tuple:
+    """把入参（文件或目录）摊平成 .xwl 文件清单。返回 (files, errors)。"""
+    files: list[str] = []
+    errors: list[str] = []
+    for t in targets:
+        if os.path.isdir(t):
+            for dp, dn, fn in os.walk(t):
+                dn[:] = [d for d in dn if d not in (".git", "__pycache__")]
+                files.extend(os.path.join(dp, f) for f in sorted(fn) if f.endswith(".xwl"))
+        elif os.path.isfile(t):
+            files.append(t)
+        else:
+            errors.append(f"读不到 {t}")
+    return files, errors
+
+
+def cmd_diffguard(args) -> int:
+    """相对 git 基线，检测工作区文件里**多行内容被压平**的迹象。
+
+    它回答的是一个只有 git 才能回答的问题：「这份文件相对上次提交，有没有
+    **悄悄把多行字符串挤成一行**」。这类改动**格式校验查不出**（压平后自洽），
+    所以是 `check` 之外的一道独立防线（见 SKILL.md 2.3）。
+
+    默认只告警（rc=0）；`--strict` 时才把"疑似压平"当成失败（rc=1），供 CI / pre-commit 用。
+    """
+    files, errors = _expand_targets(args.targets)
+    if errors:
+        for e in errors:
+            print(f"[FAIL] {e}")
+        return 2
+    if not files:
+        print(f"[FAIL] 没找到可检查的 .xwl（{len(args.targets)} 个入参里没有文件）")
+        return 2
+
+    n_suspect = n_skip = n_clean = 0
+    for path in files:
+        name = os.path.basename(path)
+        try:
+            wd_text, _bom = decode(path)
+        except (OSError, UnicodeDecodeError) as exc:
+            print(f"=== diffguard: {safe_relpath(path)}")
+            print(f"  [note] 跳过：读不出 UTF-8 文本（{getattr(exc, 'strerror', None) or exc}）")
+            n_skip += 1
+            continue
+
+        cwd = os.path.dirname(os.path.abspath(path)) or "."
+        top = _git_toplevel(cwd)
+        rel = ""
+        if top:
+            try:
+                rel = os.path.relpath(os.path.abspath(path), top).replace(os.sep, "/")
+            except ValueError:      # Windows 跨盘符
+                rel = ""
+        ok, head_bytes, why = _git_show(args.rev, rel, cwd, top)
+
+        print(f"=== diffguard: {safe_relpath(path)}")
+        if why == "BADREV":
+            print(f"[FAIL] 基线 `{args.rev}` 不存在（或不是一个能解析的 revision）")
+            return 2
+        if not ok:
+            print(f"  [note] 跳过：{why} —— 无法与基线 `{args.rev}` 比对")
+            n_skip += 1
+            print("  -> 跳过")
+            continue
+
+        try:
+            head_text = head_bytes.decode("utf-8")
+        except UnicodeDecodeError:
+            print(f"  [note] 跳过：`{args.rev}` 里的版本不是 UTF-8")
+            n_skip += 1
+            print("  -> 跳过")
+            continue
+
+        if _norm_lf(head_text) == _norm_lf(wd_text):
+            print("  [ok]   与基线逐字节一致（忽略行尾差异），无压平迹象")
+            n_clean += 1
+            print("  -> OK")
+            continue
+
+        c_head, c_wd = count_cont(head_text), count_cont(wd_text)
+        m_head, _n1 = _longest_line(head_text)
+        m_wd, line_no = _longest_line(wd_text)
+        n_head = len(ANY_EOL_RE.split(head_text))
+        n_wd = len(ANY_EOL_RE.split(wd_text))
+
+        # 判据一（精确，主判据）：基线里连续多行被拼成了工作区的某一行 —— "压平"的定义本身
+        hits = _merged_line_hits(head_text, wd_text)
+        # 判据二（粗筛，补充）：续行符净减少 **且** 最长行显著变长。
+        # 保留它是因为它能抓到"精确判据拼不出等式"的形态（例如压平**同时**还改了内容）；
+        # 但它单独用会有两个漏报面（见 `_merged_line_hits` 注释），所以只当补充。
+        grew = m_wd >= max(m_head * _FLAT_RATIO, m_head + _FLAT_DELTA)
+        coarse = c_wd < c_head and grew
+        suspect = bool(hits) or coarse
+
+        stat = (f"续行符 {c_head} → {c_wd}（{c_wd - c_head:+d}）| "
+                f"最长行 {m_head} → {m_wd} 字符 | 行数 {n_head} → {n_wd}")
+        if suspect:
+            n_suspect += 1
+            why = "精确命中" if hits else "粗筛命中"
+            print(f"  [warn] 疑似把多行内容压平（{why}）—— {stat}")
+            for a, b, k, head70 in hits[:3]:
+                print(f"         基线第 {a}–{b} 行（{b - a + 1} 行）被合并成工作区第 {k} 行："
+                      f"{head70!r}")
+            if len(hits) > 3:
+                print(f"         （另有 {len(hits) - 3} 处精确命中）")
+            if not hits:
+                print(f"         第 {line_no} 行突然变长，开头是："
+                      f"{wd_text.splitlines()[line_no - 1][:70]!r}")
+            print("         这类改动**格式校验查不出**（压平后仍是合法 JSON）："
+                  "`check` 会全绿、`node --check` 也可能返回 0，但字符串里的换行已经没了。")
+            print(f"         复核：`git diff -w {safe_relpath(path)}`；确认是误改就 "
+                  f"`git checkout -- {safe_relpath(path)}`")
+            print("  -> FAIL" if args.strict else "  -> OK（仅告警；加 `--strict` 可让它阻塞）")
+        else:
+            n_clean += 1
+            print(f"  [ok]   与基线有差异，但无压平迹象 —— {stat}")
+            if c_wd < c_head and not grew:
+                print("         续行符变少而最长行没变长 ⇒ 像是**正常删减**（删多行代码 / 删控件），"
+                      "不是「把多行合并成一行」")
+            print("  -> OK")
+
+    print(f"=== 结果: {'FAIL' if (n_suspect and args.strict) else 'ALL OK'}"
+          f"（疑似压平 {n_suspect} / 无迹象 {n_clean} / 跳过 {n_skip}）")
+    if n_suspect and not args.strict:
+        print("> 有疑似压平项，但默认只告警（rc=0）。要让它阻塞请加 `--strict`。")
+    # 退出码优先级（`--strict` 下）：**可疑压平 > 跳过**
+    #   理由：可疑压平是"真的可能改坏了"，而跳过只是"这个文件比不了"；
+    #   若让跳过优先，任何一次带新增文件的提交都会让 CI 直接红，`--strict` 就没法用在 CI 里了。
+    #   只有"一个文件都没比成"时才算前置条件不满足（rc=2）。
+    if n_suspect and args.strict:
+        return 1
+    if n_skip and args.strict and not (n_clean + n_suspect):
+        print("[FAIL] --strict 下至少要有一个文件能比对：本次全部跳过（"
+              f"{n_skip} 个），先把原因解决掉（git 仓库 / 基线里有该文件）")
+        return 2
+    if n_skip and args.strict:
+        print(f"[note] 另有 {n_skip} 个文件无法比对（已跳过）—— "
+              "`--strict` 下这不阻塞，但别把它们当成「已检查通过」")
     return 0
 
 
@@ -2675,6 +2999,15 @@ def build_parser() -> argparse.ArgumentParser:
     sr = sub.add_parser("sqlrefs", help="检查 SQL 文件里 serverScript ↔ dataprovider 的引用是否自洽")
     sr.add_argument("file")
     sr.set_defaults(func=cmd_sqlrefs)
+
+    dg = sub.add_parser("diffguard",
+                        help="相对 git 基线检测「多行内容被压平」（格式校验查不出的那类损坏）")
+    dg.add_argument("targets", nargs="+", metavar="PATH", help=".xwl 文件，或要递归检查的目录（可给多个）")
+    dg.add_argument("--rev", default="HEAD", help="比对基线（默认 HEAD；也可给 origin/main 等）")
+    dg.add_argument("--strict", action="store_true",
+                    help="把「疑似压平」当成失败（rc=1）；且不允许跳过（跳过时 rc=2）。"
+                         "默认只告警、rc=0")
+    dg.set_defaults(func=cmd_diffguard)
 
     sc = sub.add_parser("schema", help="查设计器控件注册表：某控件合法的 configs / events")
     sc.add_argument("type", nargs="?", help="控件 id，如 button / grid / store；省略需配 --list")
