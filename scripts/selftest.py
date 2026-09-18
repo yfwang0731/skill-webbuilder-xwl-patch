@@ -35,6 +35,13 @@
     目标只读 / 父目录不存在 / 路径过长都属「前置条件不满足」。
     （原先 `write_text()` 没兜 `OSError`，5 个子命令 9 个场景抛 traceback，
     而 64 项断言一条都没覆盖写失败 —— 这条就是为此加的）
+  · **`edit` 的锚点必须按目标文件的换行归一**（LF 与 CRLF 都要能跨行匹配）——
+    原先 `normalize_eol()` 硬编码 CRLF：LF 文件上跨行锚点**永远匹配不到**
+    （报「锚点出现次数: 0」，看着像用户写错了锚点），单行锚点 + 多行 new 还会把
+    LF 文件写成 CRLF/LF **混用**。另：**把多行拍平时必须有 `[warn]`** ——
+    这类损坏 `check` 查不出（压平后仍是合法 JSON），只有 `edit` 这一处能提示。
+    （实测样本工程 2780 个 xwl：1878 全 CRLF / 902 为「单行且末尾无换行符」/ **0 个 LF** ——
+    两条路径仍都要覆盖，因为 `expand` 按 `--eol auto` 会把无换行的单行源产出成 LF）
 
 改完 xwl.py 先跑它；输出末尾应为 `selftest ALL OK`：
 
@@ -1310,6 +1317,94 @@ def _check_write_failures(tmp, node, failures, write) -> None:
         print("[ok]  写失败给可读 [FAIL] + rc=2，不冒 traceback"
               "（patch / expand / new / folders 四类）")
 
+def _check_edit_eol(tmp, node, failures, write) -> None:
+    """`edit` 的锚点必须按**目标文件的实际换行**归一，且拍平多行要警示（第 24 组）。
+
+    起因：`normalize_eol()` 早先硬编码 CRLF —— ① LF 文件上**跨行锚点永远匹配不到**
+    （报「锚点出现次数: 0」，看着像用户写错了锚点）；② 单行锚点 + 多行 new 会把
+    LF 文件写成 CRLF/LF **混用**（文件已落盘、格式已坏）。③ 另外「把多行拍平」
+    属于**静默**语义损坏，原先毫无提示，而 `check` 查不出（压平后仍是合法 JSON）。
+    三条都在这里钉住（实测样本工程：1878 全 CRLF / 902「单行无换行符」/ **0 个 LF** ——
+    两条路径都要覆盖，因为 `expand` 会把无换行的单行源产出成 LF）。
+    """
+    print("[24] edit 的换行归一与拍平警示")
+    xwl_py = os.path.join(os.path.dirname(os.path.abspath(__file__)), "xwl.py")
+
+    def _cli(argv):
+        pr = subprocess.run([sys.executable, xwl_py] + argv, capture_output=True,
+                            text=True, encoding="utf-8", errors="replace", timeout=180)
+        return pr.returncode, (pr.stdout or "") + (pr.stderr or "")
+
+    def _mk(name, text):
+        p = os.path.join(tmp, name)
+        with open(p, "w", encoding="utf-8", newline="") as fh:
+            fh.write(text)
+        return p
+
+    def _eol_of(p):
+        b = open(p, "rb").read()
+        crlf = b.count(b"\r\n")
+        return crlf, b.count(b"\n") - crlf
+
+    BASE = ('{\n "hidden": false,\n "children": [],\n "roles": {},\n "title": "SELFTEST_T",\n'
+            ' "iconCls": "",\n "inframe": false,\n "pageLink": ""\n}')
+
+    ee: list[str] = []
+
+    # ① LF 文件 + 跨行锚点 —— 改前必然报「锚点出现次数: 0」（误导成"锚点写错了"）
+    t = _mk("ee_lf.xwl", BASE)
+    o = _mk("ee_o1.txt", '"roles": {},\n "title": "SELFTEST_T"')
+    n = _mk("ee_n1.txt", '"roles": {},\n "title": "ZZZ"')
+    rc, out = _cli(["edit", t, "--old-file", o, "--new-file", n])
+    if rc != 0 or "锚点出现次数: 0" in out:
+        ee.append("LF 文件上跨行锚点应能匹配（旧实现会报「锚点出现次数: 0」）：rc=%d" % rc)
+    elif _eol_of(t)[0]:
+        ee.append("LF 文件写入后被混入 CRLF：CRLF=%d LF=%d" % _eol_of(t))
+
+    # ② LF 文件 + 单行锚点 + 多行 new —— 改前会把 LF 写成 CRLF/LF 混用
+    t = _mk("ee_lf2.xwl", BASE)
+    o = _mk("ee_o2.txt", '"roles": {}')
+    n = _mk("ee_n2.txt", '"roles": {\n  "default": 1\n}')
+    rc, out = _cli(["edit", t, "--old-file", o, "--new-file", n])
+    if rc != 0:
+        ee.append("LF 文件 + 多行 new 应成功：rc=%d" % rc)
+    elif _eol_of(t)[0]:
+        ee.append("LF 文件 + 多行 new 后混入 CRLF（CRLF=%d LF=%d），应保持全 LF" % _eol_of(t))
+
+    # ③ CRLF 文件 + 跨行锚点 —— 回归：这条旧实现本来是通的，不能被改坏
+    t = _mk("ee_crlf.xwl", BASE.replace("\n", "\r\n"))
+    o = _mk("ee_o3.txt", '"roles": {},\n "title": "SELFTEST_T"')
+    n = _mk("ee_n3.txt", '"roles": {},\n "title": "ZZZ"')
+    rc, out = _cli(["edit", t, "--old-file", o, "--new-file", n])
+    if rc != 0:
+        ee.append("CRLF 文件 + 跨行锚点应成功：rc=%d" % rc)
+    elif _eol_of(t)[1]:
+        ee.append("CRLF 文件写入后被混入 LF：CRLF=%d LF=%d" % _eol_of(t))
+
+    # ④ 拍平多行必须警示（工具是唯一能提示的地方：check 查不出）
+    t = _mk("ee_flat.xwl",
+            '{\n "hidden": false,\n "children": [],\n "roles": {},\n'
+            ' "title": "a\\\nb\\\nc",\n "iconCls": "",\n "inframe": false,\n "pageLink": ""\n}')
+    o = _mk("ee_o4.txt", '"title": "a\\\nb\\\nc"')
+    n = _mk("ee_n4.txt", '"title": "abc"')
+    rc, out = _cli(["edit", t, "--old-file", o, "--new-file", n])
+    if "[warn]" not in out or "续行符" not in out:
+        ee.append("拍平多行时必须警示（[warn] 且提到「续行符」），否则是静默语义损坏")
+
+    # ⑤ 普通单行替换不得误报
+    t = _mk("ee_ok.xwl", BASE)
+    o = _mk("ee_o5.txt", '"title": "SELFTEST_T"')
+    n = _mk("ee_n5.txt", '"title": "BBB"')
+    rc, out = _cli(["edit", t, "--old-file", o, "--new-file", n])
+    if "[warn]" in out:
+        ee.append("普通单行替换不该出现 [warn]（误报）")
+
+    if ee:
+        failures.extend(ee)
+    else:
+        print("[ok]  edit 锚点按目标换行归一（LF/CRLF 均可）、拍平多行有 [warn]、普通替换不误报")
+
+
 def main() -> int:
     xwl.ensure_utf8_stdio()     # 输出全是中文；Windows 控制台默认非 UTF-8 会直接 UnicodeEncodeError
     tmp = tempfile.mkdtemp(prefix="xwl_selftest_")
@@ -1332,6 +1427,7 @@ def main() -> int:
     _check_docs(tmp, node, failures, write)
     _check_platform(tmp, node, failures, write)
     _check_write_failures(tmp, node, failures, write)
+    _check_edit_eol(tmp, node, failures, write)
 
 
     print()

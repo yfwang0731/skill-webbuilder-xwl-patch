@@ -2,7 +2,7 @@
 name: webbuilder-xwl-patch
 slug: skill-webbuilder-xwl-patch
 displayName: webbuilder-xwl-patch
-version: 1.2.2
+version: 1.2.3
 license: MIT
 description: >-
   WebBuilder（wb）平台 .xwl 定义文件的处理与安全编辑。核心手段是**结构级 patch**：
@@ -230,7 +230,7 @@ if (!rec) {\
 | 做法 | 替换内容 | JSON 合法？ | 加载后的 JS | 校验能拦住吗 |
 |---|---|---|---|---|
 | **A 正确** | `\`+换行 → `\n`（两个字符的转义） | ✅ | 换行**保留**，语义等价 | — |
-| **B 错误** | `\`+换行 → **直接删除**（"合并行"） | ✅ **依然合法** | 换行**消失**，代码粘连 | ❌ **拦不住** |
+| **B 错误** | `\`+换行 → **直接删除**（"合并行"） | ✅ **依然合法** | 换行**消失**，代码粘连 | ❌ 拦不住（走 `edit` 时会有 `[warn]`） |
 
 做法 B 是**静默语义损坏**：`//` 行注释会把后面的代码整段注释掉（实测这类结果 `node --check`
 **返回 0** —— "只剩一句注释"本身是合法 JS）；ASI 依赖的换行一旦消失，`return` / `throw` /
@@ -238,6 +238,8 @@ if (!rec) {\
 SQL 侧 token 会粘连（`select 1from dual`）。
 
 → "有没有被改坏"**只能靠 `git diff` 判断**（`git diff -w` 可忽略空白差异）。
+> **一处例外**：这一步若走 `edit`，它手上有 old / new 两端，会把「续行符少了几个」用 `[warn]` 报出来；
+> 用编辑器或通用替换工具改的，它看不到 —— 而那才是绝大多数情况。
 
 ### 2.4 单行源怎么转多行 —— **可行，且能字节级还原**
 
@@ -248,8 +250,18 @@ SQL 侧 token 会粘连（`select 1from dual`）。
 
 ```bash
 python scripts/xwl.py expand <file.xwl>             # 默认沿用原文件换行
+python scripts/xwl.py expand <file.xwl> --eol crlf  # 工作区惯例是 CRLF 时显式指定
 python scripts/xwl.py expand <file.xwl> --eol lf    # 取设计器服务器上的原始产物
 ```
+
+> **`auto` 的一个边界 —— 源文件连一个换行符都没有时**：无从"沿用"，`auto` **回退到 LF**
+> （即 `lf` 那一档）。**紧凑单行源正属此类**（样本工程有 902 个），所以对它们跑默认参数，
+> 会在 CRLF 工作区里**新增一个 LF 文件**。工作区惯例是 CRLF 时请显式 `--eol crlf`。
+> 这一步**不静默**：输出里的 `规范化后: … 换行=LF` 就是在告诉你它选了哪个。
+>
+> **同一条规则也用在 `edit` 上**：它按**目标文件的实际换行**归一锚点（混合换行按 CRLF 并给
+> `[warn]`），目标**一个换行符都没有**时同样按 LF 处理 —— 写盘后的自动校验会给出
+> `[note] 该文件是 LF 换行（设计器/仓库的原始形态）`，你会看到它。
 
 反编译出的四步 Java 原文、`org.json toString(1)` 的三条排版规则、以及回放校验的完整口径与数字
 （凭什么说"复刻正确"、少数不一致的外因是什么）见
@@ -474,8 +486,8 @@ python scripts/xwl.py check <file.xwl> --no-itemid          # 跳过 itemId 重�
 | `schema [<type>] --controls <wb/system/controls.json> [--tree] [--list] [--skeleton]` | 查设计器控件注册表：`--tree` 按面板分组列出全部控件（带库 / 容器 / 内部标记）、`--list` 只列 id、给 `<type>` 则列该控件合法的 `configs` / `events` 与 `autoNames`、`--skeleton` 出设计器同款骨架 |
 | `check <file...> [--no-js] [--no-itemid]` | 七项校验：格式五项 + 事件 JS `node --check` + **itemId 重名分级**（只有「重名且被 JS 引用」判 FAIL）；任一 FAIL 返回非 0 |
 | `itemids <file> [--name X] [--dups-only] [--suggest] [--fix auto\|normalName\|itemId] [--json] [--controls <…/controls.json>]` | **itemId 重名报告（只读）**：按「类型 + 是否被 JS 引用 + 有无 normalName」分级，给候选清单（祖先链 / 原路径 / 其下控件）与**建议改名**；`--suggest` 出改名 ops 草稿（需人工确认）；`--name` 配 `--json` 可机器读 |
-| `edit <file> --old-file O --new-file F [--expect 1] [--dry-run] [--backup]` | 文本级安全替换，保留原换行，断言出现次数，可选备份 |
-| `expand <file> [--out F] [--eol auto\|lf\|crlf] [--indent N] [--safe] [--dry-run] [--backup]` | 规范成设计器同款多行（复刻 `IDE.updateModule`），写盘前做语义等价比对 |
+| `edit <file> --old-file O --new-file F [--expect 1] [--dry-run] [--backup]` | 文本级安全替换：**按目标文件的换行**归一锚点（目标无换行时按 LF）、断言锚点出现次数、**拍平多行时给 `[warn]`**、可选备份 |
+| `expand <file> [--out F] [--eol auto\|lf\|crlf] [--indent N] [--safe] [--dry-run] [--backup]` | 规范成设计器同款多行（复刻 `IDE.updateModule`），写盘前做语义等价比对；`auto` 在**无换行源**上回退 LF |
 | `dump <file>` | 按加载器规则解析后美化输出（`ensure_ascii=False`） |
 | `sql <file>` | 抽取所有含 `sql` 的键对应的 SQL 文本（已正确反转义） |
 | `events <file> [--outdir DIR]` | 抽取所有事件 JS 到文件，便于单独检查 |

@@ -8,7 +8,7 @@
   check   <file...>                              七项校验：格式五项 + 事件 JS 语法 + itemId 重名分级
   new     <out.xwl> [--kind page|sql]            **从零生成** xwl（内置设计器骨架）
   patch   <file> --ops ops.json                  结构级编辑（改对象 → 按设计器规则重建）
-  edit    <file> --old-file O --new-file N       安全替换（保留 CRLF，断言出现次数）
+  edit    <file> --old-file O --new-file N       文本级安全替换（锚点按目标换行归一、断言出现次数、拍平多行时警示）
   expand  <file> [--safe]                        单行源 → 设计器同款多行（写盘前语义等价比对）
   paths   <file>                                 列出 sql / serverScript / url 等字段位置
   params  <page.xwl>                             核对「页面 → store → SQL」的传参链路
@@ -127,7 +127,10 @@ def _write_file(path: str, data, binary: bool = False) -> None:
 
 
 def write_text(path: str, text: str) -> None:
-    """按 CRLF 落盘，UTF-8 无 BOM。newline='' 关掉自动换行转换。"""
+    """按给定的文本**原样**落盘（UTF-8 无 BOM；newline='' 关掉自动换行转换）。
+
+    注意**不做换行转换** —— 落盘后的换行完全由调用方给的字符串决定。
+    """
     _write_file(path, text)
 
 
@@ -136,9 +139,24 @@ def write_bytes(path: str, data: bytes) -> None:
     _write_file(path, data, binary=True)
 
 
-def normalize_eol(text: str) -> str:
-    """把任意换行统一成 CRLF（用于 old/new 片段的归一化，便于用 LF 书写片段）。"""
-    return re.sub(r"\r\n|\r|\n", CRLF, text)
+def normalize_eol(text: str, eol: str = CRLF) -> str:
+    """把任意换行统一成 `eol`（用于 old/new 片段的归一化，便于用 LF 书写片段）。
+
+    ⚠️ 调用方必须传**目标文件的实际换行**（见 `cmd_edit`）。这里早先硬编码 CRLF，
+    造成两个缺陷：**LF 文件上跨行锚点永远匹配不到**（报「锚点出现次数: 0」，
+    看着像用户写错了锚点）；**单行锚点 + 多行 new 会把 LF 文件写成 CRLF/LF 混用**。
+    两者都已改为按目标换行归一。
+    """
+    return re.sub(r"\r\n|\r|\n", eol, text)
+
+
+# 续行符 = 反斜杠 + 真实换行，是多行字符串在磁盘上的形态（见 SKILL.md 2.1）
+CONT_RE = re.compile(r"\\(?:\r\n|\r|\n)")
+
+
+def count_cont(text: str) -> int:
+    """数片段里「续行符」的个数 —— 用于识别「把多行拍平」这种静默语义损坏。"""
+    return len(CONT_RE.findall(text))
 
 
 # --------------------------------------------------------------------------- #
@@ -656,11 +674,6 @@ def _post_check(file: str, args) -> int:
 # edit
 # --------------------------------------------------------------------------- #
 def cmd_edit(args) -> int:
-    with open(args.old_file, "r", encoding="utf-8", newline="") as f:
-        old = normalize_eol(f.read())
-    with open(args.new_file, "r", encoding="utf-8", newline="") as f:
-        new = normalize_eol(f.read())
-
     try:
         text, has_bom = read_xwl_text(args.target)
     except XwlLoadError as exc:
@@ -670,11 +683,33 @@ def cmd_edit(args) -> int:
         print("[FAIL] 目标文件带 BOM，本工具不处理；请先确认它本来就不该有 BOM")
         return 2
 
+    # 锚点按**目标文件的实际换行**归一化 —— 否则 LF 文件上跨行锚点永远匹配不到
+    # （历史上这里写死 CRLF，失败信息是误导性的「锚点出现次数: 0」，会让人以为锚点写错）
+    n_crlf = text.count(CRLF)
+    n_lf = text.count("\n") - n_crlf
+    eol = CRLF if n_crlf else "\n"
+    if n_crlf and n_lf:
+        print(f"[warn] 目标文件换行混用（{n_crlf} 个 CRLF + {n_lf} 个 LF）：锚点按 CRLF 归一化；"
+              f"若匹配不到，先修文件换行（`check` 第 ② 项）")
+
+    with open(args.old_file, "r", encoding="utf-8", newline="") as f:
+        old = normalize_eol(f.read(), eol)
+    with open(args.new_file, "r", encoding="utf-8", newline="") as f:
+        new = normalize_eol(f.read(), eol)
+
     count = text.count(old)
     print(f"锚点出现次数: {count} (期望 {args.expect})")
     if count != args.expect:
         print("[FAIL] 锚点出现次数与期望不符，未写文件（防止改错位置）")
         return 2
+
+    # 「把多行拍平」是一种**静默**语义损坏：压平后文件仍是合法 JSON，`check` 全绿，
+    # 只能靠 git diff 发现。这里手上同时有 old / new 两端，是唯一能主动提示的地方。
+    c_old, c_new = count_cont(old), count_cont(new)
+    if c_old > c_new:
+        print(f"[warn] 锚点里的续行符从 {c_old} 个减到 {c_new} 个 —— 多行内容被拍平，"
+              f"换行会丢失（语义已变，`check` 查不出来）")
+        print("       若本意是改内容、同时保留换行，请改用结构级 `patch`（不碰文本层）")
 
     if args.dry_run:
         print("[dry-run] 未写入。变更后长度:", len(text) - count * len(old) + count * len(new))
@@ -2567,7 +2602,7 @@ def build_parser() -> argparse.ArgumentParser:
     c.add_argument("--no-itemid", action="store_true", help="跳过 itemId 重名分级检查")
     c.set_defaults(func=cmd_check)
 
-    e = sub.add_parser("edit", help="安全替换（保留 CRLF，断言出现次数）")
+    e = sub.add_parser("edit", help="文本级安全替换（锚点按目标换行归一、断言出现次数、拍平多行时警示）")
     e.add_argument("target")
     e.add_argument("--old-file", required=True)
     e.add_argument("--new-file", required=True)
@@ -2658,7 +2693,7 @@ def build_parser() -> argparse.ArgumentParser:
     x.add_argument("--out", help="输出到另一个文件（缺省原地覆盖）")
     x.add_argument("--indent", type=int, default=1, help="缩进因子（设计器固定用 1，一般不用改）")
     x.add_argument("--eol", choices=["auto", "lf", "crlf"], default="auto",
-                   help="换行符：auto=沿用原文件（默认）；lf=设计器在服务器上的原始产物；crlf=Windows 工作区形态")
+                   help="换行符：auto=沿用原文件（默认；原文件连一个换行符都没有时回退 lf）；lf=设计器在服务器上的原始产物；crlf=Windows 工作区形态")
     x.add_argument("--safe", action="store_true",
                    help="安全模式：不动值里的「字面反斜杠 + n」（设计器会误改它）；产出可能与设计器不一致")
     x.add_argument("--dry-run", action="store_true")
