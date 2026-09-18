@@ -22,6 +22,56 @@
 
 ---
 
+## [1.3.1] - 2026-09-18
+
+**在 Windows 上 `diffguard` 会整组静默跳过 —— 已在 CI 抓到并修掉。**
+
+`1.3.0` 推上去后 `selftest` 在 `windows-latest` 上全红（4/4 个 job），ubuntu 全绿（4/4），
+且与 Python 版本无关。失败签名是「全部降级为跳过」：压平不报、`--strict` 给出 rc=2、
+连 `--rev no-such-ref` 都只给 rc=0（本该 rc=2 说"基线不存在"）。最后一条是关键证据 ——
+**它根本没走到 `git show`**，在算路径那一步就被判成"不在仓库内"。
+
+### Fixed
+
+- **根因**：仓库内路径是**反推**出来的 —— `os.path.relpath(os.path.abspath(path),
+  git rev-parse --show-toplevel)`。而 git 给出的绝对路径与 `os.path.abspath` **不一定同源**：
+  Windows 上 `TEMP` 常是 8.3 短名（`C:\Users\RUNNER~1\…`），git 却把仓库根归一成长名。
+  前缀对不上时 `relpath` 会算出 `..\..\XWL_SH~1\…` 这种"绕行路径"，被 `_git_show`
+  当成**路径逃逸**而跳过（`if not rel or rel.startswith("..")`）。
+  本机可复现：把 cwd 换成**同一目录的短名写法**，`diffguard` 立刻从
+  `[ok] 与基线逐字节一致` 变成 `[note] 跳过：路径不在该仓库内`。
+- **修法**：改让 **git 自己报**仓库内路径 —— `git rev-parse --show-prefix`（返回
+  「仓库根 → cwd」的相对路径，带尾斜杠）拼上 `basename`。`basename` 只涉及同一个字符串，
+  不可能算出 `..`；盘符 / 8.3 短名 / MSYS 风格 / 大小写**全都不再相关**。
+  顺带按 `cwd` 缓存（`functools.lru_cache`），批量跑时同一目录只起一次 git 进程。
+- 同一个坑的上一代是 `1.2.2` 的「CI 仓库在 `D:`、TEMP 在 `C:` ⇒ `relpath` 抛
+  `ValueError`」（用 `safe_relpath()` 兜住）。**这次不抛异常、改出 `..`，兜底完全没拦住** ——
+  所以真正的教训是：**凡是"用 Python 反推外部程序给的路径"的地方，都该让对方自己报**。
+
+### Changed
+
+- **`examples/` 改为自举**：删掉预置的 `demo-page.xwl` / `demo-querySql.xwl`，
+  改成在 `examples/README.md` 里用 `xwl.py new` **现场生成**。
+  原因是发布时撞上 **SkillHub 的文件类型白名单不收 `.xwl`** —— 它恰好是本工具的目标格式，
+  却不是平台接受的附件类型（同批被拒的还有 `.gitattributes` 与无扩展名的 `LICENSE`）。
+  预置的 `.xwl` 会让"平台包里带示例"变成一句空话。现在 `examples/` 只剩 `.md` / `.json`，
+  平台包可以完整包含它，**索引与包内容一致**。
+
+### Testing
+
+- 第 26 组新增 ⑨：**cwd 的短名 / 长名两种写法都必须能比对**（本机 repo 是长名 ⇒ 测短名；
+  CI 的 TEMP 是短名 ⇒ 测长名，两边都能覆盖）。断言总数仍 68 项（并入第 26 组的 [ok] 汇总）。
+- **负向测试**：退回 `relpath` 反推 ⇒ 精准报出 1 项，并把短名路径原样印出；
+  把 `rel` 写成绝对路径 ⇒ 报 **8 项**，与 CI 上的失败签名**同数同形**。
+- **CI 模拟**（新增验证手段）：用 `sitecustomize` 钉住 `tempfile.tempdir`，让 `mkdtemp()`
+  真的给出 8.3 短名路径，端到端复现 `windows-latest` 的条件 ——
+  修复后 **68 项 ALL OK**，对照组则精确复现 CI 的那 8 项签名。
+- **批量成本实测**：`_git_prefix` / `_git_has_rev` 按 `cwd` 缓存后，
+  60 个文件的仓库跑 `diffguard .` 由 **149 s → 52 s（2.8×）**。
+  （单文件成本仍是每文件一次 `git show`，约 0.9 s —— 所以文档里写明**只扫改过的文件**。）
+
+---
+
 ## [1.3.0] - 2026-09-18
 
 **新增子命令 `diffguard`：补上 §2.3 承认的那个「唯一没有自动化防线」的损坏类型。**

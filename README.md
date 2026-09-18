@@ -109,7 +109,7 @@ webbuilder-xwl-patch/
 ├── CHANGELOG.md              # 变更历史（倒序，含每一步的依据与实测数字）
 ├── metadata.json             # 能力与边界声明（SkillHub 打包 / 平台评测读它）
 ├── test-prompts.json         # 典型 prompt（供 skill 评估用）
-├── examples/                 # 可直接跑的最小示例（每条命令都真实跑过）
+├── examples/                 # 可直接跑的最小示例（示例 .xwl 由 new 现场生成）
 ├── references/               # 参考材料（每份的条数与作用见 SKILL.md 首页那张索引表）
 └── scripts/
     ├── xwl.py                # 全部子命令（纯标准库，零依赖）

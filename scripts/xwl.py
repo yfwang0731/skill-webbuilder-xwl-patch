@@ -31,6 +31,7 @@ from __future__ import annotations
 
 import argparse
 import collections
+import functools
 import json
 import os
 import re
@@ -2205,32 +2206,58 @@ def _longest_line(text: str) -> tuple:
     return best, best_no
 
 
-def _git_toplevel(cwd: str):
-    """返回仓库根目录；不在仓库 / 调不到 git 都返回 None（不抛）。"""
+@functools.lru_cache(maxsize=None)
+def _git_prefix(cwd: str):
+    """返回 `cwd` **相对仓库根**的路径（仓库根处为 `""`）；不在仓库 / 调不到 git ⇒ `None`。
+
+    **为什么不让 Python 自己算相对路径**：`git rev-parse --show-toplevel` 给出的绝对
+    路径与 `os.path.abspath` **不一定同源**。Windows 上 `TEMP` 常是 8.3 短名
+    （`C:\\Users\\RUNNER~1\\…`），git 却把仓库根归一成长名 —— 前缀对不上时
+    `os.path.relpath` 会算出 `..\\..\\XWL_SH~1\\…` 这种"绕行路径"。
+    实测：那种路径以 `..` 开头，被 `_git_show` 当成"逃逸"**静默跳过**，
+    于是 diffguard 整组断言在 `windows-latest` 上全挂（ubuntu 正常）。
+    让 **git 自己报**相对路径之后，盘符 / 短名 / MSYS 风格 / 大小写全都不再相关。
+
+    按 `cwd` 缓存：批量跑时同一目录的文件只起一次 git 进程。
+    """
     try:
-        p = subprocess.run(["git", "rev-parse", "--show-toplevel"], cwd=cwd,
+        p = subprocess.run(["git", "rev-parse", "--show-prefix"], cwd=cwd,
                            capture_output=True, timeout=30)
     except (OSError, subprocess.SubprocessError):
         return None
     if p.returncode != 0:
         return None
-    return p.stdout.decode("utf-8", "replace").strip() or None
+    return p.stdout.decode("utf-8", "replace").strip()
 
 
-def _git_show(rev: str, rel: str, cwd: str, top: str):
+@functools.lru_cache(maxsize=None)
+def _git_has_rev(rev: str, cwd: str) -> bool:
+    """`rev` 在这个仓库里能否解析；调不到 git / 不在仓库 ⇒ `False`。
+
+    按 `(rev, cwd)` 缓存：`diffguard` 会遍历整个目录，而 `rev` 对同一仓库是常量 ——
+    不缓存的话每个文件都要多起一次 git 进程。
+    """
+    try:
+        p = subprocess.run(["git", "rev-parse", "--verify", "--quiet", rev],
+                           cwd=cwd, capture_output=True, timeout=30)
+    except (OSError, subprocess.SubprocessError):
+        return False
+    return p.returncode == 0
+
+
+def _git_show(rev: str, rel: str, cwd: str, in_repo: bool):
     """取 `<rev>:<rel>` 的内容。返回 (ok, bytes|None, 失败原因|None)。
 
     找不到 git / 不在仓库 / 路径不在该 rev 里 —— 一律转成"跳过并说明"，
     因为这几件事都不是使用者的用法错误。
     `--rev` **本身不存在**是例外：那是用法错误，用哨兵 `"BADREV"` 报给调用方转成 rc=2。
     """
-    if not top:
+    if not in_repo:
         return False, None, "不在 git 仓库里（或调不到 git）"
-    if not rel or rel.startswith(".."):
+    if not rel or rel.startswith(".."):     # 纯防御：rel 由 git 给出，正常不会含 ..
         return False, None, "路径不在该仓库内"
     try:
-        if subprocess.run(["git", "rev-parse", "--verify", "--quiet", rev],
-                          cwd=cwd, capture_output=True, timeout=30).returncode != 0:
+        if not _git_has_rev(rev, cwd):
             return False, None, "BADREV"
         got = subprocess.run(["git", "show", f"{rev}:{rel}"], cwd=cwd,
                              capture_output=True, timeout=60)
@@ -2286,15 +2313,13 @@ def cmd_diffguard(args) -> int:
             n_skip += 1
             continue
 
-        cwd = os.path.dirname(os.path.abspath(path)) or "."
-        top = _git_toplevel(cwd)
-        rel = ""
-        if top:
-            try:
-                rel = os.path.relpath(os.path.abspath(path), top).replace(os.sep, "/")
-            except ValueError:      # Windows 跨盘符
-                rel = ""
-        ok, head_bytes, why = _git_show(args.rev, rel, cwd, top)
+        abs_path = os.path.abspath(path)
+        cwd = os.path.dirname(abs_path) or "."
+        # 仓库内路径 = 「仓库根 → cwd」由 **git 自己**给出（带尾斜杠） + 文件名。
+        # `basename` 只涉及同一个字符串，不可能算出 `..`；盘符/短名一概不相关。
+        prefix = _git_prefix(cwd)
+        rel = f"{prefix}{os.path.basename(abs_path)}" if prefix is not None else ""
+        ok, head_bytes, why = _git_show(args.rev, rel, cwd, prefix is not None)
 
         print(f"=== diffguard: {safe_relpath(path)}")
         if why == "BADREV":

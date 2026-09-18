@@ -132,6 +132,25 @@ def _run(fn, **kw):
     return code, buf.getvalue()
 
 
+def _win_path(p: str, api: str):
+    """调用 Windows 的 `GetShortPathNameW` / `GetLongPathNameW`；非 Windows 或失败 ⇒ `None`。
+
+    用来复现一个**只在 Windows 上**出现的路径陷阱：`TEMP` 常是 8.3 短名形式
+    （`C:\\Users\\RUNNER~1\\…`），而 git 会把仓库根归一成长名。
+    见 `xwl._git_prefix` 的注释与 `_check_diffguard` 的 ⑨。
+    """
+    if os.name != "nt":
+        return None
+    try:
+        import ctypes
+        buf = ctypes.create_unicode_buffer(32768)
+        fn = getattr(ctypes.windll.kernel32, api)       # type: ignore[attr-defined]
+        n = fn(p, buf, 32768)
+    except Exception:                   # noqa: BLE001 —— 取不到就当平台不支持
+        return None
+    return buf.value or None
+
+
 def _check_basics(tmp, node, failures, write) -> None:
     """前置样本 + check 破坏用例 + edit + expand + patch（第 0~7 组）"""
 
@@ -1960,11 +1979,32 @@ def _check_diffguard(tmp, node, failures, write) -> None:
     if rc != 0 or "跳过" not in out or "Traceback" in out:
         dg.append("diffguard 在非 git 目录应提示跳过、rc=0、不冒 traceback（rc=%d）" % rc)
 
+    # ⑨ **cwd 的另一种写法**（Windows 8.3 短名 ↔ 长名）下必须仍能比对。
+    #     这一条补的是一个真实事故：`windows-latest` 上 diffguard 整组 8 项 FAIL、
+    #     ubuntu 全绿。根因是 rel 由 `os.path.relpath(abspath(path), toplevel)` 反推 ——
+    #     CI 的 `TEMP` 是短名（`C:\Users\RUNNER~1\…`），而 git 把仓库根归一成长名，
+    #     前缀对不上时 relpath 给出 `..\..\XWL_SH~1\…`，被 `_git_show` 当成"路径逃逸"
+    #     **静默跳过**（于是压平也不报、`--strict` 变成 rc=2、`--rev` 写错也只给 rc=0）。
+    #     现在 rel 由 git 自报（`git rev-parse --show-prefix`），两种写法都必须命中。
+    #     本机 repo 是长名 ⇒ 这里测短名；CI 上 repo 是短名 ⇒ 这里测长名。
+    _git("checkout", "-q", "--", "dg.xwl")
+    _mk("dg.xwl", _flat(big))                   # `big` 已在 ⑥b 提交
+    for _label, _api in (("短名", "GetShortPathNameW"), ("长名", "GetLongPathNameW")):
+        _alt = _win_path(repo, _api)
+        if not _alt or os.path.normcase(_alt) == os.path.normcase(os.path.abspath(repo)):
+            continue
+        _rc, _out = _cli("diffguard", "dg.xwl", cwd=_alt)
+        if "[warn]" not in _out:
+            dg.append("cwd 用%s写法（%s）时 diffguard 没报出压平 —— 相对路径只能由 git "
+                      "自报（用 os.path.relpath 反推会在短名/盘符不同源时静默跳过）"
+                      % (_label, _alt))
+
     if dg:
         failures.extend(dg)
     else:
         print("[ok]  压平必报 / 合法删减与单行变长不误报 / patch 改动不误报 / "
-              "新文件与非仓库干净跳过 / --strict 与 --rev 的退出码正确")
+              "新文件与非仓库干净跳过 / --strict 与 --rev 的退出码正确 / "
+              "短名与长名两种 cwd 写法都能比对")
 
 
 def main() -> int:

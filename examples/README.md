@@ -2,17 +2,33 @@
 
 这个目录里的每条命令**都真实跑过**，输出与下面写的一致。用它建立手感最快。
 
+> **本目录不含预置的 `.xwl`** —— 示例页面由 `xwl.py new` **现场生成**（第一节）。这样示例与
+> 你手上的工程完全同源，也不会过期；`ops-add-button.json` 是纯数据，直接给就好。
+>
 > 复现方式：先 `cd` 到本 skill 根目录（`examples/` 的上一层）。
-> 若不想改动仓库里的示例文件，先把 `examples/` 整个复制到临时目录再跑。
+> 生成出来的 `.xwl` 若不想留在仓库里，删掉即可（它是可复现的产物）。
 
-## 一、不适用（先看这条，省得白试）
+## 一、先生成一个示例页面
+
+```bash
+python scripts/xwl.py new examples/demo-page.xwl --kind page --title "示例页面"
+```
+
+产出 238 B、单个空 `module` 节点，顶层 7 把钥匙的**键序与设计器一致**（不用手写顶层键）。
+SQL 载体的写法见第三节。
+
+> 为什么不让示例躺在仓库里：`.xwl` 是**业务格式**，不同平台/工具链对它的处理不一致
+> （例如 SkillHub 的文件类型白名单就不收 `.xwl`）。现场生成能保证"你跑出来的"和"文档写的"
+> 永远是同一个东西。
+
+## 二、不适用（先看这条，省得白试）
 
 - 其他低代码平台的页面定义、`.vue`、普通 `.json`
 - 后端 Java、模块打包、`target/` 部署副本同步、数据库菜单注册（`WB_MENU`）
 
-## 二、改一个已有文件：给页面加一个带多行 JS 的按钮
+## 三、改一个已有文件：给页面加一个带多行 JS 的按钮
 
-`examples/demo-page.xwl` 是 `xwl.py new --kind page` 的产物（238 B，一个空 `module` 节点）。
+第一节生成的 `examples/demo-page.xwl` 是空 `module` 节点。
 `examples/ops-add-button.json` 要往它的 `module.children` 里追加一个按钮。
 
 ```bash
@@ -42,9 +58,9 @@ python scripts/xwl.py diffguard examples/demo-page.xwl
 - 多行 JS 在 `ops.json` 里**就写 `\n`**（见该文件里 `click` 的值），工具会转成磁盘上的续行形态。
 - JS 里一律用**单引号**。
 
-## 三、从零造一个 SQL 载体
+## 四、从零造一个 SQL 载体
 
-`examples/demo-querySql.xwl` 是 `new --kind sql` 的产物：`module(serverScript)` → `dataprovider(sql)`。
+`new --kind sql` 产出的是两级结构：`module(serverScript)` → `dataprovider(sql)`。
 
 ```bash
 python scripts/xwl.py new /tmp/<你的模块>/xxxSql/queryDemo.xwl --kind sql --title "示例查询"
@@ -55,13 +71,15 @@ python scripts/xwl.py sqlrefs /tmp/<你的模块>/xxxSql/queryDemo.xwl   # {#名
 > 注意：`new` 之后还要**登记进所在目录的 `folder.json`**（否则设计器导航树里看不到）：
 > `python scripts/xwl.py folders <文件> --register`。该目录必须已经被设计器管理（已有 `folder.json`）。
 
-## 四、验证「压平」真的会被抓到（`diffguard` 的最小实验）
+## 五、验证「压平」真的会被抓到（`diffguard` 的最小实验）
 
 在 git 仓库里：
 
 ```bash
 git init -q /tmp/flatdemo && cd /tmp/flatdemo
-cp <本 skill>/examples/demo-page.xwl page.xwl
+python <本 skill>/scripts/xwl.py new page.xwl --kind page --title "示例页面"
+python <本 skill>/scripts/xwl.py patch page.xwl \
+    --ops <本 skill>/examples/ops-add-button.json
 git add -A && git commit -qm base
 
 # 手动把多行 JS 的续行符删掉（= "合并行"，静默语义损坏）

@@ -2,7 +2,7 @@
 name: webbuilder-xwl-patch
 slug: skill-webbuilder-xwl-patch
 displayName: webbuilder-xwl-patch
-version: 1.3.0
+version: 1.3.1
 license: MIT
 metadata:
   category: development-tools
@@ -83,7 +83,7 @@ WebBuilder 的页面与查询定义都写在 `.xwl` 里。它**看起来像 JSON
 | **交活前**逐条过 | 第九章 + [`references/checklist.md`](references/checklist.md) —— 30 项 |
 | 换控件 / 不知道用哪个 / 该挂哪里 | [`references/controls.md`](references/controls.md) |
 | 想看一次完整实操（从零造页面 + SQL 载体） | [`references/walkthrough.md`](references/walkthrough.md) |
-| 想跑最小示例（每条命令都真跑过） | [`examples/README.md`](examples/README.md)（配套文件：`demo-page.xwl` / `demo-querySql.xwl` / `ops-add-button.json`） |
+| 想跑最小示例（每条命令都真跑过） | [`examples/README.md`](examples/README.md)（示例 `.xwl` 用 `xwl.py new` 现场生成，不在仓库里预置） |
 | 数字从哪来（引用次数 / 分布 / 统计口径） | [`references/measured-data.md`](references/measured-data.md) |
 
 **触发场景**（正文里只留这三条，完整触发词见 frontmatter）：读懂或修改任何 `.xwl`
@@ -306,6 +306,10 @@ python scripts/xwl.py diffguard <file-or-dir>              # 默认只告警（r
 python scripts/xwl.py diffguard <file-or-dir> --strict      # 让它阻塞（rc=1），供 CI / pre-commit 用
 python scripts/xwl.py diffguard <file> --rev origin/main    # 换基线
 ```
+
+> **成本**：每个文件要起一次 `git show`（约 0.9 s/文件 —— 实测 60 个文件 52 s）；
+> 同一目录的 `rev-parse` 只起一次（按 `cwd` 缓存）。所以**只扫本次改动过的文件**，
+> 别对整个 `wb/` 跑（三千多个文件要几十分钟）。
 
 > **为什么不能只用"最长行变长"这一条**（实测两个**漏报面**，已由精确判据补上）：
 > ① 被压平的内容若**短于文件里已有的最长行** ⇒ 最长行纹丝不动
