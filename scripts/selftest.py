@@ -318,6 +318,142 @@ def _check_basics(tmp, node, failures, write) -> None:
         else:
             failures.append(f"{name} 失败（产出前 200 字符={after[:200]!r}）")
 
+    # ---- 判据依据（K21）：`check` 与 `dump` 对非 UTF-8 必须报**同一段**可读文案 ----
+    # 起因：`check` 曾直接甩 Python 的 codec 原文（既不说是编码问题、也不给修法），
+    #   而 FAQ 与 `test-prompts.json` 引的正是"工具报「不是 UTF-8 文本」"这个问法 ⇒ 文档与实现对不上。
+    _gbk = os.path.join(tmp, "k21-gbk.xwl")
+    with open(_gbk, "wb") as _f:
+        _f.write('{"title":"测试"}'.encode("gbk"))
+    # ⚠️ 断言要覆盖**全部四个入口**：只查 check/dump、且只查"都含『不是 UTF-8 文本』"是不够的 ——
+    #    那样"另外两个入口仍在甩 Python codec 原文"会被放过（实测过）。
+    _k14: dict = {}
+    for _sub in ("check", "dump", "params", "itemids"):
+        _r = subprocess.run([sys.executable, os.path.join(HERE, "xwl.py"), _sub, _gbk],
+                            capture_output=True, text=True, encoding="utf-8", errors="replace")
+        _k14[_sub] = (_r.stdout or "") + (_r.stderr or "")
+    _k14_bad = [k for k, v in _k14.items()
+                if "不是 UTF-8 文本" not in v or "工具不猜编码" not in v]
+    if not _k14_bad:
+        print("[ok]  四个入口（check/dump/params/itemids）对非 UTF-8 报同一段可读文案（含「工具不猜编码」）")
+    else:
+        failures.append("这些入口的非 UTF-8 文案不可读或不同源：%s（check=%r）"
+                        % (_k14_bad, _k14["check"][:140]))
+
+    # ---- B1 命令级等价比对（K8 的**调用点**守卫）----
+    # 为什么必须命令级：`equivalent` 的 helper 断言只证明函数本身对，
+    # 证不了 expand/patch/new **真的调用它** —— 把三处调用点换回旧 `==` 时，
+    # 只有「命令判不一致」才变红。含浮点 `1.0` 的样本：`1 == 1.0` 为真（`==` 会放行），
+    # 而规范化文本比对判不一致 ⇒ 命令必须 rc=2。
+    _b1 = os.path.join(tmp, "k8callsite.xwl")
+    with open(_b1, "w", encoding="utf-8", newline="") as _f:
+        _f.write('{"a": 1.0}')
+    _r1 = subprocess.run([sys.executable, os.path.join(HERE, "xwl.py"), "expand",
+                          _b1, "--dry-run"],
+                         capture_output=True, text=True, encoding="utf-8", errors="replace")
+    if _r1.returncode != 2:
+        failures.append("K8 调用点未生效：含浮点 1.0 的样本 expand 应判不一致（rc=2），实得 %d"
+                        "（把 expand 的 equivalent 换回 `==` 会让它 rc=0）" % _r1.returncode)
+    else:
+        print("[ok]  K8 调用点：含浮点 1.0 的样本 expand 被判不一致（rc=2，命令级）")
+
+    # ---- B2 `check` 对裸 NUL 的**集成面**守卫（K15 的调用点）----
+    # 起因：K15 现有断言只直接调 `bare_nul_in_strings`，删掉 `cmd_check` 里整段
+    # 裸 NUL 逻辑仍全绿（实测）。命令级断言：裸 NUL 文件 `check` 必须输出「裸 NUL」且 rc=0。
+    _b2 = os.path.join(tmp, "k15nul.xwl")
+    with open(_b2, "wb") as _f:
+        _f.write(b'{"x":"a\x00b"}')
+    _r2 = subprocess.run([sys.executable, os.path.join(HERE, "xwl.py"), "check",
+                          _b2, "--no-js"],
+                         capture_output=True, text=True, encoding="utf-8", errors="replace")
+    _o2 = (_r2.stdout or "") + (_r2.stderr or "")
+    if _r2.returncode != 0 or "裸 NUL" not in _o2:
+        failures.append("check 未在集成面报出裸 NUL：rc=%d、含「裸 NUL」=%s"
+                        "（删掉 cmd_check 里那段裸 NUL 逻辑应让它红）"
+                        % (_r2.returncode, "裸 NUL" in _o2))
+    else:
+        print("[ok]  K15 集成面：裸 NUL 文件 check 输出「裸 NUL」且 rc=0（命令级）")
+
+    # ---- A1 断言：`itemids --name` 的 ops 草稿必须是合法 JSON ----
+    # 落点错标的更正：`--suggest` 走的是"整表 json.dumps"，一直合法；
+    # 真正坏的是 `--name`（`format_itemid_candidates` 用 `%r`）⇒ 断言必须打在 `--name` 上。
+    _a1 = os.path.join(tmp, "a1dup.xwl")
+    with open(_a1, "w", encoding="utf-8", newline="") as _f:
+        _f.write('{"hidden":false,"children":[{"configs":{"itemId":"p1"},"expanded":false,'
+                 '"children":[{"configs":{"itemId":"dup","text":"a"},"expanded":false,'
+                 '"children":[],"type":"button"},{"configs":{"itemId":"dup","text":"b"},'
+                 '"expanded":false,"children":[],"type":"button"}],"type":"panel"}],'
+                 '"roles":{},"title":"t","iconCls":"","inframe":false,"pageLink":""}')
+    _r3 = subprocess.run([sys.executable, os.path.join(HERE, "xwl.py"), "itemids",
+                          _a1, "--name", "dup"], capture_output=True, text=True,
+                         encoding="utf-8", errors="replace")
+    _ops = [l.strip() for l in (_r3.stdout or "").splitlines() if '{"op":"set"' in l]
+    try:
+        for _l in _ops:
+            json.loads(_l)
+        _a1_ok = bool(_ops)
+    except Exception:
+        _a1_ok = False
+    if not _a1_ok:
+        failures.append("`itemids --name` 的 ops 草稿不是合法 JSON：%s"
+                        "（把 format_itemid_candidates 的 json.dumps 换回 repr() 应让它红）" % (_ops[:1],))
+    else:
+        print("[ok]  A1：`itemids --name` 的 ops 草稿可被 json.loads（%d 条）" % len(_ops))
+
+    # ---- A2 断言：非有限值（NaN）必须判 `check` ④ 失败（rc=1）----
+    _a2 = os.path.join(tmp, "a2nan.xwl")
+    with open(_a2, "w", encoding="utf-8", newline="") as _f:
+        _f.write('{"n": NaN}')
+    _r4 = subprocess.run([sys.executable, os.path.join(HERE, "xwl.py"), "check",
+                          _a2, "--no-js"], capture_output=True, text=True,
+                         encoding="utf-8", errors="replace")
+    _o4 = (_r4.stdout or "") + (_r4.stderr or "")
+    if _r4.returncode != 1 or "④" not in _o4:
+        failures.append("含 NaN 的样本 check 应为 rc=1 且报 ④，实得 rc=%d"
+                        "（去掉 parse_constant 会让它 rc=0）" % _r4.returncode)
+    else:
+        print("[ok]  A2：非有限值被判 check ④ 失败（rc=1）")
+
+    # ---- A3 断言：含 -0.0 的样本 `expand` 必须 rc=0（往返一致）----
+    _a3 = os.path.join(tmp, "a3negzero.xwl")
+    with open(_a3, "w", encoding="utf-8", newline="") as _f:
+        _f.write('{"n": -0.0}')
+    _r5 = subprocess.run([sys.executable, os.path.join(HERE, "xwl.py"), "expand",
+                          _a3, "--dry-run"], capture_output=True, text=True,
+                         encoding="utf-8", errors="replace")
+    if _r5.returncode != 0:
+        failures.append("含 -0.0 的样本 expand 应 rc=0（往返一致），实得 %d"
+                        "（把 _number 改回折叠 `-0`/写 `0` 应让它红）" % _r5.returncode)
+    else:
+        print("[ok]  A3：含 -0.0 的样本 expand rc=0（往返判定一致）")
+
+    # ---- A4 断言：写盘中途失败 => 目标**不被截断**、无临时残留 ----
+    _a4 = os.path.join(tmp, "a4atomic.xwl")
+    with open(_a4, "w", encoding="utf-8", newline="") as _f:
+        _f.write('{"title":"ORIGINAL-KEEP-ME"}')
+    _real_fdopen = os.fdopen
+
+    class _BoomF:                       # 写 5 字节就失败，模拟磁盘满
+        def __init__(self, f): self._f = f
+        def write(self, d): self._f.write(d[:5]); self._f.flush(); raise OSError(28, "No space")
+        def __enter__(self): return self
+        def __exit__(self, *a): self._f.close(); return False
+    os.fdopen = lambda fd, *a, **k: _BoomF(_real_fdopen(fd, *a, **k))
+    try:
+        xwl.write_text(_a4, '{"title":"NEW-SHOULD-NOT-LAND"}')
+        _a4_raised = False
+    except Exception:
+        _a4_raised = True
+    finally:
+        os.fdopen = _real_fdopen
+    _a4_body = open(_a4, encoding="utf-8").read()
+    _a4_tmp = [n for n in os.listdir(tmp) if n.startswith(".xwlw_")]
+    if (not _a4_raised) or _a4_body != '{"title":"ORIGINAL-KEEP-ME"}' or _a4_tmp:
+        failures.append("写盘非原子：中途失败后 目标=%r 临时残留=%r raised=%s"
+                        "（换回 open(path,\"w\") 直写会让目标被截断 ⇒ 红）"
+                        % (_a4_body[:40], _a4_tmp, _a4_raised))
+    else:
+        print("[ok]  A4：写盘中途失败后目标未被截断、无临时残留")
+
 
 def _check_params_paths(tmp, node, failures, write) -> None:
     """params 两条通路 + 注释剔除与多容器 out（第 8~9 组）"""
@@ -365,6 +501,72 @@ def _check_params_paths(tmp, node, failures, write) -> None:
             [t[1] for t in xwl.find_transfers("g.load({ out: [app.a, app.b] });", FIELD)] == [["a", "b"]],
         "剔注释不粘连代码":
             xwl.strip_js_comments("var a = 1; // c\nvar b = 2;") == "var a = 1; \nvar b = 2;",
+        # ---- 以下 4 条是「**判据依据**」断言（K21）：守的是"判据本身对不对"，不是"行为有没有变" ----
+        # 起因：本仓每版都有自检，但自检长期只覆盖"行为一致性" ⇒ 一个**从第一版就存在**的判据错误
+        # （`field_types` 只取注册表）能活到 1.3.x 才被撞出来。这几条断言的就是那类错误。
+        "field_types = 注册表 ∪ 内置兜底（不是二选一）":
+            (set(xwl._FIELD_FALLBACK) | {"onlyinreg"}) <= set(xwl.field_types(
+                write("k21-controls.json", json.dumps(
+                    {"n": {"id": "onlyinreg", "general": {"type": "Ext.form.field.text"}}},
+                    ensure_ascii=False)))),
+        "strip_sql_type_prefix：类型前缀剥 / DATETIME 不剥 / 原名命中不剥 / 纯数字不剥":
+            (xwl.strip_sql_type_prefix("timestamp.endDate", set()) == "endDate"
+             and xwl.strip_sql_type_prefix("TIMESTAMP.a", set()) == "a"
+             and xwl.strip_sql_type_prefix("DATETIME.start", set()) == "DATETIME.start"
+             and xwl.strip_sql_type_prefix("datetime.start", {"datetime.start"}) == "datetime.start"
+             and xwl.strip_sql_type_prefix("123.a", set()) == "123.a"),
+        "equivalent 能区分 1 / 1.0 / true 与**键序**（Python 的 `==` 不能）":
+            (not xwl.equivalent({"a": 1}, {"a": 1.0})
+             and not xwl.equivalent({"a": 1}, {"a": True})
+             and not xwl.equivalent({"a": 1, "b": 2}, {"b": 2, "a": 1})
+             and not xwl.equivalent({"x": -0.0}, {"x": 0})
+             and xwl.equivalent({"a": 1}, {"a": 1})),
+        "bare_nul_in_strings：只数字符串里的裸 NUL，转义写法不算":
+            (xwl.bare_nul_in_strings('{"x":"a' + chr(0) + 'b"}') == 1
+             and xwl.bare_nul_in_strings('{"x":"a\\u0000b"}') == 0),
+    }.items():
+        if cond:
+            print(f"[ok]  {name}")
+        else:
+            failures.append(f"{name} 失败")
+
+    # ---- 判据依据（K21）续：`sys.` 前缀的来源（K3）与两个入口的寻址同源（F1） ----
+    # 起因：`sys.` 曾硬编码（工程自定义命名空间不认）；`paths` 曾按"能嵌套的整棵树"遍历，
+    #   会给出 `patch` 的 `@itemId` 解不开的路径 —— 两个入口必须用**同一套**寻址语义。
+    _xwlsrc = open(os.path.join(HERE, "xwl.py"), encoding="utf-8").read()
+    _cp_body = _xwlsrc.split("def cmd_paths(")[1].split("\ndef ")[0]
+    _fa_body = _xwlsrc.split("def _find_all_by_itemid(")[1].split("\ndef ")[0]
+    _k3wb = os.path.join(tmp, "k3proj", "src", "main", "webapp", "wb")
+    os.makedirs(os.path.join(_k3wb, "system"), exist_ok=True)
+    os.makedirs(os.path.join(_k3wb, "modules"), exist_ok=True)
+    _k3pg = os.path.join(_k3wb, "modules", "p.xwl")
+    with open(_k3pg, "w", encoding="utf-8") as _f:
+        _f.write("{}")
+    _k3base = xwl.builtin_prefixes(_k3pg)
+    _varp = os.path.join(_k3wb, "system", "var.json")
+    with open(_varp, "w", encoding="utf-8") as _f:
+        json.dump({"sys": {}, "myapp": {}}, _f)
+    _k3var = xwl.builtin_prefixes(_k3pg)
+    with open(_varp, "w", encoding="utf-8") as _f:
+        _f.write("{ not json")
+    _k3bad = xwl.builtin_prefixes(_k3pg)
+    for name, cond in {
+        "builtin_prefixes 基线：无 var.json 时 = 内置（含 sys. / Str.）":
+            "sys." in _k3base and "Str." in _k3base,
+        "builtin_prefixes：认 var.json 的顶层键（工程自定义命名空间）":
+            "myapp." in _k3var and "sys." in _k3var,
+        "builtin_prefixes：var.json 坏掉时退回内置、不崩":
+            _k3bad == _k3base,
+        "paths 与 patch 的 @itemId 寻址同源（都按控件树 _iter_controls）":
+            "_iter_controls(" in _cp_body and "_iter_controls(" in _fa_body,
+        # ⚠️ 内联对象**必须带 `type`**：`_iter_controls` 只 yield 有字符串 `type` 的节点，
+        #    不带 `type` 的 fixture 抓不到"没跳过 configs"这个注入（实测过 —— 那种是**假绿**）。
+        "F1：configs 里的内联同名对象不算控件（@itemId 不会误指）":
+            len(xwl._find_all_by_itemid(
+                {"children": [{"configs": {"itemId": "dup",
+                                           "vals": [{"type": "text",
+                                                     "configs": {"itemId": "dup"}}]},
+                               "type": "panel", "children": []}]}, "dup")) == 1,
     }.items():
         if cond:
             print(f"[ok]  {name}")
@@ -913,8 +1115,19 @@ def _check_docs(tmp, node, failures, write) -> None:
     #   · 出现的 `.xwl` 路径若是**多段**且不含占位符标记、又不属于平台自带目录，即视为真实业务路径。
     mref = re.compile(r"m\?xwl=(?!<|…)([A-Za-z0-9_./-]+)")
     paths = re.compile(r"[A-Za-z0-9_<>.…/-]+\.xwl")
-    plat = re.compile(r"(^|/)(dev|examples|wb)/", re.I)
-    marks = re.compile(r"[<…]|xxx|Xxx|file\.xwl$|page\.xwl$|out\.xwl$")
+    # 路径**首段**白名单：通用目录 / 占位段。真实业务路径的首段（工程代号、模块名）不在此列。
+    # ⚠️ **`wb` 不在此列** —— 合法写法 `wb/modules/<模块>/xxxSql/queryXxx.xwl` 靠行内占位符豁免，
+    #    把 `wb` 放进来会让 `wb/modules/<真实模块>/…xwl` 这条业务路径一并逃过（实测过）。
+    ok_head = re.compile(r"^(?:…|<[^/]*>|xxx|dev|examples|common)$", re.I)
+    # 单段 `.xwl`：只有这些通用示例名放行。
+    generic = re.compile(
+        r"^(?:page|file|out|sql|big|x|t|p|g|smoke|one|two|valid|edit|noname|fixed|"
+        r"demo-page|demo-querySql|queryXxx|myPage|queryBizList|queryOrder|orderQuery)"
+        r"[A-Za-z0-9_.-]*\.xwl$")
+    # 本机路径（盘符 + 目录段）同样算环境信息 —— 它也能定位到具体环境。
+    rx_env = re.compile(r"(?<![A-Za-z0-9_])[A-Za-z]:[\\/](?![.\\/])([A-Za-z0-9_.-]{2,})")
+    skip_env = re.compile(r"RUNNER|[<…]")     # CI 短名示例 / 占位写法
+    marks = re.compile(r"[<…]|xxx|Xxx")
     for nm, ls in docs.items():
         for i, l in enumerate(ls, 1):
             for m in mref.finditer(l):
@@ -922,19 +1135,37 @@ def _check_docs(tmp, node, failures, write) -> None:
                 if not (g.startswith("common/") or g.lower().startswith("xxx")):
                     doc_fail.append("%s:%d `m?xwl=%s` 不是占位符（换成 <模块>/… 写法）"
                                     % (nm, i, g[:40]))
+            if not skip_env.search(l):
+                for _m in rx_env.finditer(l):
+                    doc_fail.append("%s:%d 出现**本机路径** `%s`（环境信息，换成通用描述）"
+                                    % (nm, i, _m.group(0)))
             if marks.search(l):     # 该行已用占位符 / 示意名写法，路径无须再查
                 continue
             for m in paths.finditer(l):
                 s = m.group(0)
-                if "/" not in s or plat.search(s):
-                    continue
-                doc_fail.append("%s:%d 出现多段真实路径 `%s`（应改成占位符写法）" % (nm, i, s))
+                if "/" in s:
+                    if not ok_head.match(s.split("/")[0]):
+                        doc_fail.append("%s:%d 出现业务路径 `%s`"
+                                        "（首段应是 `dev` / `examples` / `common` / `…` / `<…>` / `xxx` 这类通用段）"
+                                        % (nm, i, s))
+                elif not generic.match(s):
+                    doc_fail.append("%s:%d 出现单段 `.xwl` 名 `%s`（不是通用示例名）" % (nm, i, s))
     with open(os.path.join(HERE, "xwl.py"), "r", encoding="utf-8") as fh:
         for i, l in enumerate(fh.read().splitlines(), 1):
             for m in mref.finditer(l):
                 g = m.group(1)
                 if not (g.startswith("common/") or g.lower().startswith("xxx")):
                     doc_fail.append("scripts/xwl.py:%d `m?xwl=%s` 不是占位符" % (i, g[:40]))
+            if not skip_env.search(l):
+                for _m in rx_env.finditer(l):
+                    doc_fail.append("scripts/xwl.py:%d 出现**本机路径** `%s`"
+                                    "（环境信息，换成通用描述）" % (i, _m.group(0)))
+            if marks.search(l):
+                continue
+            for m in paths.finditer(l):
+                s = m.group(0)
+                if "/" in s and not ok_head.match(s.split("/")[0]):
+                    doc_fail.append("scripts/xwl.py:%d 出现业务路径 `%s`" % (i, s))
 
     # 17e 文档里指向本地文件的 Markdown 链接必须真的存在
     # 起因：把 FAQ / 自检清单外移到 references/ 时，最容易出现的就是"SKILL.md 指了、
@@ -971,6 +1202,8 @@ def _check_docs(tmp, node, failures, write) -> None:
         ("改完自检清单", "SKILL.md", "references/checklist.md", ["- [ ]"]),
         ("反模式清单", "SKILL.md", "references/anti-patterns.md", ["为什么诱人"]),
         ("端到端实操", "SKILL.md", "references/walkthrough.md", ["第 1 步"]),
+        ("2.6 diffguard 判据细节", "SKILL.md", "references/faq.md", ["粗筛", "定义级"]),
+        ("2.6 diffguard 因果", "SKILL.md", "references/workflow-notes.md", ["定义级", "粗筛"]),
     ]
     for _lab, _src, _dst, _keys in _splits:
         if _dst not in "\n".join(docs.get(_src, [])):
@@ -1455,11 +1688,35 @@ def _check_docs(tmp, node, failures, write) -> None:
     #     判据**故意窄**：只钉"N 个 xwl"与"N KB / N.N s"三类 token —— 散文里数字太多，
     #     全面比对必然踩出一片误报（"60 项断言""17 条 FAQ"这类不在规模层管辖内）。
     _auth = re.sub(r"\s+", "", _txt.get("references/measured-data.md", ""))
-    for _rn, _rt in (("SKILL.md", _sk_txt), ("README.md", _rm_txt)):
+    for _rn, _rt in (("SKILL.md", _sk_txt), ("README.md", _rm_txt),
+                     ("references/faq.md", _txt.get("references/faq.md", ""))):
         for _tok in sorted(set(re.findall(r"\d{4,}\s*个\s*xwl|\d+(?:\.\d+)?\s*KB|\d+\.\d+\s*s\b", _rt))):
             if re.sub(r"\s+", "", _tok) not in _auth:
                 doc_fail.append("%s 里的规模数字「%s」在 references/measured-data.md 里找不到"
                                 "（规模类数字以那份为准，别在别处另算一套）" % (_rn, _tok.strip()))
+
+    # 17q-自洽：**权威层内部**同一指标只许一个主口径。
+    #     起因：measured-data §十 写 24957、§11.3 写 24986，两值都在**同一文件**内，
+    #     只查「数字是否存在别处」时那条件天然为真、抓不到这种自相矛盾。
+    #     判据：① 每个「NNNNN 个 xwl」都要有口径限定词；② 出现多个不同取值时，
+    #           文件里必须有一句显式的口径差异声明（否则读者会当成同一个统计）。
+    _qual = ("全文正则", "可解析", "全量", "全项目", "样本工程", "单工程", "抽样")
+    _caveat = ("主口径", "不同口径", "口径不同", "不是同一口径", "两种口径")
+    _md_lines = _txt.get("references/measured-data.md", "").splitlines()
+    _md_vals = {}
+    _caveat_on_line = False
+    for _i, _l in enumerate(_md_lines, 1):
+        for _m in re.finditer(r"(\d{4,})\s*个\s*xwl", _l):
+            _md_vals.setdefault(_m.group(1), []).append(_i)
+            if any(_c in _l for _c in _caveat):
+                _caveat_on_line = True
+            if not any(_q in _l for _q in _qual):
+                doc_fail.append("measured-data.md:%d 的规模数字「%s」没带口径限定词（取词：%s）"
+                                % (_i, _m.group(0).strip(), "/".join(_qual)))
+    if len(_md_vals) > 1 and not _caveat_on_line:
+        doc_fail.append("measured-data.md 内「NNNNN 个 xwl」有多个取值 %s 却未在**同处**声明口径差异"
+                        "（加「主口径 / 不是同一口径」等说明，别让读者当成同一统计）"
+                        % "/".join(sorted(_md_vals)))
 
     if doc_fail:
         failures.extend(doc_fail[:12])
@@ -2141,12 +2398,28 @@ def _check_diffguard(tmp, node, failures, write) -> None:
                       "自报（用 os.path.relpath 反推会在短名/盘符不同源时静默跳过）"
                       % (_label, _alt))
 
+    # ⑦ **K21「判据依据」断言（K13 的必配自检）**：造一个「内容与基线相邻两行的拼接相同，
+    #    但**续行符与行数都没减少**」的样本 ⇒ 必须**不报压平**，只给一句 [note] 说明判为"内容移动"。
+    #    守的是判据本身：缺了前置必要条件，`}` / `');'` 这类**极短行**的"内容恰好等于相邻两行拼接"
+    #    会在**真实历史版本**上误报，而三个计数一个都没变（`行数 4470 → 4470` 在数学上就排除了压平）。
+    _git("checkout", "-q", "--", "dg.xwl")
+    _mk("dg.xwl", "MOvE_A" + BS + '\n"x"\nP\nQ')          # 行数 4 / 续行符 1
+    _git("commit", "-q", "-am", "move-fixture")
+    _mk("dg.xwl", 'MOvE_A"x"' + "\nR" + BS + "\nS\nT")    # 行数 4 / 续行符 1（都没减少）
+    _rc, _out = _cli("diffguard", "dg.xwl", "--rev", "HEAD")
+    if "[warn]" in _out and "压平" in _out:
+        dg.append("「内容拼接相同、但续行符与行数都没减少」被判成了**压平** —— "
+                  "精确命中缺前置必要条件（压平必然让行数或续行符减少）")
+    if "内容移动" not in _out:
+        dg.append("判为内容移动时没给 [note] 说明 —— 用户无从知道它为什么不计入告警")
+    _git("checkout", "-q", "--", "dg.xwl")
+
     if dg:
         failures.extend(dg)
     else:
         print("[ok]  压平必报 / 合法删减与单行变长不误报 / patch 改动不误报 / "
               "新文件与非仓库干净跳过 / --strict 与 --rev 的退出码正确 / "
-              "短名与长名两种 cwd 写法都能比对")
+              "短名与长名两种 cwd 写法都能比对 / **计数未变时判为内容移动而不报压平**")
 
 
 def main() -> int:

@@ -3,7 +3,7 @@
   "name_en": "webbuilder-xwl-patch",
   "displayName": "webbuilder-xwl-patch",
   "author": "yfwang0731",
-  "version": "1.3.2",
+  "version": "1.3.3",
   "schema_version": "1.0",
   "description": "WebBuilder（wb）平台 .xwl 定义文件的处理与安全编辑：结构级 patch（只给值 / 子树，工具按设计器自己的算法重建整份文件）+ 格式校验 + 相对 git 基线的压平检测。",
   "core_capabilities": [
@@ -78,6 +78,7 @@
     "references/workflow-notes.md"
   ],
   "update_history": [
+    { "version": "1.3.3", "date": "2026-09-20", "summary": "判据修 bug：field_types/normalname_types 改「注册表 ∪ 内置兜底」（少 1057 条假阳 miss）、等价比对改规范化文本（含键序与值类型，`1`/`1.0`/`true` 互不通过）、diffguard 精确命中加前置必要条件（修真实历史版本误报）、check 的编码报错与 dump 统一文案、字符串里裸 NUL 判 warn 不进 rc、paths 与 patch 寻址同源、params 并入 store 自身 params 并按来源分桶输出、新增「判据依据」自检断言" },
     { "version": "1.3.2", "date": "2026-09-20", "summary": "文档/注释/引文/契约同步（零判定变化）：跨页面传参写清为能力边界、新增依据层 references/workflow-notes.md 与编年守卫、--safe 定性改为两模式语义等价并补 warn、修两处悬空引用与两处与实现不符的说明、description 瘦身" },
     { "version": "1.3.1", "date": "2026-09-18", "summary": "修 Windows 上 diffguard 整组静默跳过（相对路径改由 git 自报）；examples 改为自举" },
     { "version": "1.3.0", "date": "2026-09-18", "summary": "新增 diffguard（相对 git 基线检测压平）" }

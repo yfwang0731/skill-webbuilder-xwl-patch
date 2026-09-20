@@ -128,16 +128,39 @@ def _write_file(path: str, data, binary: bool = False) -> None:
     正常路径下 `_quote` 已把孤立代理项转义掉，这里是第二道防线
     （写盘出口不该有任何一类"裸异常"漏出去）。
     """
+    # 目标已存在但不可写 → 直接报。理由：`os.replace` 在 POSIX 上只受**目录**写权限约束，
+    # 目录可写就能把**只读文件**悄悄换掉（`chmod 444` 的目标照样被覆盖）—— 那会让
+    # 「目标只读 ⇒ rc=2」这条既有承诺在 Linux 上失效。`os.access` 同时认 Windows 只读属性与 POSIX 权限位。
+    if os.path.exists(path) and not os.access(path, os.W_OK):
+        raise XwlWriteError(f"无法写入 {path}：目标不可写（只读）")
+    tmp = None
     try:
+        # 原子写：先写**同目录**临时文件、再 `os.replace()` 覆盖目标。
+        # 中途失败（磁盘满 / 进程被杀）只会留下临时文件，**目标内容不变**（不再被截断）。
+        d = os.path.dirname(os.path.abspath(path)) or "."
+        fd, tmp = tempfile.mkstemp(prefix=".xwlw_", suffix=".tmp", dir=d)
         if binary:
-            with open(path, "wb") as f:
+            with os.fdopen(fd, "wb") as f:
                 f.write(data)
         else:
-            with open(path, "w", encoding="utf-8", newline="") as f:
+            with os.fdopen(fd, "w", encoding="utf-8", newline="") as f:
                 f.write(data)
+        if os.path.exists(path):        # mkstemp 建的是 0600，替换前恢复目标原有权限位
+            try:
+                os.chmod(tmp, os.stat(path).st_mode & 0o777)
+            except OSError:
+                pass
+        os.replace(tmp, path)
+        tmp = None
     except (OSError, UnicodeError) as exc:
         # UnicodeError 没有 .strerror，所以用 getattr 取
         raise XwlWriteError(f"无法写入 {path}：{getattr(exc, 'strerror', None) or exc}") from None
+    finally:
+        if tmp is not None:
+            try:
+                os.remove(tmp)
+            except OSError:
+                pass
 
 
 def write_text(path: str, text: str) -> None:
@@ -195,6 +218,17 @@ def loader_text(text: str) -> str:
     return re.sub(r"\\(?:\r\n|\r|\n)", r"\\n", text)
 
 
+def _reject_nonfinite(name: str):
+    """`json.loads` 的 `parse_constant` 回调：**拒绝** `NaN` / `Infinity` / `-Infinity`。
+
+    Python 的 `json.loads` 默认接受这三个 token（`allow_nan=True`），而它们**不是合法 JSON**：
+    工具会把 `NaN` 读成 `float nan`、再用 `repr()` 写出小写 `nan`（非法）⇒ 往返必失败；
+    而框架的 `org.json` 把 `NaN` 当**字符串** `"NaN"`（`stringToValue` 只对数字/`-` 开头转数字）
+    ⇒ 「工具放行、框架读到另一种类型」。故这里显式抛错，让 `check` ④ 直接判失败（假阴性转真报）。
+    """
+    raise ValueError("非有限数值 `%s` 不是合法 xwl（org.json 会把它当字符串，且工具写不回）" % name)
+
+
 def parse_xwl(text: str):
     """按加载器规则解析 xwl。
 
@@ -206,7 +240,7 @@ def parse_xwl(text: str):
     i = t.find("{")
     if i < 0:
         raise ValueError("文件里找不到 `{` —— 不是 xwl 内容（空文件或纯文本）")
-    return json.loads(t[i:], strict=False)
+    return json.loads(t[i:], strict=False, parse_constant=_reject_nonfinite)
 
 
 # --------------------------------------------------------------------------- #
@@ -263,6 +297,12 @@ def _number(v) -> str:
         return "true" if v else "false"
     if isinstance(v, int):
         return str(v)
+    if isinstance(v, float) and v == 0 and str(v).startswith("-"):
+        # 负零：**保留 `-0.0`**（不可折叠成 `-0`/`0`）。往返比对是
+        # `equivalent(parse_xwl(dumps(obj)), obj)`，右侧是文件原值 `-0.0`；
+        # 只要写出的形态被 Python 读回不是 `-0.0`，两侧就不等 ⇒ 三命令 rc=2。
+        # org.json 写 `0`（longValue），但真实工程无 `-0.0`（见 equivalent docstring）。
+        return "-0.0"
     s = repr(v)
     if ("." in s) and ("e" not in s) and ("E" not in s):
         s = s.rstrip("0").rstrip(".")
@@ -341,6 +381,22 @@ def _reline_string_token(tok: str, eol: str) -> str:
     return "".join(out)
 
 
+def equivalent(a, b) -> bool:
+    """**规范化文本**等价判据 —— 比 `==` 严，用来替掉三处写盘前的等价比对。
+
+    为什么不能用 `==`（K8）：Python 的 `==` 把 `1`/`1.0`/`True` 视为相等、把 `0`/`-0.0` 视为相等，
+    并且**完全忽略 dict 的键序** ⇒ ① 值的**类型漂移**（float↔int、bool↔int）发现不了；
+    ② **键序写错发现不了** —— 而"键序与设计器一致"正是本工具的核心卖点
+    （`references/anti-patterns.md` 明写"键序写错，产出即与设计器不一致"）。
+    `json.dumps(..., ensure_ascii=False)` 恰好**保留键序**，且能区分 `true`/`1`、`1.0`/`1`、`-0.0`/`0`。
+
+    实测爆炸半径 = **0**：全量 24933 个可解析文件「dump → 再解析」往返，**用 `==` 与用
+    `json.dumps` 得到的结论完全一致、零例外**（`-0.0` 只出现在合成样本里）⇒ 本判据的定位是
+    "**防手写 / 防外部生成**"，不是修真实工程里的现存问题。
+    """
+    return json.dumps(a, ensure_ascii=False) == json.dumps(b, ensure_ascii=False)
+
+
 def dumps_designer(obj, indent_factor: int = 1, eol: str = CRLF, safe: bool = False) -> str:
     """序列化成 xwl 的多行磁盘形态，与设计器写回（`IDE.updateModule`）一致。
 
@@ -348,8 +404,7 @@ def dumps_designer(obj, indent_factor: int = 1, eol: str = CRLF, safe: bool = Fa
     Windows 工作区因为 git `autocrlf` 看到的是 CRLF。默认按 CRLF 输出以贴合 Windows 工作区形态，
     要还原设计器原始产物用 `eol="\\n"`。
 
-    两个模式**语义等价**（9 类取值的往返解析与二次 dump 实测全部等价、全幂等），
-    **差异只在字节形态**：
+    两个模式**语义等价**（往返解析实测全部等价），**差异只在字节形态**：
     safe=False（默认）：复刻设计器的写回规则 —— 值里那处「字面反斜杠 + n」会被改写成
       「反斜杠 + 换行」（同一段文本的另一种写法，加载器还原回同一个值）。
       产出与设计器**逐字节一致**，要提交就用它。
@@ -376,6 +431,13 @@ class XwlLoadError(Exception):
     """读文件 / 解析 xwl 失败 —— 消息面向用户，可直接打印。"""
 
 
+#: 非 UTF-8 的**唯一一份**可读文案 —— `read_xwl_text`（抛 `XwlLoadError`）与 `check`（`[FAIL]`）都引用它。
+#: ⚠️ 两处必须同源：只改一侧会让另三个入口仍甩 Python codec 原文（`params` / `itemids` 同样走这条路）。
+_NOT_UTF8_HINT = ("不是 UTF-8 文本（xwl 必须是无 BOM 的 UTF-8）。**工具不猜编码** —— "
+                  "猜错会写成乱码，而乱码文件本身是合法 UTF-8、会一路放行；"
+                  "请另存为 UTF-8 或用 `iconv` 转换后覆盖")
+
+
 def read_xwl_text(path: str):
     """**只读 + 解码**（不解析），返回 `(text, has_bom)`；失败抛 `XwlLoadError`。
 
@@ -387,7 +449,7 @@ def read_xwl_text(path: str):
     except OSError as exc:
         raise XwlLoadError("无法读取 %s：%s" % (path, exc)) from exc
     except UnicodeDecodeError as exc:
-        raise XwlLoadError("不是 UTF-8 文本（xwl 必须是无 BOM 的 UTF-8）：%s" % exc) from exc
+        raise XwlLoadError("%s（原始错误：%s）" % (_NOT_UTF8_HINT, exc)) from exc
 
 
 def load_xwl(path: str):
@@ -575,6 +637,33 @@ def node_check_many(node: str, codes: list) -> list:
 # --------------------------------------------------------------------------- #
 # check
 # --------------------------------------------------------------------------- #
+def bare_nul_in_strings(text: str) -> int:
+    """字符串字面量里出现**裸 NUL**（`\x00`）的处数。
+
+    为什么单独查：工具刻意用 `json.loads(..., strict=False)`（org.json 允许字符串内裸换行/Tab），
+    于是**裸 NUL 会被放行**、`check` 报 ALL OK；而 org.json 的 `JSONTokener` 有 `Unterminated string`
+    分支、其 `next()` 对**真实 NUL 与 EOF 都返回 0** ⇒ 框架加载会失败 —— 属"工具放行、框架拒绝"的
+    **假阴性**。⚠️ 证据等级：**高置信未直证**（来自字节码字符串 + 机制推理，**未实机跑 Java**）。
+    写成 `\u0000` 的**转义**不算（那是对的做法）。
+    """
+    n = 0
+    in_str = False
+    esc = False
+    for ch in text:
+        if in_str:
+            if esc:
+                esc = False
+            elif ch == "\\":
+                esc = True
+            elif ch == '"':
+                in_str = False
+            elif ch == "\x00":
+                n += 1
+        elif ch == '"':
+            in_str = True
+    return n
+
+
 def cmd_check(args) -> int:
     node = find_node(args.node)
     if node is None and not args.no_js:
@@ -586,8 +675,14 @@ def cmd_check(args) -> int:
         errors: list[str] = []
         try:
             text, has_bom = decode(path)
+        except UnicodeDecodeError as exc:
+            # 与 `decode` 的 `XwlLoadError` **同一段**文案（同一个常量）—— 两处必须同源。
+            print("  [FAIL] " + _NOT_UTF8_HINT)
+            print(f"         （原始错误：{exc}）")
+            failed = True
+            continue
         except Exception as exc:  # noqa: BLE001
-            print(f"  [FAIL] 无法读取/解码: {exc}")
+            print(f"  [FAIL] 无法读取: {exc}")
             failed = True
             continue
 
@@ -685,6 +780,14 @@ def cmd_check(args) -> int:
             else:
                 print("  [ok]   ⑦ 无重名")
             print("  -> OK")
+        n_nul = bare_nul_in_strings(text)
+        if n_nul:
+            print(f"  [warn] 字符串里含 {n_nul} 处**裸 NUL**（`\\x00`）：多数 JSON 解析器"
+                  f"（含框架用的 org.json）会拒绝，请转义成 `\\u0000`")
+            print("         ⚠️ 证据等级：**高置信未直证** —— 依据是 `org/json/JSONTokener.class` 的 "
+                  "`Unterminated string` 分支、以及 `next()` 对 NUL 与 EOF 都返回 0 的机制推理，"
+                  "**未实机跑 Java**")
+            print("         本项**只告警、不进 rc**（工具自身按 `strict=False` 解析，会放行）")
         for w in itemid_warns:
             print(f"  [warn] {w}")
         for n in notes:
@@ -808,15 +911,15 @@ def cmd_expand(args) -> int:
     print(f"规范化后: {_byte_len(out)} B, 换行={'CRLF' if eol == CRLF else 'LF'}"
           f"{', 安全模式(--safe)' if args.safe else ''}")
 
-    # 语义等价比对（必须过，否则不写）
+    # 语义等价比对（**规范化文本**，必须过，否则不写）
     try:
-        if parse_xwl(out) != obj:
+        if not equivalent(parse_xwl(out), obj):
             print("[FAIL] 重新序列化后语义不一致，已中止（不写文件）")
             return 2
     except Exception as exc:  # noqa: BLE001
         print(f"[FAIL] 重新序列化结果无法解析，已中止: {exc}")
         return 2
-    print("[ok]   语义等价比对通过（重新解析后与原对象完全一致）")
+    print("[ok]   语义等价比对通过（规范化文本一致：含键序与值类型）")
 
     if args.dry_run:
         print("[dry-run] 未写入")
@@ -886,12 +989,11 @@ _NORMALNAME_FALLBACK = (
 ).split()
 
 
-def discover_controls(start_file: str) -> str | None:
-    """从文件位置向上找设计器控件注册表 `wb/system/controls.json`。"""
+def _find_upward(start_file: str, rel: str) -> str | None:
+    """从文件位置向上找工程内的 `wb/<rel>`（最多上溯 12 层）。"""
     d = os.path.dirname(os.path.abspath(start_file))
     for _ in range(12):
-        for cand in (os.path.join(d, "system", "controls.json"),
-                     os.path.join(d, "wb", "system", "controls.json")):
+        for cand in (os.path.join(d, rel), os.path.join(d, "wb", rel)):
             if os.path.isfile(cand):
                 return cand
         nd = os.path.dirname(d)
@@ -901,15 +1003,25 @@ def discover_controls(start_file: str) -> str | None:
     return None
 
 
+def discover_controls(start_file: str) -> str | None:
+    """从文件位置向上找设计器控件注册表 `wb/system/controls.json`。"""
+    return _find_upward(start_file, os.path.join("system", "controls.json"))
+
+
 def normalname_types(controls_path: str | None = None) -> tuple:
-    """合法接受 `normalName` 的控件类型（权威来源 = 注册表 configs 的键）。"""
+    """合法接受 `normalName` 的控件类型 = **注册表推导 ∪ 内置兜底**。
+
+    为什么必须并集（与 `field_types` 同构）：只取注册表时，**老工程会整类丢掉**
+    实测新注册表有、老工程没有的类型（`month` / `colorfield` / `echart`）
+    ⇒ 明明合法的类型被判"不在白名单里"，修法建议跟着错。并集只会**少报**，是安全方向。
+    """
+    ids: set[str] = set(_NORMALNAME_FALLBACK)
     if controls_path:
         try:
             reg = json.load(open(controls_path, encoding="utf-8"))
         except Exception:  # noqa: BLE001
             reg = None
         if reg is not None:
-            ids: set[str] = set()
 
             def walk(o):
                 if isinstance(o, dict):
@@ -923,9 +1035,7 @@ def normalname_types(controls_path: str | None = None) -> tuple:
                         walk(v)
 
             walk(reg)
-            if ids:
-                return tuple(sorted(ids))
-    return tuple(_NORMALNAME_FALLBACK)
+    return tuple(sorted(ids))
 
 
 _CAMEL_RE = re.compile(r"[A-Z]+(?=[A-Z][a-z])|[A-Z]?[a-z]+|[A-Z]+|\d+")
@@ -972,6 +1082,15 @@ def suggest_normalname(own, cfg, anc, taken) -> tuple:
 
 def _iter_controls(obj, path=None, anc=None, container=None, key=None):
     """深度遍历控件节点，产出 `(node, type, configs, path, ancestors, container, key)`。
+
+    ⚠️ **用途边界（与 `iter_nodes` 的分工，别混用）**：
+    - **本函数 = 控件树语义**（**跳过 `configs`**）—— 一切"这是不是一个控件 / 它的 itemId
+      是什么 / 能不能被 `@itemId` 寻址到"的判断都用它。`patch` 的 `@` 寻址、`itemids`、
+      `paths` 都走这条口径。
+    - `iter_nodes`（下钻 `configs`）只在**确实需要看 `configs` 内嵌套结构**时用
+      （如 `sqlrefs` 找 `serverScript` / `dataprovider`）。
+    - ⚠️ **两处的 `path` 必须同源**：`paths` 推荐给 `patch` 的路径若来自另一条口径，
+      就会出现"推荐了 `patch` 解不开的路径"。
 
     `ancestors` 是由外到内的 `[(type, itemId), ...]`（不含自身）——
     这是重名时判断"哪个同名控件才是目标"的关键依据。
@@ -1138,8 +1257,9 @@ def format_itemid_candidates(name, hits, scope_desc="当前范围", all_names=No
         lines.append("  若采纳，可写成 ops（改完请跑 `xwl.py itemids` 复核，并同步改 JS 里的引用）：")
         for i, t, s, _w in sug[:3]:
             p = hits[i - 1][3] + ["configs", "itemId"]
-            lines.append('    {"op":"set","path":%s,"value":%r}' % (
-                "[" + ", ".join(json.dumps(x) if isinstance(x, str) else str(x) for x in p) + "]", s))
+            lines.append('    {"op":"set","path":%s,"value":%s}' % (
+                "[" + ", ".join(json.dumps(x) if isinstance(x, str) else str(x) for x in p) + "]",
+                json.dumps(s, ensure_ascii=False)))
     lines.append("")
     lines.append("全量重名报告（含分级与建议）：python scripts/xwl.py itemids <file> --dups-only")
     return "\n".join(lines)
@@ -1489,7 +1609,7 @@ def cmd_itemids(args) -> int:
     print(f"含 itemId 的控件 {len(rep['nodes'])} 个 / 去重名字 {len(names)} 个；"
           f"重名组 {len(groups)} 组 —— error {counts['error']} / warn {counts['warn']} / benign {counts['benign']}")
     print(f"事件 JS 引用的名字 {len(rep['js_refs'])} 个 | "
-          f"控件注册表: {ctl or '（未找到，normalName 白名单用内置清单）'}")
+          f"控件注册表: {ctl or '未找到'}（normalName 白名单 = 注册表 ∪ 内置兜底）")
 
     cols = [(n, cfg) for n, t, cfg, *_ in rep["nodes"] if t in _IID_COL_TYPES]
     if cols:
@@ -1584,13 +1704,13 @@ def cmd_patch(args) -> int:
 
     out = dumps_designer(obj, args.indent, eol)
     try:
-        if parse_xwl(out) != obj:
+        if not equivalent(parse_xwl(out), obj):
             print("[FAIL] 重建结果语义不一致，已中止（不写文件）")
             return 2
     except Exception as exc:  # noqa: BLE001
         print(f"[FAIL] 重建结果无法解析，已中止: {exc}")
         return 2
-    print(f"[ok]   语义等价比对通过 | 变更后 {_byte_len(out)} B "
+    print(f"[ok]   语义等价比对通过（规范化文本：含键序与值类型） | 变更后 {_byte_len(out)} B "
           f"({_byte_len(out) - _byte_len(text):+d})")
 
     if args.dry_run:
@@ -1748,14 +1868,19 @@ def cmd_paths(args) -> int:
         print(f"[FAIL] {exc}")
         return 2
 
+    # ⚠️ 用 `_iter_controls`（**控件树语义**）而不是 `iter_nodes` —— 必须与 `patch` 的
+    # `@itemId` 寻址**同源**：`iter_nodes` 会下钻 `configs` 内联对象，把那些"幻影控件"
+    # 也报成可编辑字段、并推荐 `["@x","configs","sql"]` 这类路径，而 `patch` 解不开
+    # （报 `ItemIdError`）。实测那些内联对象全量 1070 个、带 `itemId`/`sql` 的 = 0
+    # ⇒ 统一后**不丢任何可编辑字段**。
     iid_count: dict = {}
-    for _t, _cfg, _p in iter_nodes(obj):
+    for _n, _t, _cfg, _p, _a, _c, _k in _iter_controls(obj):
         _i = _cfg.get("itemId")
         if isinstance(_i, str) and _i:
             iid_count[_i] = iid_count.get(_i, 0) + 1
 
     rows = []
-    for t, cfg, path in iter_nodes(obj):
+    for _n, t, cfg, path, _a, _c, _k in _iter_controls(obj):
         iid = cfg.get("itemId")
         for k in ("sql", "totalSql", "serverScript", "url"):
             v = cfg.get(k)
@@ -1934,9 +2059,9 @@ def cmd_new(args) -> int:
     eol_name = "LF" if eol == "\n" else "CRLF"
     out = dumps_designer(obj, args.indent, eol)
 
-    # 语义等价比对（必须过，否则不写盘）
+    # 语义等价比对（**规范化文本**，必须过，否则不写盘）
     try:
-        if parse_xwl(out) != obj:
+        if not equivalent(parse_xwl(out), obj):
             print("[FAIL] 重建结果语义不一致，已中止（不写文件）")
             return 2
     except Exception as exc:  # noqa: BLE001
@@ -1950,7 +2075,7 @@ def cmd_new(args) -> int:
         print("       缺这些键的文件 `check` 也是 ALL OK（只查格式），但设计器/框架行为会不一致。")
     if extra:
         print(f"[note] 保留了非标准顶层键（原样追加在末尾）：{extra}")
-    print(f"[ok]   语义等价比对通过 | {_byte_len(out)} B | 换行={eol_name}")
+    print(f"[ok]   语义等价比对通过（规范化文本：含键序与值类型） | {_byte_len(out)} B | 换行={eol_name}")
 
     if args.dry_run:
         print("\n--- 将写入的内容 ---")
@@ -2359,7 +2484,14 @@ def cmd_diffguard(args) -> int:
         n_wd = len(ANY_EOL_RE.split(wd_text))
 
         # 判据一（精确，主判据）：基线里连续多行被拼成了工作区的某一行 —— "压平"的定义本身
-        hits = _merged_line_hits(head_text, wd_text)
+        hits_all = _merged_line_hits(head_text, wd_text)
+        # ⚠️ **前置必要条件**："压平"的定义就是"多条物理行并成一条" ⇒ **续行符数与行数至少要有一个
+        #    减少**。缺了这条，`}` / `');'` 这类**极短行**的"内容恰好等于基线相邻两行的拼接"会被判成
+        #    压平 —— 实测在**真实历史版本**上误报，且同一条输出里三个计数一个都没变
+        #    （`行数 4470 → 4470` 在数学上就排除了压平），甚至同时报两条方向相反的命中。
+        pressed = (c_wd < c_head) or (n_wd < n_head)
+        hits = hits_all if pressed else []
+        moved = bool(hits_all) and not pressed
         # 判据二（粗筛，补充）：续行符净减少 **且** 最长行显著变长。
         # 保留它是因为它能抓到"精确判据拼不出等式"的形态（例如压平**同时**还改了内容）；
         # 但它单独用会有两个漏报面（见 `_merged_line_hits` 注释），所以只当补充。
@@ -2389,6 +2521,10 @@ def cmd_diffguard(args) -> int:
         else:
             n_clean += 1
             print(f"  [ok]   与基线有差异，但无压平迹象 —— {stat}")
+            if moved:
+                print(f"  [note] 另有 {len(hits_all)} 处「内容与基线相邻几行的拼接相同」，"
+                      f"但**续行符与行数都没减少** ⇒ 判为**内容移动/复制，不是压平**"
+                      f"（压平必然让行数或续行符减少），不计入告警")
             if c_wd < c_head and not grew:
                 print("         续行符变少而最长行没变长 ⇒ 像是**正常删减**（删多行代码 / 删控件），"
                       "不是「把多行合并成一行」")
@@ -2420,11 +2556,69 @@ def cmd_diffguard(args) -> int:
 _HASH_RE = re.compile(r"\{#([^}]{1,64})#\}")
 _PARAM_RE = re.compile(r"\{\?([^}]{1,64})\?\}")
 _SETATTR_RE = re.compile(r"""setAttribute\(\s*(['"])(.*?)\1""")
+# 框架内置变量前缀的**内置兜底**。有文件来源的那部分由 `builtin_prefixes()` 从
+# `wb/system/var.json` 顶层键推导后并进来 —— **必须取并集**：
+#   · 只认内置 ⇒ 工程若在 `var.json` 加自定义命名空间（如 `myapp.`），`{?myapp.x?}` 会被判成 miss（假阳）；
+#   · 只取文件 ⇒ 实测 8 个工程里只有 7 个有 `var.json`，会在整整一个根上崩。
+# `Str.` 来自框架类 `Str.java`（`Str.format(request, key)`），**没有**工程文件来源
+# （`wb/script/locale/**` 与 `wb/system/language.json` 里没有任何 `Str.*` 形态的键）⇒ 只能内置。
 _BUILTIN_PREFIX = ("sys.", "Str.")
+
+# 「类型前缀」白名单 —— 权威来源是框架 `DbUtil.sqlTypes` 的 **36 个 JDBC 类型名**，大小写不敏感。
+# ⚠️ 只有 `params` 用它剥前缀；`sqlrefs` **绝不使用** —— `{#…#}` 是框架变量、没有类型前缀这回事，
+#    套上会把 `{#timestamp.x#}` 误剥。
+# ⚠️ 不要混进 `wb/system/database/types.json` 里那 7 个 DDL 名字：`DATETIME` **不在** JDBC 表里，
+#    误剥会把 `{?datetime.start?}` 改成 `start`，而框架 `getFieldType("datetime")` 返回 null、
+#    仍按整名 `datetime.start` 取 ⇒ 两侧不一致。
+_SQL_TYPE_NAMES = frozenset("""
+    BIT TINYINT SMALLINT INTEGER BIGINT FLOAT REAL DOUBLE NUMERIC DECIMAL CHAR VARCHAR
+    LONGVARCHAR DATE TIME TIMESTAMP BINARY VARBINARY LONGVARBINARY NULL OTHER JAVA_OBJECT
+    DISTINCT STRUCT ARRAY BLOB CLOB REF DATALINK BOOLEAN ROWID NCHAR NVARCHAR LONGNVARCHAR
+    NCLOB SQLXML
+""".split())
+
+
+def builtin_prefixes(start_file: str | None = None) -> tuple:
+    """框架内置变量前缀白名单 = `wb/system/var.json` 顶层键推导 ∪ 内置兜底。"""
+    pref = set(_BUILTIN_PREFIX)
+    if start_file:
+        vp = _find_upward(start_file, os.path.join("system", "var.json"))
+        if vp:
+            try:
+                v = json.load(open(vp, encoding="utf-8"))
+            except Exception:  # noqa: BLE001
+                v = None
+            if isinstance(v, dict):
+                pref |= {"%s." % k for k in v if isinstance(k, str) and k}
+    return tuple(sorted(pref))
+
+
+def strip_sql_type_prefix(name: str, provided) -> str:
+    """`{?timestamp.endDate?}` → `endDate`（只在确定是类型前缀时才剥）。
+
+    三条规则都是实测定的：
+    ① **只按 36 个 JDBC 类型名剥** —— 不复刻框架源码里"纯数字也算类型"那条分支；
+    ② **精确匹配优先**：原名已在 `provided` 里就**不剥**（工程里确实存在带点的参数名），
+       否则会出现"剥前缀反而新增 miss"；
+    ③ 大小写不敏感（框架是 `equalsIgnoreCase`）。
+    """
+    if "." not in name or name in provided:
+        return name
+    head, _sep, tail = name.partition(".")
+    if tail and head.upper() in _SQL_TYPE_NAMES:
+        return tail
+    return name
 
 
 def iter_nodes(obj):
-    """产出 (type, configs, path) 三元组。"""
+    """产出 (type, configs, path) 三元组（**下钻 `configs`**）。
+
+    ⚠️ **用途边界**：它会把 `configs` 里的**内联配置对象**也当成"节点"吐出来 ——
+    那些对象**没有 `itemId` / `sql`**（实测全量 1070 个、可编辑字段 0 个），
+    对 `patch` 的 `@itemId` 寻址来说它们是**幻影控件**。
+    ⇒ 只在确实需要看 `configs` 内嵌套结构时使用（如 `sqlrefs`）；
+    一切"控件"判断请用 `_iter_controls`（见其 docstring 的用途边界）。
+    """
     def walk(o, path):
         if isinstance(o, dict):
             t = o.get("type")
@@ -2494,11 +2688,14 @@ def cmd_sqlrefs(args) -> int:
             print(f"    {k}: {len(s)} 字符, {{#…#}} {len(hs)} 处, {{?…?}} {len(ps)} 处")
 
     # 逐个判定 {#name#}
+    # 内置前缀白名单**按本文件所在工程推导**（`wb/system/var.json` 顶层键 ∪ 内置），
+    # 而不是拿硬编码的常量 —— 工程自定义命名空间也要认（见 `builtin_prefixes`）。
+    prefixes = builtin_prefixes(args.file)
     missing = []
     for name, cnt in sorted(used.items(), key=lambda kv: -kv[1]):
         if name in provided:
             print(f"  [ok]   {{#{name}#}} × {cnt}  ← serverScript 已提供")
-        elif name.startswith(_BUILTIN_PREFIX):
+        elif name.startswith(prefixes):
             print(f"  [ok]   {{#{name}#}} × {cnt}  ← 框架内置变量")
         elif "." in name:
             warnings.append(f"{{#{name}#}} × {cnt} 未在 serverScript 里设置，名字带点（疑似内置变量，请确认）")
@@ -2549,14 +2746,25 @@ _SKIP_KEYS = {"out", "add", "callback", "scope", "success", "failure", "async",
 
 
 def field_types(controls_path: str | None = None) -> tuple:
-    """取值控件类型集合：优先从设计器控件注册表推导，否则用内置兜底。"""
+    """取值控件类型集合 = **注册表推导 ∪ 内置兜底**。
+
+    ⚠️ **必须并集，只取注册表会出现「能找到注册表反而更不准」** —— 实测同一页面：
+    有注册表 → 页面送出 5 个 / miss 40；用内置兜底 → 32 个 / miss 14。
+    根因：那个工程把 `text` 注册成 `Ext.form.field.*` 之外的命名空间
+    ⇒ 纯注册表推导会把**最高频的取值控件整类丢掉**，
+    容器内 text 控件的 itemId 全部从 `provided` 消失 ⇒ 凭空多出假阳 miss。
+
+    语义论证：这份清单回答的是"**某类型节点出现时算不算取值控件**"，
+    而不是"该工程有没有这个控件" ⇒ 某类型不在页面里时清单有没有它对结论毫无影响
+    ⇒ **union 无副作用**，而"更宽的清单"只会**少报** miss（安全方向）。
+    """
+    ids: set[str] = set(_FIELD_FALLBACK)
     if controls_path:
         try:
             reg = json.load(open(controls_path, encoding="utf-8"))
         except Exception:  # noqa: BLE001
             reg = None
         if reg is not None:
-            ids: set[str] = set()
 
             def walk(o):
                 if isinstance(o, dict):
@@ -2572,9 +2780,7 @@ def field_types(controls_path: str | None = None) -> tuple:
                         walk(v)
 
             walk(reg)
-            if ids:
-                return tuple(sorted(ids))
-    return _FIELD_FALLBACK
+    return tuple(sorted(ids))
 
 
 def strip_js_comments(js: str) -> str:
@@ -2845,7 +3051,32 @@ def cmd_params(args) -> int:
             print(head + f"显式参数名 {keys}")
         print(f"      {'':16s} 原始: {raw[:150]}")
 
-    needed: set[str] = set()
+    # ---- D-a′：把 **store 自身 `configs.params`** 的键并入 `provided` ----
+    # 嵌入点必须在传参点循环**之后**、`miss` **之前**：否则输出自相矛盾 ——
+    # 上面那行写着"自身params配置(优先级最高)"，下面却说"未发现来源"。
+    # 形态实测（全量 32519 个 store）：缺失 22755 / **对象字面量字符串** 9752 /
+    # 其它字符串 12（全是 `'20'`）/ dict 0 / list 0 ⇒ **只按字符串形态解析**，
+    # 只认 `{…}`、其余忽略并 note（`'20'` 这类天然被 `obj_keys` 挡掉）。
+    store_keys: set[str] = set()
+    ignored_store_params: list[tuple] = []
+    for cfg in stores:
+        raw_p = cfg.get("params")
+        if not isinstance(raw_p, str) or not raw_p.strip():
+            continue
+        s = raw_p.strip()
+        if s.startswith("{") and s.endswith("}"):
+            store_keys |= set(obj_keys(s[1:-1]))
+        else:
+            ignored_store_params.append((cfg.get("itemId"), s))
+    provided |= store_keys
+
+    # ---- D-c′：`needed` **按来源分桶** ----
+    # 以前两个来源合并成一个 set，来源信息在合并那一刻就丢了，"单列展示"做不出来。
+    # `need_req` = **请求级参数**：`serverScript` 的 `{?名?}` 与 `app.get(名)` ——
+    # 框架 `Query.java` 一律 `WebUtil.fetchObject(request, paraName)`，值都从 request 取，
+    # 与写在哪个字段无关 ⇒ 保留在 `needed` 里（剔除会把真实风险静默掉）。
+    need_sql: set[str] = set()      # dataprovider 的 sql / totalSql 里的 `{?名?}`
+    need_req: set[str] = set()      # serverScript 的 `{?名?}` / `app.get(名)`
     for tgt, fp in sql_files:
         try:
             so = parse_xwl(open(fp, "rb").read().decode("utf-8"))
@@ -2858,27 +3089,43 @@ def cmd_params(args) -> int:
                 ss = cfg["serverScript"]
                 g, hs = _GETNAME_RE.findall(ss), _PARAM_RE.findall(ss)
                 print(f"  serverScript: app.get(名)={g or []}  {{?名?}}={hs or []}")
-                needed |= set(g) | set(hs)
+                need_req |= set(g) | set(hs)
             if t == "dataprovider":
                 for k in ("sql", "totalSql"):
                     if isinstance(cfg.get(k), str):
                         ps = _PARAM_RE.findall(cfg[k])
                         print(f"  {k}: {{?名?}} = {ps or []}")
-                        needed |= set(ps)
+                        need_sql |= set(ps)
 
+    needed = need_sql | need_req
     if not needed:
         print("\n（SQL 侧没有 {?…?} / app.get，跳过交叉核对）")
         return 0
 
-    miss = sorted(n for n in needed if n not in provided)
-    extra = sorted(n for n in provided if n not in needed)
+    # 真白名单：`sys.*` / `Str.*`（以及工程在 `wb/system/var.json` 里自定义的命名空间）
+    # **不计 miss** —— 它们由框架往 request 里塞，不需要页面提供。
+    prefixes = builtin_prefixes(args.file)
+    # 类型前缀只在**确属类型名**（36 个 JDBC 名）时才剥，且**精确匹配优先**
+    # （原名已在 provided 里就不剥）。两侧用**同一套剥完的名字**比对 ——
+    # 否则会出现「SQL 需要 `timestamp.x`」与「页面送了 `x`、SQL 未用到」同时出现在屏幕上。
+    need_cmp = {strip_sql_type_prefix(n, provided) for n in needed
+                if not n.startswith(prefixes)}
+    miss = sorted(n for n in need_cmp if n not in provided)
+    extra = sorted(n for n in provided if n not in need_cmp)
     print("\n=== 交叉核对 ===")
     print(f"  页面送出 {len(provided)} 个: {sorted(provided)}")
-    print(f"  SQL 需要 {len(needed)} 个: {sorted(needed)}")
+    if store_keys:
+        print(f"    └ 其中 **store 自身 params 提供 {len(store_keys)} 个**: {sorted(store_keys)}")
+    if ignored_store_params:
+        print(f"    [note] {len(ignored_store_params)} 个 store 的 `params` 不是对象字面量，已忽略: "
+              + ", ".join("itemId=%s %r" % (i, v) for i, v in ignored_store_params[:3]))
+    print(f"  SQL 侧需要 {len(needed)} 个 —— 按来源分桶：")
+    print(f"    · dataprovider sql/totalSql 的 `{{?名?}}`: {sorted(need_sql)}")
+    print(f"    · serverScript 的 `{{?名?}}` / `app.get(名)`（**请求级参数**）: {sorted(need_req)}")
     if miss:
         print(f"  [warn] SQL 需要但页面未发现来源: {miss}")
-        print("         可能来自：上级容器 / 其它请求（Wb.request）/ store 自身 params 配置 /"
-              " sys.* 框架上下文；**由调用方页面传入**的那一类本工具不核对")
+        print("         可能来自：上级容器 / 其它请求（Wb.request）/ sys.* 等框架内置变量；"
+              "**由调用方页面传入**的那一类本工具不核对")
         print("         能力边界：只看**这一个页面**静态可见的来源。`Wb.open({params})` 传进本页的键"
               "写在调用方页面里，要核对请到调用方页面去跑")
     else:
