@@ -45,8 +45,9 @@ CRLF = "\r\n"
 # 任意一种换行（加载器接受三种：`\r\n` / `\r` / `\n`）。
 # **切行必须用它，不能用 `text.split(CRLF)`** —— 后者在纯 LF 文件上切不出行
 # （整份文件成一个元素），会让逐行检查静默退化成"只看最后一行"。
-# 纯 LF 恰恰是设计器原样、仓库存的格式、`new` 的默认产出；
-# 样本工程 2780 个 xwl 里 LF **恰好是 0 个**，所以这条长期没被测到。
+# 纯 LF 是设计器写在 Linux 服务器上的产物形态，也是 `new` 的默认产出；
+# 它在**检出形态**下很稀少（实测 8 个 wb 根 / 24957 个 xwl 里 LF-only 只有 32 个），
+# 所以这条长期没被测到。
 ANY_EOL_RE = re.compile(r"\r\n|\r|\n")
 
 
@@ -155,8 +156,8 @@ def write_bytes(path: str, data: bytes) -> None:
 def normalize_eol(text: str, eol: str = CRLF) -> str:
     """把任意换行统一成 `eol`（用于 old/new 片段的归一化，便于用 LF 书写片段）。
 
-    ⚠️ 调用方必须传**目标文件的实际换行**（见 `cmd_edit`）。这里早先硬编码 CRLF，
-    造成两个缺陷：**LF 文件上跨行锚点永远匹配不到**（报「锚点出现次数: 0」，
+    ⚠️ 调用方必须传**目标文件的实际换行**（见 `cmd_edit`）。写死 CRLF 会引出两个缺陷：
+    **LF 文件上跨行锚点永远匹配不到**（报「锚点出现次数: 0」，
     看着像用户写错了锚点）；**单行锚点 + 多行 new 会把 LF 文件写成 CRLF/LF 混用**。
     两者都已改为按目标换行归一。
     """
@@ -322,7 +323,7 @@ def _reline_string_token(tok: str, eol: str) -> str:
     """把字符串 token 里的 `\\n` 转义换成「反斜杠 + 换行」，其余转义原样保留。
 
     逐转义对扫描 —— 直接对整段文本 replace 会误伤 `\\\\n`（值是字面反斜杠 + n）。
-    事实上 WebBuilder 自己就踩了这个坑（见 SKILL.md「已知缺陷」），这里做的是**安全版**。
+    事实上 WebBuilder 自己就踩了这个坑（根因与后果见 SKILL.md §2.5），这里做的是**安全版**。
     """
     body = tok[1:-1]
     out = ['"']
@@ -343,13 +344,16 @@ def _reline_string_token(tok: str, eol: str) -> str:
 def dumps_designer(obj, indent_factor: int = 1, eol: str = CRLF, safe: bool = False) -> str:
     """序列化成 xwl 的多行磁盘形态，与设计器写回（`IDE.updateModule`）一致。
 
-    eol：设计器在服务器上写的是 **LF**；Windows 工作区因为 git `autocrlf` 看到的是 CRLF。
-    默认按 CRLF 输出以贴合本项目**工作区**形态；要还原设计器原始产物用 `eol="\\n"`。
+    eol：设计器**写在服务器上**，产物换行 = 那台服务器的 `line.separator`（Linux 上就是 LF）；
+    Windows 工作区因为 git `autocrlf` 看到的是 CRLF。默认按 CRLF 输出以贴合 Windows 工作区形态，
+    要还原设计器原始产物用 `eol="\\n"`。
 
-    safe=False（默认）：与设计器**逐字节一致**，包括它对「字面反斜杠 + n」的误伤
-      —— 值里出现 `\\` + `n`（源码里的字面 `\\n`）时，设计器会把它改写成「反斜杠 + 换行」，
-      这属于 WebBuilder 自身的缺陷（见 SKILL.md）。要复刻设计器产物就用这个模式。
-    safe=True：逐转义对处理，不动字面 `\\` + `n`，语义无损；但产出与设计器会不一致。
+    两个模式**语义等价**（9 类取值的往返解析与二次 dump 实测全部等价、全幂等），
+    **差异只在字节形态**：
+    safe=False（默认）：复刻设计器的写回规则 —— 值里那处「字面反斜杠 + n」会被改写成
+      「反斜杠 + 换行」（同一段文本的另一种写法，加载器还原回同一个值）。
+      产出与设计器**逐字节一致**，要提交就用它。
+    safe=True：逐转义对处理，值里那处保持原样，人读更直观；但产出与设计器**不一致**。
     """
     t = _value_to_string(obj, indent_factor, 0)
     if safe:
@@ -602,16 +606,15 @@ def cmd_check(args) -> int:
             errors.append(f"② 存在 {bare_cr} 处裸 CR（单独的 CR 不是合法换行）")
 
         notes: list[str] = []
-        # 「单行形态」的判据必须是**任何换行都没有**。原判据只看 `\n` / `\r\n`，
-        # 于是纯 CR 文件会同时得到「存在 N 处裸 CR」的 FAIL 和「无任何换行」的 note
-        # —— 自相矛盾（实测）。
+        # 「单行形态」的判据必须是**任何换行都没有**（含裸 CR）。只数 `\n` / `\r\n` 的话，
+        # 纯 CR 文件会同时得到「存在 N 处裸 CR」的 FAIL 和「无任何换行」的 note —— 自相矛盾。
         if not n_crlf and not n_lf and not n_cr and text.strip():
             notes.append(
                 "该文件是单行形态（无任何换行）。可用 `xwl.py expand` 转成规范多行；"
                 "**不要**把多行文件改成单行。"
             )
         elif not n_crlf and n_lf:
-            notes.append("该文件是 LF 换行（设计器/仓库的原始形态），合法。")
+            notes.append("该文件是 LF 换行（设计器在服务器上的产物形态），合法。")
 
         lines = ANY_EOL_RE.split(text)
 
@@ -720,7 +723,8 @@ def cmd_edit(args) -> int:
         return 2
 
     # 锚点按**目标文件的实际换行**归一化 —— 否则 LF 文件上跨行锚点永远匹配不到
-    # （历史上这里写死 CRLF，失败信息是误导性的「锚点出现次数: 0」，会让人以为锚点写错）
+    # （写死 CRLF 时，跨行锚点在 LF 文件上必然失配，而失败信息是误导性的
+    #   「锚点出现次数: 0」，会让人以为锚点写错）
     n_crlf = text.count(CRLF)
     n_lf = text.count("\n") - n_crlf
     eol = CRLF if n_crlf else "\n"
@@ -789,10 +793,14 @@ def cmd_expand(args) -> int:
     if args.indent != 1:
         print(f"[warn] --indent {args.indent} ≠ 设计器缩进（1 个空格）：产出与设计器不一致，"
               f"设计器下次保存会产生整份 diff。除非在做排版复刻实验，否则用默认值")
+    if args.safe:
+        print("[warn] --safe 的产出与设计器不一致（值里那处「字面反斜杠 + n」保持原样）："
+              "两个模式**语义等价**、只差字节形态，但设计器下次保存会产生整份 diff —— "
+              "只想人读一遍请用 `xwl.py sql` / `events`，别用它覆盖要提交的文件")
 
     out = dumps_designer(obj, args.indent, eol, safe=args.safe)
     # 换行统计要和 `check` 的 ② 用**同一口径**：`n_lf - n_crlf` 才是"裸 LF"个数。
-    # 原先这里打的是 `LF=text.count("\n")`，那会把 CRLF 里的 `\n` 也算进去 ——
+    # 打成 `LF=text.count("\n")` 会把 CRLF 里的 `\n` 也算进去 ——
     # 一份纯 CRLF 文件会显示成「CRLF=17101, LF=17101」，读者极易误读成"混用了"。
     n_crlf = text.count(CRLF)
     print(f"原文件: {_byte_len(text)} B, CRLF={n_crlf}, "
@@ -2145,10 +2153,9 @@ def _merged_line_hits(head_text: str, wd_text: str) -> list:
     返回 [(起始行号, 结束行号, 工作区行号, 该行开头), …]（行号均 1-based）。
 
     为什么不能只用「最长行长度」当指纹（这是本函数存在的理由，实测两个漏报面）：
-      · 被压平的内容若**短于文件里已有的最长行** ⇒ 最长行纹丝不动 ⇒ 完全看不见
-        （实测：3 行短 JS 压平，续行符 2→0，最长行 62→62，旧判据不报）；
-      · 压平增量 < 最长行 × 0.5 ⇒ 被 ratio 门槛吃掉
-        （实测：文件已有 205 字符长行时并入 3 行，205→217，旧判据不报）。
+      · 被压平的内容若**短于文件里已有的最长行** ⇒ 最长行纹丝不动 ⇒ 完全看不见；
+      · 压平增量 < 最长行 × 0.5 ⇒ 被 ratio 门槛吃掉。
+    这两个漏报面的实测数字见 SKILL.md §2.6（这里只留结论，不拷贝第二份）。
 
     为什么不会误报「合法删减」与「单行改长」：
       · 起点必须是**以续行符结尾**的行（只有多行字符串内部的续行才长这样，
@@ -2517,7 +2524,7 @@ def cmd_sqlrefs(args) -> int:
 # --------------------------------------------------------------------------- #
 # params（页面 → SQL 的传参链路检查）
 # --------------------------------------------------------------------------- #
-# 页面把值送出去有**两条通路**（框架源码实测，详见 SKILL.md §4.5 与 §4.6）：
+# 页面把值送出去有**两条通路**（框架源码实测，完整规则见 references/sql-fragments.md）：
 #   ① out    —— store.load({out: app.tbar}) / Wb.request({out: …}) / Wb.upload
 #               容器内所有「取值控件」的值由框架自动整包送出，**不用枚举控件**。
 #   ② params —— store.load({params:{名:值}}) / params: Wb.getValue(app.tbar)
@@ -2800,7 +2807,8 @@ def cmd_params(args) -> int:
             if ok:
                 sql_files.append((tgt, fp))
         else:
-            line += f"\n      url={url!r}（非 m?xwl：可能是 Java bean 或其它数据源）"
+            line += (f"\n      url={url!r}（非 m?xwl：可能是 Java bean / 其它数据源，"
+                     f"也可能是「捷径 url」—— 框架支持、表在 wb/system/url.json；本工具不解析捷径）")
         print(line)
 
     if direct:
@@ -2870,7 +2878,9 @@ def cmd_params(args) -> int:
     if miss:
         print(f"  [warn] SQL 需要但页面未发现来源: {miss}")
         print("         可能来自：上级容器 / 其它请求（Wb.request）/ store 自身 params 配置 /"
-              " sys.* 框架上下文 / 由调用方页面传入")
+              " sys.* 框架上下文；**由调用方页面传入**的那一类本工具不核对")
+        print("         能力边界：只看**这一个页面**静态可见的来源。`Wb.open({params})` 传进本页的键"
+              "写在调用方页面里，要核对请到调用方页面去跑")
     else:
         print("  [ok]   SQL 需要的参数在页面侧都能找到来源")
     if extra:
@@ -2962,7 +2972,8 @@ def build_parser() -> argparse.ArgumentParser:
     e.add_argument("--no-js", action="store_true")
     e.set_defaults(func=cmd_edit)
 
-    pt = sub.add_parser("patch", help="结构级编辑：改对象 + 按设计器规则整份重建（推荐）")
+    pt = sub.add_parser("patch", help="结构级编辑：改对象 + 按设计器规则整份重建（推荐）。"
+                                      "产出**永远是设计器原样**（所以没有 --safe）")
     pt.add_argument("file")
     pt.add_argument("--ops", required=True, help="ops JSON 文件：set/insert/append/delete 的数组")
     pt.add_argument("--indent", type=int, default=1)
@@ -2994,7 +3005,7 @@ def build_parser() -> argparse.ArgumentParser:
     n.add_argument("--roles", default=None,
                    help='角色权限，逗号分隔（如 "default" / "default,developer"）；给空串得到 {}')
     n.add_argument("--eol", choices=["lf", "crlf"], default="lf",
-                   help="换行：lf=设计器/仓库的原始形态（默认）；crlf=Windows 工作区形态")
+                   help="换行：lf=设计器写在服务器上的产物形态（默认）；crlf=Windows 工作区形态")
     n.add_argument("--indent", type=int, default=1)
     n.add_argument("--force", action="store_true", help="允许覆盖已存在的文件")
     n.add_argument("--dry-run", action="store_true", help="只打印将写入的内容，不写盘")
@@ -3051,9 +3062,12 @@ def build_parser() -> argparse.ArgumentParser:
     x.add_argument("--out", help="输出到另一个文件（缺省原地覆盖）")
     x.add_argument("--indent", type=int, default=1, help="缩进因子（设计器固定用 1，一般不用改）")
     x.add_argument("--eol", choices=["auto", "lf", "crlf"], default="auto",
-                   help="换行符：auto=沿用原文件（默认；原文件连一个换行符都没有时回退 lf）；lf=设计器在服务器上的原始产物；crlf=Windows 工作区形态")
+                   help="换行符：auto=沿用原文件（默认；原文件连一个换行符都没有时回退 lf）；"
+                        "lf=设计器写在服务器上的产物形态（换行随服务器而定，Linux 上为 LF）；"
+                        "crlf=Windows 工作区形态")
     x.add_argument("--safe", action="store_true",
-                   help="安全模式：不动值里的「字面反斜杠 + n」（设计器会误改它）；产出可能与设计器不一致")
+                   help="安全模式：不动值里的「字面反斜杠 + n」。与默认模式**语义等价**，"
+                        "差异只在字节形态 —— 产出与设计器不一致，别用于要提交的文件")
     x.add_argument("--dry-run", action="store_true")
     x.add_argument("--backup", action="store_true", help="原地覆盖时写 <file>.bak")
     x.add_argument("--node")

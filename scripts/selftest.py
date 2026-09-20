@@ -9,7 +9,7 @@
   · `patch` 的结构级编辑（新节点事件 JS、自动续行）
   · `new` 的从零生成（设计器真实键序 / 拒绝覆盖 / `--from-json` 补齐缺键）
   · `folders` 的 index 一致性检查与 `--register`（幂等 / 保键序 / 保单行形态 /
-    **给目录 + `--register` 必须显式报错**——它曾经是静默无效）
+    **给目录 + `--register` 必须显式报错**——静默忽略会让人以为登记成功了）
   · `paths` 的「原路径」必须带 configs 层（照抄即可改对位置）
   · `schema --skeleton` 只含该控件允许的键，events 键按该控件实际事件决定
   · `node_check_many` 与逐段 `node_check` **必须逐项等价**（批量优化不许改变结论；
@@ -33,35 +33,35 @@
   · `params` 的两条通路识别与注释剔除
   · **写盘失败必须给可读 `[FAIL]` + 退出码 2，不得冒 Python traceback** ——
     目标只读 / 父目录不存在 / 路径过长都属「前置条件不满足」。
-    （原先 `write_text()` 没兜 `OSError`，5 个子命令 9 个场景抛 traceback，
+    （`write_text()` 不兜 `OSError` 的话，5 个子命令 9 个场景会抛 traceback，
     而 64 项断言一条都没覆盖写失败 —— 这条就是为此加的）
   · **`edit` 的锚点必须按目标文件的换行归一**（LF 与 CRLF 都要能跨行匹配）——
-    原先 `normalize_eol()` 硬编码 CRLF：LF 文件上跨行锚点**永远匹配不到**
+    `normalize_eol()` 写死 CRLF 时：LF 文件上跨行锚点**永远匹配不到**
     （报「锚点出现次数: 0」，看着像用户写错了锚点），单行锚点 + 多行 new 还会把
     LF 文件写成 CRLF/LF **混用**。另：**把多行拍平时必须有 `[warn]`** ——
     这类损坏 `check` 查不出（压平后仍是合法 JSON），只有 `edit` 这一处能提示。
     （实测样本工程 2780 个 xwl：1878 全 CRLF / 902 为「单行且末尾无换行符」/ **0 个 LF** ——
     两条路径仍都要覆盖，因为 `expand` 按 `--eol auto` 会把无换行的单行源产出成 LF）
-  · **`check` 的 ③ 必须在 CRLF / LF / CR 三种换行下都生效** —— 它原先用
-    `text.split("\\r\\n")` 切行，**纯 LF 文件切不出行**（整份成一个元素），于是 ③ 静默退化成
+  · **`check` 的 ③ 必须在 CRLF / LF / CR 三种换行下都生效** —— 用
+    `text.split("\\r\\n")` 切行时，**纯 LF 文件切不出行**（整份成一个元素），于是 ③ 静默退化成
     "只看最后一行"；`new` 的默认产出就是 LF，`expand --eol auto` 也会产出 LF。
     同根因还让纯 CR 文件同时得到「存在 N 处裸 CR」的 FAIL 与「该文件是单行形态（无任何换行）」的
     note（自相矛盾）。另：`patch` 对**换行混用**的源会静默统一、`--indent≠1` 会静默产出
     与设计器不一致的排版、对**无换行的单行源**会回退 LF 并整份展开 —— 这三条都必须有 `[warn]`
     / 明确说明（`--indent` 是唯一能主动击穿「diff 只含本次改动」的入口）。
-  · **值里的孤立代理项不得让工具崩** —— `patch` 原先在打印字节数时
-    `out.encode("utf-8")` 抛 UnicodeEncodeError（裸 traceback + rc=1）。
+  · **值里的孤立代理项不得让工具崩** —— 打印字节数时
+    `out.encode("utf-8")` 会抛 UnicodeEncodeError（裸 traceback + rc=1）。
     `_quote` 现在按 org.json 的写法转义成 `\\uXXXX`（语义仍等价，回读一致）；
-    `_write_file` 与字节数展示一并兜住（1.2.2 那次只兜了 `OSError`，`UnicodeError` 不是它的子类）。
+    `_write_file` 与字节数展示一并兜住（只兜 `OSError` 不够：`UnicodeError` 不是它的子类）。
   · **`diffguard`：相对 git 基线检测「多行被压平」** —— 补的是 §2.3 承认的洞
-    （压平后文件**仍合法**，`check` 与 `node --check` 都放行，原先只能靠人工 `git diff`）。
+    （压平后文件**仍合法**，`check` 与 `node --check` 都放行，只靠人工读 `git diff` 很容易漏）。
     判据是**双条件**（续行符净减少 **且** 最长行显著变长），所以这里**正反两侧都要钉**：
     "压平必须报"与"合法删减一段多行 JS / 单行变长必须不报"同等重要 ——
     只留前半条，这个守卫会被日常改动淹没（负向测试：去掉最长行那条 → 立刻报误报）。
     另钉住降级路径：新文件、非 git 目录 → `[note]` 跳过 + rc=0；`--strict` 下跳过即 rc=2；
     `--rev` 写错是用法错、恒 rc=2（且不得被说成"新增文件"）。
   · **SKILL.md 的 frontmatter 有 1024 上限** —— description 是路由真正读的字段，
-    每补一个触发词都在吃这个额度。1.3.0 加 `diffguard` 时曾把它撑到 **1029**，
+    每补一个触发词都在吃这个额度（实测：写全触发词时到过 **1029**；瘦身后 **839**，余量靠守卫守），
     所以把 description 与整个 frontmatter 块都钉住。
 
 改完 xwl.py 先跑它；输出末尾应为 `selftest ALL OK`：
@@ -124,7 +124,7 @@ def _run(fn, **kw):
     """跑一个 `cmd_xxx` 并把它的 stdout 收进 buffer，返回 (rc, text)。
 
     放在模块级是因为它被两组以上用到（子命令冒烟 / 平台回归）——
-    原先是 main 里的嵌套函数，main 拆成多个函数后就跨了作用域。
+    写成 main 里的嵌套函数时，main 拆成多个函数后就跨了作用域。
     """
     buf = io.StringIO()
     with contextlib.redirect_stdout(buf):
@@ -827,7 +827,7 @@ def _check_docs(tmp, node, failures, write) -> None:
                  "references/faq.md", "references/checklist.md", "references/anti-patterns.md",
                  "references/controls.md",
                  "references/sql-fragments.md", "references/measured-data.md",
-                 "references/js-api.md",
+                 "references/js-api.md", "references/workflow-notes.md",
                  ]
     docs: dict = {}
     for nm in doc_names:
@@ -864,7 +864,7 @@ def _check_docs(tmp, node, failures, write) -> None:
     _heads = {k: "\n".join(l for l in v if l.startswith("#")) for k, v in docs.items()}
     _base = {k: k.split("/")[-1] for k in docs}
     for nm, ls in docs.items():
-        # CHANGELOG 是**历史记录**：里面的 `§5.5`→`§5.6` 是「当时的」编号，不按当前结构校验
+        # CHANGELOG 是**历史记录**：里面的 `§5.5`→`§5.6` 是**写入时**的编号，不按当前结构校验
         # （否则每次重排章节都得回头改历史，而历史本来就该原样留着）。
         if nm == "CHANGELOG.md":
             continue
@@ -1038,8 +1038,8 @@ def _check_docs(tmp, node, failures, write) -> None:
         _claims.append(("README 的反模式条数", int(_m.group(1)), _real["ap"]))
     for _m in re.finditer(r"test-prompts\.json\s+#\s*(\d+)\s*条", _rm_txt):
         _claims.append(("README 的 prompt 条数", int(_m.group(1)), _real["tp"]))
-    # 参考清单里的「清单项数」也要查 —— 它曾经漏网：正文 §九 改成了 30 项，
-    # 而同一文件的参考材料清单那行还写着 29 项（旧守卫只认 `**N 项**清单` 那种句式）。
+    # 参考清单里的「清单项数」也要查 —— 正文与参考清单两处会各自漂移
+    # （实测漂移一例：正文 §九 改成 30 项，同一文件的参考清单那行还写着 29 项）。
     for _m in re.finditer(r"改完自检清单\*\*：(\d+) 项", _sk_txt):
         _claims.append(("SKILL 参考清单的清单项数", int(_m.group(1)), _real["ck"]))
     for _lab, _got, _exp in _claims:
@@ -1051,7 +1051,7 @@ def _check_docs(tmp, node, failures, write) -> None:
 
     # 17h 测试 prompt 的**覆盖度**（比"条数对不对"有用得多）：每个子命令至少要被一条 prompt
     #     提到 —— 否则"新加了命令，但评测语料里没人测它"会一直没人发现。
-    #     实测：1.3.0 的招牌能力 `diffguard` 在 11 条里出现 **0 次**（其余 14 个命令都有），
+    #     实测：`diffguard` 会在 prompt 语料里出现 **0 次**（其余 14 个命令都有），
     #     而三种评审方法（darwin / TRACE / 文档审计）**没有一个能看见这件事**。
     try:
         with open(os.path.join(root, "test-prompts.json"), "r", encoding="utf-8") as _fh:
@@ -1269,12 +1269,12 @@ def _check_docs(tmp, node, failures, write) -> None:
 
     # 17j-5 排他性断言（**同义改写**版）：说压平「只有 git diff / 只能靠人工」能发现的句子，
     #     它所在的**小节**里必须出现 `diffguard`。
-    #     上一轮的守卫只匹配字面词「续行符净减少 / 最长行」，于是"只有 `git diff` 能发现"
-    #     这类同义改写全漏了 —— 实测漏掉 2 处，其中一处还是**文件内部自相矛盾**
+    #     只匹配字面词「续行符净减少 / 最长行」的守卫会漏掉"只有 `git diff` 能发现"
+    #     这类同义改写 —— 实测漏掉 2 处，其中一处还是**文件内部自相矛盾**
     #     （同文件别处正说 diffguard 是唯一的自动化防线）。
     #     判据按**小节**取而不是按行取：同一节里出现过 diffguard 就算交代过了。
     for _nm, _ls in docs.items():
-        if _nm == "CHANGELOG.md":      # 历史文档，按当时的事实记，不回改
+        if _nm == "CHANGELOG.md":      # 历史文档，按写入时的事实记，不回改
             continue
         _sec_start, _fence = 0, False
         for _i, _l in enumerate(_ls):
@@ -1322,12 +1322,154 @@ def _check_docs(tmp, node, failures, write) -> None:
                 doc_fail.append("SKILL.md:%d 承诺的输出文案 `%s…` 在 xwl.py 里找不到"
                                 % (_i, (_m.group(1) + _body)[:34]))
 
+    # 17l 编年纪律（三条臂）：非编年文件里不得出现"哪天 / 哪一版发生过什么"。
+    #     分工与豁免面的完整说明在 `references/workflow-notes.md` 第一节 —— 改词表或豁免面前先读它。
+    #     ⚠️ 词表用**相邻字面量拼接**写：守卫扫的是全部分发文件（**含本文件**），
+    #        整词直写会让本文件被自己这三条臂判红。
+    #     ⚠️ 作用域 = `git ls-files`（与"仓库卫生"同一事实源）：不扫磁盘，避免把本地产物算进来。
+    #        取不到 git ⇒ **记一条失败**（"没扫"不等于"通过"）。
+    _chron = ["曾" "经", "原" "先", "早" "先", "此" "前", "一" "度", "当" "年", "旧" "版",
+              "旧" "实现", "旧" "判据", "原" "判据", "上" "一轮", "上" "一版", "当" "时", "历史" "上"]
+    _date_verb = ("实测", "真机", "复现", "审查", "修正", "发布", "事故")
+    _date_re = re.compile(r"\d{4}-\d{2}-\d{2}")
+    _ver_re = re.compile(r"\d+\.\d+\.\d+")
+    _chron_exempt = {"CHANGELOG.md", "metadata.json",
+                     "references/measured-data.md", "references/workflow-notes.md"}
+    _shipped = None
+    try:
+        _pr = subprocess.run(["git", "-C", root, "ls-files"], capture_output=True,
+                             text=True, encoding="utf-8", errors="replace",
+                             env=dict(os.environ))
+        if _pr.returncode == 0:
+            _shipped = [x.strip() for x in _pr.stdout.splitlines() if x.strip()]
+    except (OSError, ValueError):
+        _shipped = None
+    if not _shipped:
+        # 不是 git 仓库（如平台把 skill 打成 zip 分发）⇒ **跳过并明说**，不算通过也不算失败。
+        # 与"仓库卫生"那条守卫同一处置：宁可显式说"没扫"，也不要假装扫过或直接判失败。
+        print("[note] 编年守卫：取不到 `git ls-files` 清单 ⇒ 本次**没扫**（不算通过；在 git 仓库里跑才有这层）")
+    else:
+        for _rel in _shipped:
+            if _rel in _chron_exempt:
+                continue
+            try:
+                _bl = open(os.path.join(root, _rel.replace("/", os.sep)),
+                           encoding="utf-8", newline="").read().splitlines()
+            except (OSError, UnicodeDecodeError) as _exc:
+                doc_fail.append("编年守卫：读不出 %s（%s）—— 报错，不算「没命中」" % (_rel, _exc))
+                continue
+            for _i, _l in enumerate(_bl, 1):
+                if _rel == "SKILL.md" and re.match(r"^version:\s*\S+\s*$", _l):
+                    continue      # frontmatter 的当前版本号是契约字段，不是编年
+                _hit = next((_w for _w in _chron if _w in _l), None)
+                if _hit:
+                    doc_fail.append("编年：%s:%d 出现施工事件词「%s」"
+                                    "（正文只留结论；编年留在 CHANGELOG 与 workflow-notes.md）"
+                                    % (_rel, _i, _hit))
+                for _m in _date_re.finditer(_l):
+                    if any(_v in _l[max(0, _m.start() - 25): _m.end() + 25] for _v in _date_verb):
+                        doc_fail.append("编年：%s:%d 出现施工日期 %s（±25 字内有施工动词）"
+                                        % (_rel, _i, _m.group(0)))
+                _vm = _ver_re.search(_l)
+                if _vm:
+                    doc_fail.append("编年：%s:%d 出现发版号 %s（正文不写版本号；"
+                                    "frontmatter 的 version: 与依据层文件除外）"
+                                    % (_rel, _i, _vm.group(0)))
+
+    # 17m 判据溯源自检：`scripts/*.py` 里的**点名式引用**必须可解析（点名 = 写了文档名）。
+    #     裸 `§N.M`（没写文档名）不判 —— 那会把各文件自己的节号当成跨文件引用，踩出一片误报。
+    #     起因：两处"见 SKILL.md 4.1"其实该指 §4.2（退出码表在那儿）—— 说明这类引用没人守。
+    _sk_heads = set()
+    for _l in docs.get("SKILL.md", []):
+        _mh = re.match(r"^#{1,4}\s*(\d+\.\d+)\s", _l)
+        if _mh:
+            _sk_heads.add(_mh.group(1))
+    _refdir = os.path.join(root, "references")
+    for _rel in ("scripts/xwl.py", "scripts/selftest.py"):
+        try:
+            _bl = open(os.path.join(root, _rel.replace("/", os.sep)),
+                       encoding="utf-8", newline="").read().splitlines()
+        except OSError:
+            continue
+        for _i, _l in enumerate(_bl, 1):
+            if "CHANGELOG" in _l:
+                continue      # 历史条目按写入时的结构记，不按当前结构校验
+            for _mh in re.finditer(r"SKILL\.md\s*§?\s*(\d)\.(\d)", _l):
+                if "%s.%s" % (_mh.group(1), _mh.group(2)) not in _sk_heads:
+                    doc_fail.append("%s:%d 引用 SKILL.md §%s.%s，但 SKILL.md 没有该编号小节"
+                                    % (_rel, _i, _mh.group(1), _mh.group(2)))
+            for _mh in re.finditer(r"SKILL\.md\s*「([^」]{1,24})」", _l):
+                if "%" in _mh.group(1):
+                    continue      # 格式化占位符（`SKILL.md「%s」`）不是引用
+                if _mh.group(1) not in _sk_txt:
+                    doc_fail.append("%s:%d 引用 SKILL.md「%s」，但 SKILL.md 里找不到这个说法"
+                                    % (_rel, _i, _mh.group(1)))
+            for _mh in re.finditer(r"references/([a-z0-9-]+\.md)", _l):
+                if not os.path.exists(os.path.join(_refdir, _mh.group(1))):
+                    doc_fail.append("%s:%d 引用 references/%s，但文件不存在"
+                                    % (_rel, _i, _mh.group(1)))
+
+    # 17n frontmatter description 的**触发场景下限**：少一条锚点就失败
+    #     （description 是路由真正读的字段，瘦身时最容易顺手删掉的就是触发词）。
+    _skfm = _sk_txt.split("---")[1] if _sk_txt.startswith("---") else ""
+    _dm2 = re.search(r"description: >-\n(.*?)\n\w+:", _skfm, re.S)
+    _dsc = _dm2.group(1) if _dm2 else ""
+    _trig = ["加删控件", "挂改事件", "改网格列", "SQL 片段", "传参链路", "重名", "从零新建页面",
+             "folder.json", "白屏", "压成一行", "压平", "事件 JS", "WebBuilder"]
+    _lost = [t for t in _trig if t not in _dsc]
+    if _lost:
+        doc_fail.append("SKILL.md 的 description 少了触发场景锚点：%s" % _lost)
+    if len(_skfm) > 900:
+        doc_fail.append("SKILL.md 的 frontmatter 已 %d 字符，超过 900 的护栏（平台上限 1024）"
+                        % len(_skfm))
+
+    # 17o `controlsold.json` 不得被当成注册表（`discover_controls` 只认 controls.json）
+    _probe = os.path.join(tmp, "regprobe", "a", "b")
+    os.makedirs(os.path.join(_probe, "system"), exist_ok=True)
+    with open(os.path.join(_probe, "system", "controlsold.json"), "w", encoding="utf-8") as _fh:
+        _fh.write("{}")
+    if xwl.discover_controls(os.path.join(_probe, "page.xwl")) is not None:
+        doc_fail.append("`discover_controls` 把 controlsold.json 当成注册表了")
+
+    # 17p 依据层的内容守卫：`references/workflow-notes.md` 三臂全豁免（它记的就是"什么时候发现了什么"），
+    #     所以它的内容必须另有几条**形式**约束 —— 否则豁免会把它慢慢变成编年垃圾场。
+    #     判据只认**结构**（小节锚点 + 发版编年的格式），不判语义 —— 语义判据会引来误报。
+    _wn = _txt.get("references/workflow-notes.md", "")
+    _lack = [k for k in ("判据的因果", "已作废的做法", "编年纪律") if k not in _wn]
+    if _lack:
+        doc_fail.append("references/workflow-notes.md 缺小节：%s"
+                        "（依据层只放 因果 / 作废记录 / 编年纪律说明 三类）" % _lack)
+    # ⚠️ 依据层是**两个**文件（workflow-notes 与 measured-data）—— 两者都享编年三臂豁免，
+    #    所以都不得出现发版编年的格式，否则豁免迟早变成编年垃圾场。
+    for _bn in ("references/workflow-notes.md", "references/measured-data.md"):
+        _bt = _txt.get(_bn, "")
+        if re.search(r"^##\s*\[", _bt, re.M) or re.search(
+                r"^###\s+(Added|Changed|Fixed|Testing)\b", _bt, re.M):
+            doc_fail.append("%s 里出现了**发版编年**的格式"
+                            "（版本段 `## [x.y.z]` 或 Added/Changed/Fixed/Testing 小节）"
+                            "—— 发版编年只许写在 CHANGELOG.md" % _bn)
+
+    # 17q 规模类数字必须在权威层（`measured-data.md`）里出现过。
+    #     起因（实测）：`SKILL.md` 的适用边界表写着 `25250 个 xwl`，而别处是 `24957` —— 同一个统计、
+    #     两套数，而"自称数字"那条守卫只认固定句式，**散文里的数字一条也看不见**。
+    #     判据**故意窄**：只钉"N 个 xwl"与"N KB / N.N s"三类 token —— 散文里数字太多，
+    #     全面比对必然踩出一片误报（"60 项断言""17 条 FAQ"这类不在规模层管辖内）。
+    _auth = re.sub(r"\s+", "", _txt.get("references/measured-data.md", ""))
+    for _rn, _rt in (("SKILL.md", _sk_txt), ("README.md", _rm_txt)):
+        for _tok in sorted(set(re.findall(r"\d{4,}\s*个\s*xwl|\d+(?:\.\d+)?\s*KB|\d+\.\d+\s*s\b", _rt))):
+            if re.sub(r"\s+", "", _tok) not in _auth:
+                doc_fail.append("%s 里的规模数字「%s」在 references/measured-data.md 里找不到"
+                                "（规模类数字以那份为准，别在别处另算一套）" % (_rn, _tok.strip()))
+
     if doc_fail:
         failures.extend(doc_fail[:12])
     else:
         print("[ok]  文档守卫：emoji 未入标题 / 任意两文档间无重复表格 / 编号·章·步·节号引用可解析（含跨文件）/ "
               "链接存在 / 外移点两侧都在 / 格式五项（表格·跳级·代码块·行尾·末尾）/ 自称数字一致 / "
-              "导航表与目录索引一致 / **「N 份参考材料」清单完整** / 无业务路径残留 / 反模式有入口")
+              "导航表与目录索引一致 / **「N 份参考材料」清单完整** / 无业务路径残留 / 反模式有入口 / "
+              "**编年三臂（事件词·施工日期·发版号）** / **scripts 里的点名式引用可解析** / "
+              "**触发场景锚点未丢** / 注册表不认 controlsold / **依据层只放因果·作废·守卫说明** / "
+              "**规模数字出自权威层**")
 
     # ---- 18. SKILL.md 必须声明平台边界、调用入口与规模约束 ----
     # 起因：SkillHub TRACE 评测的 adaptability 维给了这两个子项低分 ——
@@ -1345,7 +1487,7 @@ def _check_docs(tmp, node, failures, write) -> None:
         if not re.search(r"KB|MB", body):
             b_fail.append("SKILL.md 未声明输入规模约束（应给出实测文件大小量级）")
         # frontmatter 有长度上限（平台侧 1024）：description 是路由真正读的字段，
-        # 每次往里补触发词都在吃这个额度 —— 1.3.0 加 diffguard 时曾把它撑到 **1029**，
+        # 每次往里补触发词都在吃这个额度 —— 实测写全触发词时到过 **1029**、当前 **839**，
         # 是靠人工量出来的。钉住：description 与整个 frontmatter 块都必须留余量。
         _fm = body.split("---")[1] if body.startswith("---") else ""
         _dm = re.search(r"description: >-\n(.*?)\n\w+:", _fm, re.S)
@@ -1516,9 +1658,9 @@ def _check_platform(tmp, node, failures, write) -> None:
 def _check_write_failures(tmp, node, failures, write) -> None:
     """写盘失败必须给可读 [FAIL] + 退出码 2，不得冒 Python traceback（第 23 组）。
 
-    起因：`write_text()` 原先没兜 `OSError` —— 目标只读 / 父目录不存在 / 路径过长
-    都会抛 traceback，而 SKILL.md 4.1 承诺的是「前置条件不满足 → rc=2 + 提示」。
-    实测 5 个子命令 9 个场景中招，而当时的 64 项断言**一条都没覆盖写失败**。
+    起因：`write_text()` 不兜 `OSError` —— 目标只读 / 父目录不存在 / 路径过长
+    都会抛 traceback，而 SKILL.md §4.2 承诺的是「前置条件不满足 → rc=2 + 提示」。
+    实测 5 个子命令 9 个场景中招，而 64 项断言**一条都没覆盖写失败**。
     所以这里用子进程跑真实 CLI，逐一确认「不冒 traceback + rc=2 + 有 [FAIL]」。
     """
     print("[23] 写失败路径不得冒 traceback")
@@ -1576,10 +1718,10 @@ def _check_write_failures(tmp, node, failures, write) -> None:
 def _check_edit_eol(tmp, node, failures, write) -> None:
     """`edit` 的锚点必须按**目标文件的实际换行**归一，且拍平多行要警示（第 24 组）。
 
-    起因：`normalize_eol()` 早先硬编码 CRLF —— ① LF 文件上**跨行锚点永远匹配不到**
+    起因：`normalize_eol()` 写死 CRLF 会引出三个缺陷 —— ① LF 文件上**跨行锚点永远匹配不到**
     （报「锚点出现次数: 0」，看着像用户写错了锚点）；② 单行锚点 + 多行 new 会把
     LF 文件写成 CRLF/LF **混用**（文件已落盘、格式已坏）。③ 另外「把多行拍平」
-    属于**静默**语义损坏，原先毫无提示，而 `check` 查不出（压平后仍是合法 JSON）。
+    属于**静默**语义损坏（毫无提示），而 `check` 查不出（压平后仍是合法 JSON）。
     三条都在这里钉住（实测样本工程：1878 全 CRLF / 902「单行无换行符」/ **0 个 LF** ——
     两条路径都要覆盖，因为 `expand` 会把无换行的单行源产出成 LF）。
     """
@@ -1613,7 +1755,7 @@ def _check_edit_eol(tmp, node, failures, write) -> None:
     n = _mk("ee_n1.txt", '"roles": {},\n "title": "ZZZ"')
     rc, out = _cli(["edit", t, "--old-file", o, "--new-file", n])
     if rc != 0 or "锚点出现次数: 0" in out:
-        ee.append("LF 文件上跨行锚点应能匹配（旧实现会报「锚点出现次数: 0」）：rc=%d" % rc)
+        ee.append("LF 文件上跨行锚点应能匹配（归一化写死换行时会报「锚点出现次数: 0」）：rc=%d" % rc)
     elif _eol_of(t)[0]:
         ee.append("LF 文件写入后被混入 CRLF：CRLF=%d LF=%d" % _eol_of(t))
 
@@ -1627,7 +1769,7 @@ def _check_edit_eol(tmp, node, failures, write) -> None:
     elif _eol_of(t)[0]:
         ee.append("LF 文件 + 多行 new 后混入 CRLF（CRLF=%d LF=%d），应保持全 LF" % _eol_of(t))
 
-    # ③ CRLF 文件 + 跨行锚点 —— 回归：这条旧实现本来是通的，不能被改坏
+    # ③ CRLF 文件 + 跨行锚点 —— 回归：这条本来就该通，不能被改坏
     t = _mk("ee_crlf.xwl", BASE.replace("\n", "\r\n"))
     o = _mk("ee_o3.txt", '"roles": {},\n "title": "SELFTEST_T"')
     n = _mk("ee_n3.txt", '"roles": {},\n "title": "ZZZ"')
@@ -1802,9 +1944,9 @@ def _check_eol_and_guards(tmp, node, failures, write) -> None:
 def _check_diffguard(tmp, node, failures, write) -> None:
     """`diffguard` 相对 git 基线检测「多行被压平」（第 26 组）。
 
-    这是 1.3.0 新增的能力，补的是 §2.3 承认的那个洞：把「反斜杠 + 换行」直接删掉之后
-    文件**依然是合法 JSON**，`check` 七项全绿、`node --check` 还可能返回 0 ——
-    原先唯一的发现手段是人工 `git diff`。
+    这个能力补的是 §2.3 承认的那个洞：把「反斜杠 + 换行」直接删掉之后
+    文件**依然是合法 JSON**，`check` 全绿、`node --check` 还可能返回 0 ——
+    靠人工读 `git diff` 去找这种损坏，规模一大就找不过来。
 
     判据为什么必须是**两条**（这里正反两侧都钉住）：
       · 只看"续行符变少" ⇒ 合法地删掉一段多行 JS / 删一个控件也会净减少 ⇒ **必然误报**；

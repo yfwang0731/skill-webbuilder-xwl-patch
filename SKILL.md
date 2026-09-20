@@ -2,26 +2,25 @@
 name: webbuilder-xwl-patch
 slug: skill-webbuilder-xwl-patch
 displayName: webbuilder-xwl-patch
-version: 1.3.1
+version: 1.3.2
 license: MIT
 metadata:
   category: development-tools
   tags: [xwl, webbuilder, low-code, sql]
+summary: WebBuilder（wb）低代码平台的 .xwl 页面与 SQL 定义文件处理：结构级安全编辑、格式校验与重名分级、页面传参链路核对、相对 git 基线的压平检测。仅适用于 WebBuilder 平台的 .xwl 文件。
 description: >-
-  WebBuilder（wb）平台 .xwl 定义文件的处理与安全编辑。核心手段是**结构级 patch**：
-  只提供「值 / 子树」，工具按设计器自己的算法重建整份文件（续行符、转义、缩进、换行全自动产出）
-  —— 格式错误在构造上不会发生，diff 只含真正改的内容。
-  触发场景：改 wb/modules/** 下的页面 .xwl（加删控件、挂改事件、改配置、改网格列）、
-  改被引用的 SQL 片段 xxxSql/*.xwl（同样用 @itemId 寻址 patch）、
-  查改「参数控件 → store → SQL」传参链路（两条通路 out / params，推荐 out）、
-  处理 itemId 重名（按「类型 + 是否被 JS 引用 + 有无 normalName」分级并给候选清单）、
-  **从零新建页面或 SQL 文件**（`new` 内置设计器真实键序骨架，不需要种子文件）、
-  新建后设计器导航树里看不到它（`folder.json` 未登记 —— `folders` 可查、可登记）、
+  WebBuilder（wb）平台 .xwl 定义文件的处理与安全编辑：结构级 patch —— 只给值和子树，
+  工具按设计器算法重建整份文件（缩进、转义、换行全自动产出），
+  格式错误在构造上不会发生，diff 只含真正改的内容。
+  触发场景：改 wb/modules 下的页面 .xwl（加删控件、挂改事件、改配置、改网格列）、
+  改被引用的 SQL 片段（用 @itemId 寻址 patch）、
+  查改「参数控件到 store 再到 SQL」的传参链路（两条通路 out / params）、
+  处理 itemId 重名（给候选清单）、从零新建页面或 SQL 文件、
+  新建后设计器导航树里看不到它（folder.json 未登记）、
   判断 .xwl 格式是否合法、加载报解析错误或页面白屏、要不要压成一行、
-  **确认一次改动有没有把多行内容悄悄压平**（`diffguard` 相对 git 基线检测）、
-  抽取/校验 SQL 与事件 JS（`sql` / `events` / `sqlrefs` / `params`）。
-  **只对 WebBuilder（wb）平台的 `.xwl` 有效** —— 其他低代码平台的页面定义、`.vue`、
-  普通 `.json` 一概不适用。附零依赖工具 xwl.py（15 个子命令，`--help` 看全部）。
+  确认一次改动有没有把多行内容悄悄压平（diffguard）、
+  抽取或校验 SQL 与事件 JS（sql / events / sqlrefs / params）。
+  只对 WebBuilder（wb）平台的 .xwl 有效；其他低代码平台页面、Vue、普通 json 不适用。
 agent_created: true
 ---
 
@@ -50,7 +49,7 @@ WebBuilder 的页面与查询定义都写在 `.xwl` 里。它**看起来像 JSON
 | **平台** | 仅 WebBuilder（wb）。**其他平台不适用** |
 | **对象** | 仅 `.xwl` 文件本身：格式、编辑、校验、抽取。**不含**后端 Java、模块打包、`target/` 部署副本同步、数据库菜单注册（`WB_MENU`） |
 | **环境** | Python 3.9+，**纯标准库零依赖**；`node` 可选，只用于事件 JS 语法校验，找不到时自动降级为提示 |
-| **规模** | 跨 5 个真实工程实测 **25250 个 xwl**，最大单文件 **746 KB**（另有 614 / 636 / 729 KB 等）。该量级下 `check` 全开约 **1 s**、`patch` 约 0.6 s。**未验证**过 1 MB 以上、或单文件事件段极多的情形 |
+| **规模** | 跨 5 个工程 / **8 个 wb 根**实测 **24957 个 xwl**，最大单文件 **728.8 KB**（746299 字节，按 1024 算；口径与耗时见 [`references/measured-data.md`](references/measured-data.md) §十）。该量级下 `check` 全开约 **0.56 s** —— **性能不是约束**。**工具没有任何文件大小上限**，但**未验证**过 1 MB 以上的文件、或单文件事件段极多的情形 |
 | **能改的前提** | 目标文件能被加载器解析（即 `check` 的 ④ 通过）。已经是坏文件的，先用 `edit` 做文本级修复 |
 
 > 上表「规模」是**样本实测值，不是硬上限** —— 换工程要自己测。
@@ -85,6 +84,7 @@ WebBuilder 的页面与查询定义都写在 `.xwl` 里。它**看起来像 JSON
 | 想看一次完整实操（从零造页面 + SQL 载体） | [`references/walkthrough.md`](references/walkthrough.md) |
 | 想跑最小示例（每条命令都真跑过） | [`examples/README.md`](examples/README.md)（示例 `.xwl` 用 `xwl.py new` 现场生成，不在仓库里预置） |
 | 数字从哪来（引用次数 / 分布 / 统计口径） | [`references/measured-data.md`](references/measured-data.md) |
+| **为什么这么定**（判据依据、踩过的坑、已作废的做法） | [`references/workflow-notes.md`](references/workflow-notes.md) |
 
 **触发场景**（正文里只留这三条，完整触发词见 frontmatter）：读懂或修改任何 `.xwl`
 （PC 页面 / 弹窗 / store 数据源 / SQL 定义全是同一套格式）；从零新建页面或 SQL 载体；
@@ -182,9 +182,10 @@ if (!rec) {\
 
 1. **编码**：UTF-8，**无 BOM**。
 2. **换行必须全文件一致**。加载器 LF / CRLF / CR 都接受（正则 `(\r\n|\r|\n)`），但**同一文件里不能混用**。
-   - 设计器在服务器上写的是 **LF**；仓库（git index）里存的也是 LF。
-   - Windows 上看到 CRLF，是本机 `core.autocrlf=true` 转出来的
-     （实测 `git ls-files --eol` → `i/lf w/crlf`）。
+   - 设计器**写在服务器上**，产物换行 = 那台服务器的 `line.separator`（Linux 上就是 LF）。
+   - Windows 工作区看到 CRLF，是本机 `core.autocrlf=true` 转出来的
+     （实测 `git ls-files --eol` → `i/lf w/crlf`：**索引里是 LF、工作区是 CRLF**）。
+   - ⇒ **检出形态不等于仓库存储形态**；引用换行分布时必须写明是哪一种。
    - → **不要手工改换行**：改了会和 git 的自动转换打架，产生无意义 diff。
 3. **续行**：多行字符串里**每行末尾是单个 `\`，紧邻换行**；`\` 后**绝不能有空格或 Tab**。
 4. **最后一行不加 `\`**（加了就等于把字符串没闭合）。
@@ -255,7 +256,7 @@ python scripts/xwl.py expand <file.xwl> --eol lf    # 取设计器服务器上�
 这一步**不静默**，三个命令各报一处：`expand` 输出 `规范化后: … 换行=LF`；
 `patch` 在头部注明 `换行=LF（源无换行符，auto 回退 LF）`；
 `edit` 写盘后由 `check` 按**写盘结果**的形态给 note —— 结果是 LF ⇒
-`[note] 该文件是 LF 换行（设计器/仓库的原始形态），合法。`；
+`[note] 该文件是 LF 换行（设计器在服务器上的产物形态），合法。`；
 结果**仍然没有任何换行**（就是把一行换成另一行）⇒ `[note] 该文件是单行形态（无任何换行）…`。
 两条都会出现其中一条，**不会静默**。
 
@@ -264,6 +265,10 @@ python scripts/xwl.py expand <file.xwl> --eol lf    # 取设计器服务器上�
 `patch` **整份重建** ⇒ 紧凑单行源改完**一定是多行**，**diff 是整个文件**（它会带 `[warn]` 说明）。
 "diff 只含本次改动"这条保证**对单行源不成立**。§2.2 说的"单行源就在一行形态上改"只是**格式上允许**；
 想在单行形态上做定点小改，只能走 3.2 的 `edit`。
+
+> **规模**（实测 8 个 wb 根 / 24933 个可解析文件）：设计器原样 **70.3%**、单行源 **27.3%**、
+> 多行但非原样 **2.4%** ⇒ **≈ 三成文件做一次 `patch` 会产生整份或大量与本次改动无关的 diff**。
+> 所以**别把 diff 当"本次改动"的证据**：要么先 `--dry-run`，要么在 git 里比对。
 
 **规则三 · `edit` 的换行推断**：按**目标文件的实际换行**归一锚点（混合换行按 CRLF 并给 `[warn]`），
 目标**一个换行符都没有**时同样按 LF 处理。
@@ -291,7 +296,7 @@ python scripts/xwl.py expand <file.xwl> --eol lf    # 取设计器服务器上�
 ### 2.6 压平检测：`diffguard`（相对 git 基线）
 
 既然"改坏"与"没改坏"在**文件自身**上不可区分，判据就换成**相对 git 基线**：
-把工作区版本与 `git show HEAD:<file>` 比（`diffguard` 是 1.3.0 新增的第 15 个子命令）。
+把工作区版本与 `git show HEAD:<file>` 比（`diffguard`，第 15 个子命令）。
 
 **主判据是「定义级」的（精确，不会漏）**：压平就是删掉「续行符 + 换行」，所以
 **基线里连续多行 `line_i\` `line_{i+1}\` … `line_j` 会原样变成工作区的一条物理行**。
@@ -313,9 +318,9 @@ python scripts/xwl.py diffguard <file> --rev origin/main    # 换基线
 
 > **为什么不能只用"最长行变长"这一条**（实测两个**漏报面**，已由精确判据补上）：
 > ① 被压平的内容若**短于文件里已有的最长行** ⇒ 最长行纹丝不动
-> （实测：3 行短 JS 压平，续行符 2→0，最长行 62→62，旧判据不报）；
+> （实测：3 行短 JS 压平，续行符 2→0，最长行 62→62，粗筛不报）；
 > ② 压平增量 < 最长行 × 0.5 ⇒ 被 ratio 门槛吃掉
-> （实测：文件已有 205 字符长行时并入 3 行，205→217，旧判据不报）。
+> （实测：文件已有 205 字符长行时并入 3 行，205→217，粗筛不报）。
 > 输出里会标出是「**精确命中**」还是「粗筛命中」，并给出被合并的基线行号区间。
 >
 > **仍然测不到的**：压平**同时**还改了内容（拼不出等式）、且增量又不足以触发粗筛 ——
@@ -563,7 +568,9 @@ python scripts/xwl.py diffguard <改过的文件或目录> --strict    # CI / pr
 | `2` | **用法或前置条件不满足**（缺必填参数、`edit` 锚点次数不符、`new` 拒绝覆盖、读不到目标文件） |
 
 行首标记：`[ok]` / `[FAIL]` / `[warn]`（**不影响退出码**）/ `[note]`。
-带结论的命令最后一行为 `-> OK` 或 `-> FAIL`，便于脚本匹配。
+**带结论的三个命令**（`check` / `sqlrefs` / `diffguard`）：单个文件的结论是逐项的 `-> OK` / `-> FAIL`（两格缩进），
+整个命令的末行是 `=== 结果: ALL OK` / `=== 结果: FAIL`（`sqlrefs` 还有 `=== 结果: OK（有警告）`）。
+其余是**报告类**命令（`itemids` / `folders` / `paths` / `params`），没有这种末行 —— 判成败请认退出码。
 
 > **判断成败看退出码，不要 grep 输出文本** —— `[warn]` 是有意设计成不阻塞的
 > （老代码里的无害重名，见第七章）。
@@ -623,6 +630,9 @@ m?xwl=<模块>/<业务目录>/xxxSql/queryBizList
 
 > `Wb.request` / `Wb.open` / `Wb.upload` / `Wb.requestAg` 的 `url` 都可以给**完整带查询串**的形式，
 > 但参数的规范位置是 `params`（或 `out`），不要手拼查询串。
+> **解析口径**：工具认的是 **`url:` 这个键**（不论包在 `Wb.request` / `Wb.open` / `Wb.run` / `store.load` 里），
+> 且**只判本 wb 根** —— 跨 webapp / 跨工程的引用请在目标工程里跑；"跨工程存在"≠"本工程可用"。
+> 上表第二行那种短名（捷径）工具**不解析**，只提示。
 
 ### 5.3 引用位置：这些代码写在 xwl 的哪一处
 
@@ -637,13 +647,17 @@ m?xwl=<模块>/<业务目录>/xxxSql/queryBizList
 
 > 事件 JS 一律用**单引号**（xwl 的字符串转义规则，见第二章）。
 
-### 5.4 三条最容易踩的
+### 5.4 四条最容易踩的
 
 1. **别用 `Wb.request` 代替 store** —— 列表 / 分页 / 排序要用 `store.load(...)`，
    框架会带上 `page` / `start` / `limit` 并处理返回。
 2. **`Wb.requestAg` 不用写 `url`**（框架固定改成 `m?xwl=common/save-all`），但 `bean` / `method`
    必须给；业务参数名要与后台取参名一致，否则取到空。
 3. **上传类失败的错误对象与别的通路不同**（`action.response.responseText` → `{msg}`），别混用。
+4. **跨页面传参不在核对范围** —— `Wb.open({url:'m?xwl=…', params:{…}})` 传进**子页面**的键，
+   写在**调用方**页面里，子页面自己看不到（运行时值从 request 取，静态不可见）。
+   所以 `xwl.py params <子页面>` 会把对应的 `{?名?}` 报成"未发现来源" —— 那是**能力边界，不是错误**；
+   要核对这条链，请到**调用方页面**去跑 `params`。
 
 ## 六、SQL 片段：`module.serverScript` ↔ `dataprovider`
 
@@ -664,9 +678,9 @@ m?xwl=<模块>/<业务目录>/xxxSql/queryBizList
 3. **参数名 = 控件的 `itemId`**，一路同名到 `{?名字?}`；**对不上不会报错，只取到 null，
    SQL 条件静默失效**。页面把值送出来有两条通路（`out` / `params`），**新写查询推荐 `out`**。
 
-**一条硬规则（有源码原文）**：**serverScript 里禁止写 `{#…#}`** ——
-`ServerScript does not support {#param#} feature, please use app.get(param) instead.`
-在 serverScript 内部取参数要用 `app.get('名字')`。
+**一条硬规则（有源码原文）**：**serverScript 里禁止写 `{#…#}`** —— 框架在
+`com/wb/controls/ServerScript.java` 里直接抛错：`ServerScript does not support {#param#} feature, please use app.get(param) instead.`
+⇒ 在 serverScript 内部取参数要用 `app.get('名字')`。
 
 改 SQL 同样走 `patch` + **`@itemId` 寻址**（不用知道嵌套层级）。`ops.json` 的写法与 §3.1 的样例同构，
 只把 `path` 换成 `["@dataprovider","configs","sql"]`（SQL 正文）或
@@ -754,9 +768,9 @@ python scripts/xwl.py itemids <file.xwl> --suggest         # 生成改名 ops �
 
 ## 八、常见问题（FAQ）
 
-**16 条**高频问题在 [`references/faq.md`](references/faq.md)，**按四组归类**：
+**17 条**高频问题在 [`references/faq.md`](references/faq.md)，**按四组归类**：
 ① 格式与解析（`check` 报 FAIL 怎么排查、页面白屏 / 解析错误、文件不是 UTF-8、为什么严格 JSON 解析会误判）；
-② 命名与引用（`app.X` 取不到值、改了 SQL 参数查询结果不对）；
+② 命名与引用（`app.X` 取不到值、改了 SQL 参数查询结果不对、参数明明由调用方页面传入却报"没发现来源"）；
 ③ 能不能这么改（能不能压成一行、能不能文本替换批量改、怎么确认没改坏）；
 ④ 命令行为（设计器里看不到新文件、SQL 抽取报 `1064`、`node --check` 误报、`expand` 没变化、
 `check` 慢或没装 `node`、`new` 骨架的 `itemId` 能不能改、脚本 / CI 里怎么判断成败）。
