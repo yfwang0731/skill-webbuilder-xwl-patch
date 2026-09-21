@@ -409,6 +409,9 @@ def dumps_designer(obj, indent_factor: int = 1, eol: str = CRLF, safe: bool = Fa
       「反斜杠 + 换行」（同一段文本的另一种写法，加载器还原回同一个值）。
       产出与设计器**逐字节一致**，要提交就用它。
     safe=True：逐转义对处理，值里那处保持原样，人读更直观；但产出与设计器**不一致**。
+
+    两个模式都**语义无损**（往返解析后键序与值都不变）；选哪个**按"给谁看"决定** ——
+    要提交 / 给设计器继续编辑就用默认（产出与设计器**逐字节相同**），只想人读一遍才用 `safe=True`。
     """
     t = _value_to_string(obj, indent_factor, 0)
     if safe:
@@ -888,7 +891,10 @@ def cmd_expand(args) -> int:
         print("[FAIL] 目标文件带 BOM；本工具不处理，请先确认它本来就不该有 BOM")
         return 2
 
-    # EOL：auto = 沿用原文件（全 CRLF 就 CRLF，否则 LF）
+    # EOL：auto = 沿用原文件（全 CRLF 就 CRLF，否则 LF）。
+    # 这条回退规则由 patch / edit / expand **三命令共用**：源文件一个换行符都没有时无从"沿用"
+    # ⇒ **回退 LF**，且这一步**不静默**（各命令都会在输出里写明选了哪个换行）。
+    # ⇒ 紧凑单行源在 CRLF 工作区里会新增一个 LF 文件；工作区惯例是 CRLF 时请显式 --eol crlf。
     if args.eol == "auto":
         eol = CRLF if text.count(CRLF) else "\n"
     else:
@@ -1318,7 +1324,27 @@ def resolve_parent(obj, path):
     return cur, last
 
 
-def apply_ops(obj, ops):
+def _fmt_keypath(path) -> str:
+    """把 path 列表渲染成 `children[0].serverScript` 这种紧凑写法（给 `[warn]` / 报错里的人看）。"""
+    out = ""
+    for seg in path:
+        if isinstance(seg, int):
+            out += "[%d]" % seg
+        else:
+            out += ("." if out else "") + str(seg)
+    return out
+
+
+def _is_new_object_key(parent, key) -> bool:
+    """末段是不是「一个尚不存在的对象键」（`A-a` 粒度）。
+
+    **仅当容器是 dict 且该键缺失**才算新建键；末段是数组下标（容器是 list）**不算** ——
+    那走 `A-c` 的越界判据（加数组元素用 append/insert，本就不是「新建键」）。
+    """
+    return isinstance(parent, dict) and key not in parent
+
+
+def apply_ops(obj, ops, created=None, warned=None):
     """按 ops 就地修改对象。
 
     path 是「键 / 数组下标」列表；**以 `@` 开头的段按 `configs.itemId` 寻址**
@@ -1326,9 +1352,23 @@ def apply_ops(obj, ops):
 
     op 形态：
       {"op":"set",    "path":[...], "value":...}
+      {"op":"set",    "path":[...], "value":..., "create": true}   ← 显式声明「新建键」
       {"op":"insert", "path":[...], "index":n, "value":...}   缺省 index = 末尾
       {"op":"append", "path":[...], "value":...}
       {"op":"delete", "path":[...], "index":n}                给 index 删数组元素；否则删键
+
+    `create` 是**逐 op 字段、只挂在 `set` 上**（不是 CLI 开关）：给「原本不存在的对象键」
+    写值时用它显式放行；写到已存在的键上它是**幂等保护**（既不报错也不告警）。
+    用在 `insert`/`append`/`delete` 上属**用法错误**，抛 `ValueError`（调用方据此返回 rc=2）。
+
+    `created` / `warned` 是**可选的收集列表**（默认 `None` = 不收集）——调用方传列表即可拿到
+    「本次新建了哪些键」（`<path>` 紧凑写法）：
+      · `created`：带 `"create": true` 的新建键；
+      · `warned` ：**不带** `create` 的新建键（本版仍放行，调用方据此打 `[warn]` 预告）。
+    两者都是**向后兼容的可选关键字**，既有 `apply_ops(obj, ops)` 调用不受影响。
+
+    越界 / 缺失键等用法错误统一抛 `ValueError`，文案走 `A-d` 模板
+    （`第 K 个 op（<kind>）：<现象> —— <可能原因>；用 paths / dump 核对 path`），**不冒裸异常类型名**。
     """
     for i, op in enumerate(ops, 1):
         if not isinstance(op, dict):
@@ -1337,9 +1377,30 @@ def apply_ops(obj, ops):
         path = op.get("path") or []
         if not path:
             raise ValueError("第 %d 个 op 的 path 为空" % i)
+        want_create = bool(op.get("create"))
+        if want_create and kind != "set":
+            raise ValueError(
+                "第 %d 个 op：`create` 只用于 `set`；`insert`/`append`/`delete` 不支持"
+                "（加数组元素用 append/insert，本就不算新建键）" % i)
         if kind == "set":
             parent, key = resolve_parent(obj, path)
-            parent[key] = op["value"]
+            if _is_new_object_key(parent, key):
+                where = _fmt_keypath(path)
+                if want_create:
+                    if created is not None:
+                        created.append(where)
+                elif warned is not None:
+                    warned.append(where)
+            if isinstance(parent, list):
+                idx = int(key)
+                if not 0 <= idx < len(parent):
+                    raise ValueError(
+                        "第 %d 个 op（set）：下标 %d 越界 —— 数组长度 %d，合法区间 [0, %d]"
+                        "；用 paths / dump 核对 path（末段是数组下标，不是对象键）"
+                        % (i, idx, len(parent), len(parent) - 1))
+                parent[idx] = op["value"]
+            else:
+                parent[key] = op["value"]
         elif kind in ("insert", "append"):
             arr = resolve_path(obj, path)
             if not isinstance(arr, list):
@@ -1348,15 +1409,34 @@ def apply_ops(obj, ops):
                 arr.append(op["value"])
             else:
                 idx = int(op.get("index", len(arr)))
+                if not 0 <= idx <= len(arr):
+                    raise ValueError(
+                        "第 %d 个 op（insert）：下标 %d 越界 —— 数组长度 %d，合法区间 [0, %d]"
+                        "；用 paths / dump 核对 path" % (i, idx, len(arr), len(arr)))
                 arr.insert(idx, op["value"])
         elif kind == "delete":
             if "index" in op:
                 arr = resolve_path(obj, path)
                 if not isinstance(arr, list):
                     raise ValueError("第 %d 个 op：path 指向的不是数组" % i)
-                del arr[int(op["index"])]
+                idx = int(op["index"])
+                if not 0 <= idx <= len(arr) - 1:
+                    raise ValueError(
+                        "第 %d 个 op（delete）：下标 %d 越界 —— 数组长度 %d，合法区间 [0, %d]"
+                        "；用 paths / dump 核对 path" % (i, idx, len(arr), len(arr) - 1))
+                del arr[idx]
             else:
                 parent, key = resolve_parent(obj, path)
+                if isinstance(parent, list):
+                    ok = isinstance(key, int) and -len(parent) <= key < len(parent)
+                elif isinstance(parent, dict):
+                    ok = key in parent
+                else:
+                    ok = False
+                if not ok:
+                    raise ValueError(
+                        '第 %d 个 op（delete）：键 "%s" 不存在 —— 无法删除'
+                        "；用 paths / dump 核对 path" % (i, _fmt_keypath(path)))
                 del parent[key]
         else:
             raise ValueError("第 %d 个 op 类型未知: %r" % (i, kind))
@@ -1509,7 +1589,10 @@ def recommend_fixes(rep, mode="auto", skipped=None) -> list:
         else:
             src = g.get("fix_itemid", [])
         for s in src:
-            ops.append({"op": "set", "path": s["path"], "value": s["suggest"]})
+            # 生成器产出的建议值一律落在「**可能尚不存在**的键」上（`normalName` / 新 `itemId`）
+            # ⇒ 逐条带 `"create": true`，否则会被「新建键需显式放行」的执行契约拒掉
+            # （这就是「生成器与执行器脱钩」的检测点：改了执行器、忘了同步生成器，产出就跑不通）。
+            ops.append({"op": "set", "path": s["path"], "value": s["suggest"], "create": True})
     return ops
 
 
@@ -1576,10 +1659,12 @@ def cmd_itemids(args) -> int:
                 print(f"[FAIL] 找不到 configs.itemId == {args.name!r}")
             return 1
         if args.json:
+            # 每条候选若被消费方转成 ops，路径末端多半是「建议的新键」⇒ 带 `"create": true`
+            # 供其直接复用（与 `--suggest` 产出同口径），免得转出来的 ops 被执行器拒掉。
             print(json.dumps(
                 [{"index": i + 1, "type": t, "path": p, "ancestor": _anc_str(anc),
                   "hint": _node_hint(cfg), "children": _children_summary(n),
-                  "normalName": cfg.get("normalName")}
+                  "normalName": cfg.get("normalName"), "create": True}
                  for i, (n, t, cfg, p, anc, _c, _k) in enumerate(hits)],
                 ensure_ascii=False, indent=2))
         else:
@@ -1690,8 +1775,9 @@ def cmd_patch(args) -> int:
     if isinstance(ops, dict):
         ops = [ops]
 
+    created, warned = [], []
     try:
-        apply_ops(obj, ops)
+        apply_ops(obj, ops, created=created, warned=warned)
     except Exception as exc:  # noqa: BLE001
         msg = str(exc)
         if "\n" in msg:  # 重名报错带候选清单，原样打印
@@ -1701,6 +1787,11 @@ def cmd_patch(args) -> int:
             print(f"[FAIL] 应用 ops 失败: {msg}")
         return 2
     print(f"[ok]   已应用 {len(ops)} 个 op")
+    if warned:
+        # 中间态：新建键本版仍放行，只预告（默认拒绝在后续版本启用）—— 文案**不写版本号**。
+        print("[warn] 本次新建了 %d 个键（本版仍允许；默认拒绝将在后续版本启用）：%s"
+              % (len(warned), ", ".join(warned)))
+        print('       届时给已存在的键 set 不受影响；新建键请加 "create": true')
 
     out = dumps_designer(obj, args.indent, eol)
     try:
@@ -1715,17 +1806,26 @@ def cmd_patch(args) -> int:
 
     if args.dry_run:
         import difflib
-        a = text.splitlines()
-        b = out.splitlines()
-        shown = 0
-        for line in difflib.unified_diff(a, b, "before", "after", lineterm="", n=1):
-            if line.startswith(("---", "+++", "@@")):
-                continue
-            print("  " + line[:200])
-            shown += 1
-            if shown >= 40:
-                print("  ...（略）")
-                break
+        if not text.count("\n"):
+            # K17：单行源整份就一行，逐行截断 diff 只会打出一行被截断 200 字符的长串（无信息量）
+            # ⇒ 改打**一行摘要**，跳过逐行 diff（判据 = stdout 里 diff 段落行数）。
+            print("  （单行源：整份重排为多行，diff = 整个文件）")
+        else:
+            a = text.splitlines()
+            b = out.splitlines()
+            shown = 0
+            for line in difflib.unified_diff(a, b, "before", "after", lineterm="", n=1):
+                if line.startswith(("---", "+++", "@@")):
+                    continue
+                print("  " + line[:200])
+                shown += 1
+                if shown >= 40:
+                    print("  ...（略）")
+                    break
+        if created:
+            # A2：只列**带 create** 的新建键；不带 create 的那类走上面的 `[warn]` 预告（两条不混）。
+            print('[new-key] 本次将新建 %d 个键（带 "create": true）：%s'
+                  % (len(created), ", ".join(created)))
         print("[dry-run] 未写入")
         return 0
 
@@ -1733,6 +1833,9 @@ def cmd_patch(args) -> int:
         bak = args.file + ".bak"
         write_bytes(bak, read_bytes(args.file))
         print(f"备份 -> {bak}")
+    else:
+        # L1：真跑到写盘却没让工具备份 ⇒ 只提醒一句（**只加输出，不改 rc、不改用法**）。
+        print("[warn] 未使用 --backup：本次已直接写盘，出错请用 git checkout -- 回退（建议先 --dry-run 看 diff）")
     write_text(args.file, out)
     print(f"已写入: {args.file}")
 
@@ -2167,8 +2270,10 @@ def cmd_folders(args) -> int:
 
     `folder.json` 形如 `{"hidden":false,"index":[…],"title":"…","iconCls":"…"}`；
     **`index` 里带 `.xwl` 后缀的是文件，不带后缀的才是子目录**。
-    新建一个 xwl 之后不登记进所在目录的 `index`，设计器导航树里就看不到它。
+    新建一个 xwl 之后不登记进所在目录的 `index`，**不登记就看不到** —— 设计器导航树里没有它。
 
+    `--register` **只认文件路径**（给目录会被拒绝：一个目录里可能有好几个文件，工具不知道登记哪个）；
+    所在目录还没有 `folder.json` 时**不会替你创建**（会报错退出 2）。
     默认**只读**；只有 `--register` 才写（把该文件名追加到 index 末尾）。
     """
     target = os.path.abspath(args.path)
@@ -3071,7 +3176,7 @@ def cmd_params(args) -> int:
     provided |= store_keys
 
     # ---- D-c′：`needed` **按来源分桶** ----
-    # 以前两个来源合并成一个 set，来源信息在合并那一刻就丢了，"单列展示"做不出来。
+    # 两个来源若合并成一个 set，来源信息在合并那一刻就丢了，"单列展示"做不出来。
     # `need_req` = **请求级参数**：`serverScript` 的 `{?名?}` 与 `app.get(名)` ——
     # 框架 `Query.java` 一律 `WebUtil.fetchObject(request, paraName)`，值都从 request 取，
     # 与写在哪个字段无关 ⇒ 保留在 `needed` 里（剔除会把真实风险静默掉）。
@@ -3195,6 +3300,11 @@ def cmd_events(args) -> int:
 # --------------------------------------------------------------------------- #
 # CLI
 # --------------------------------------------------------------------------- #
+# `--help` 纪律（与 references/workflow-notes.md 的落点分流表同源）：
+#   1. `help=` 保持 ≤1 短行；细节进参数 help 或 `epilog`；
+#   2. `epilog` 不进顶层 `--help` ⇒ 用法示例一律走 `epilog`；
+#   3. 永不为"承载内容"新增选项（那会成为新的对外能力）；
+#   4. 超出的长示例 → `references/` 或 `examples/README.md`（已在）。
 def build_parser() -> argparse.ArgumentParser:
     p = argparse.ArgumentParser(
         prog="xwl.py", description="WebBuilder .xwl 文件处理工具"
@@ -3202,33 +3312,57 @@ def build_parser() -> argparse.ArgumentParser:
     sub = p.add_subparsers(dest="cmd", required=True)
 
     c = sub.add_parser("check", help="七项校验：格式五项 + 事件 JS 语法 + itemId 重名分级")
-    c.add_argument("files", nargs="+")
+    c.add_argument("files", nargs="+", help="一个或多个 .xwl 文件")
     c.add_argument("--node", help="node 可执行文件路径")
     c.add_argument("--no-js", action="store_true", help="跳过事件 JS 语法校验")
     c.add_argument("--no-itemid", action="store_true", help="跳过 itemId 重名分级检查")
     c.set_defaults(func=cmd_check)
 
     e = sub.add_parser("edit", help="文本级安全替换（锚点按目标换行归一、断言出现次数、拍平多行时警示）")
-    e.add_argument("target")
-    e.add_argument("--old-file", required=True)
-    e.add_argument("--new-file", required=True)
+    e.add_argument("target", help="要就地修改的 .xwl 文件")
+    e.add_argument("--old-file", required=True, help="锚点文本文件（要替换掉的那段）")
+    e.add_argument("--new-file", required=True, help="替换文本文件（替换成的内容）")
     e.add_argument("--expect", type=int, default=1, help="期望锚点出现次数（默认 1）")
-    e.add_argument("--dry-run", action="store_true")
+    e.add_argument("--dry-run", action="store_true", help="不写盘，只报变更后长度")
     e.add_argument("--backup", action="store_true", help="写 <target>.bak")
-    e.add_argument("--node")
-    e.add_argument("--no-js", action="store_true")
+    e.add_argument("--node", help="node 可执行文件路径（缺省从 NODE_BIN 与 PATH 找）")
+    e.add_argument("--no-js", action="store_true", help="跳过写盘后的事件 JS 语法校验")
     e.set_defaults(func=cmd_edit)
 
     pt = sub.add_parser("patch", help="结构级编辑：改对象 + 按设计器规则整份重建（推荐）。"
-                                      "产出**永远是设计器原样**（所以没有 --safe）")
-    pt.add_argument("file")
+                                      "产出**永远是设计器原样**（所以没有 --safe）",
+                        formatter_class=argparse.RawDescriptionHelpFormatter,
+                        epilog="ops.json 是操作数组，path 是「键 / 数组下标」的列表，四种 op：\n"
+                               "  [\n"
+                               "    {\"op\": \"set\", \"path\": [\"title\"], \"value\": \"新标题\"},\n"
+                               "    {\"op\": \"set\", \"path\": [\"@dataprovider\", \"configs\", \"sql\"],\n"
+                               "     \"value\": \"select 1 from dual\"},\n"
+                               "    {\"op\": \"insert\", \"path\": [\"children\"], \"index\": 0,\n"
+                               "     \"value\": {\"configs\": {\"itemId\": \"firstBtn\"}, \"expanded\": false,\n"
+                               "               \"children\": [], \"type\": \"button\"}},\n"
+                               "    {\"op\": \"append\", \"path\": [\"children\", 0, \"children\"],\n"
+                               "     \"value\": {\"configs\": {\"itemId\": \"newBtn\"}, \"expanded\": false,\n"
+                               "               \"children\": [], \"type\": \"button\"}},\n"
+                               "    {\"op\": \"delete\", \"path\": [\"children\", 0, \"children\"], \"index\": 3},\n"
+                               "    {\"op\": \"set\", \"path\": [\"@panel1\", \"configs\", \"newKey\"],\n"
+                               "     \"value\": \"v\", \"create\": true}\n"
+                               "  ]\n"
+                               "ops 按顺序执行，path 按执行到那一步时的结构解释。\n"
+                               "任意一条 set 可带 \"create\": true：补**原本不存在的键**时用它；写到已存在的键上是幂等保护。\n"
+                               "\n"
+                               "path 里的对象键优先用 @itemId（数组元素仍用下标），重名时不猜顺序：\n"
+                               "  [\"@名字#N\"]              点名第 N 个（N 从 1 起）\n"
+                               "  [\"@外\", \"@内\", …]          串联 @，后一段只在上一段子树里找\n"
+                               "  [\"@名字\", \"children\", 0]     按父子关系只改真正要改的那个")
+    pt.add_argument("file", help="要修改的 .xwl 文件")
     pt.add_argument("--ops", required=True, help="ops JSON 文件：set/insert/append/delete 的数组")
-    pt.add_argument("--indent", type=int, default=1)
-    pt.add_argument("--eol", choices=["auto", "lf", "crlf"], default="auto")
+    pt.add_argument("--indent", type=int, default=1, help="缩进因子（设计器固定用 1，一般不用改）")
+    pt.add_argument("--eol", choices=["auto", "lf", "crlf"], default="auto",
+                    help="换行：auto=沿用原文件（无换行时回退 lf）；lf / crlf=指定")
     pt.add_argument("--dry-run", action="store_true", help="只显示将产生的 diff，不写入")
-    pt.add_argument("--backup", action="store_true")
-    pt.add_argument("--node")
-    pt.add_argument("--no-js", action="store_true")
+    pt.add_argument("--backup", action="store_true", help="写盘前先备份为 <file>.bak")
+    pt.add_argument("--node", help="node 可执行文件路径（缺省从 NODE_BIN 与 PATH 找）")
+    pt.add_argument("--no-js", action="store_true", help="跳过写盘后的事件 JS 语法校验")
     pt.set_defaults(func=cmd_patch)
 
     pm = sub.add_parser("params", help="检查「页面 → store → SQL 文件」的传参链路（参数名交叉核对）")
@@ -3239,7 +3373,7 @@ def build_parser() -> argparse.ArgumentParser:
     pm.set_defaults(func=cmd_params)
 
     pa = sub.add_parser("paths", help="列出可编辑字段位置（sql / totalSql / serverScript / url），供 patch 用")
-    pa.add_argument("file")
+    pa.add_argument("file", help="要列出可编辑字段的 .xwl 文件")
     pa.set_defaults(func=cmd_paths)
 
     n = sub.add_parser("new", help="从零生成一个 xwl 文件（内置设计器骨架，不需要种子文件）")
@@ -3253,11 +3387,11 @@ def build_parser() -> argparse.ArgumentParser:
                    help='角色权限，逗号分隔（如 "default" / "default,developer"）；给空串得到 {}')
     n.add_argument("--eol", choices=["lf", "crlf"], default="lf",
                    help="换行：lf=设计器写在服务器上的产物形态（默认）；crlf=Windows 工作区形态")
-    n.add_argument("--indent", type=int, default=1)
+    n.add_argument("--indent", type=int, default=1, help="缩进因子（设计器固定用 1，一般不用改）")
     n.add_argument("--force", action="store_true", help="允许覆盖已存在的文件")
     n.add_argument("--dry-run", action="store_true", help="只打印将写入的内容，不写盘")
-    n.add_argument("--node")
-    n.add_argument("--no-js", action="store_true")
+    n.add_argument("--node", help="node 可执行文件路径（缺省从 NODE_BIN 与 PATH 找）")
+    n.add_argument("--no-js", action="store_true", help="跳过写盘后的事件 JS 语法校验")
     n.set_defaults(func=cmd_new)
 
     fld = sub.add_parser("folders", help="folder.json（设计器导航树索引）一致性检查 / 登记")
@@ -3265,11 +3399,16 @@ def build_parser() -> argparse.ArgumentParser:
     fld.add_argument("--register", nargs="?", const="", default=None, metavar="NAME",
                      help="写操作：把文件登记到所在目录 folder.json 的 index 末尾。"
                           "可裸用（--register）；NAME 值在 path 已指到文件时会被忽略，仅为兼容保留")
-    fld.add_argument("--dry-run", action="store_true")
+    fld.add_argument("--dry-run", action="store_true", help="只打印 before/after，不写盘")
     fld.set_defaults(func=cmd_folders)
 
-    ii = sub.add_parser("itemids", help="itemId 重名分级报告（候选清单 + 建议值），只读")
-    ii.add_argument("file")
+    ii = sub.add_parser("itemids", help="itemId 重名分级报告（候选清单 + 建议值），只读",
+                        formatter_class=argparse.RawDescriptionHelpFormatter,
+                        epilog="常用三个选项（另有 --fix / --controls / --json）：\n"
+                               "  --dups-only   只列重名组（长报告时用）\n"
+                               "  --name NAME   只看一个名字的全部候选\n"
+                               "  --suggest     生成改名 ops 草稿（需人工确认后再 patch）")
+    ii.add_argument("file", help="要检查的 .xwl 文件")
     ii.add_argument("--name", help="只点名一个 itemId，打印它的候选清单与建议值")
     ii.add_argument("--dups-only", action="store_true", help="benign 组不展开（长报告时用）")
     ii.add_argument("--suggest", action="store_true", help="输出「改名 ops 草稿」JSON（需人工确认后再 patch）")
@@ -3280,7 +3419,7 @@ def build_parser() -> argparse.ArgumentParser:
     ii.set_defaults(func=cmd_itemids)
 
     sr = sub.add_parser("sqlrefs", help="检查 SQL 文件里 serverScript ↔ dataprovider 的引用是否自洽")
-    sr.add_argument("file")
+    sr.add_argument("file", help="要检查自洽性的 SQL 载体 .xwl 文件")
     sr.set_defaults(func=cmd_sqlrefs)
 
     dg = sub.add_parser("diffguard",
@@ -3292,7 +3431,16 @@ def build_parser() -> argparse.ArgumentParser:
                          "默认只告警、rc=0")
     dg.set_defaults(func=cmd_diffguard)
 
-    sc = sub.add_parser("schema", help="查设计器控件注册表：某控件合法的 configs / events")
+    sc = sub.add_parser("schema", help="查设计器控件注册表：某控件合法的 configs / events",
+                        formatter_class=argparse.RawDescriptionHelpFormatter,
+                        epilog="标准控件节点的键集合只有两种（键序固定）：\n"
+                               "  [\"configs\", \"expanded\", \"children\", \"type\"]\n"
+                               "  [\"configs\", \"expanded\", \"children\", \"type\", \"events\"]\n"
+                               "少写 expanded / children 通常有默认值兜底，但会与设计器产物不一致；\n"
+                               "用 --skeleton 生成骨架最稳。itemId 是寻址用的（app.<itemId>），必须唯一。\n"
+                               "\n"
+                               "例：\n"
+                               "  xwl.py schema button --controls <工程>/wb/system/controls.json --skeleton")
     sc.add_argument("type", nargs="?", help="控件 id，如 button / grid / store；省略需配 --list")
     sc.add_argument("--controls", required=True, help="设计器控件注册表路径（工程里是 wb/system/controls.json）")
     sc.add_argument("--list", action="store_true", help="列出全部控件 id")
@@ -3300,12 +3448,12 @@ def build_parser() -> argparse.ArgumentParser:
     sc.add_argument("--skeleton", action="store_true", help="顺便输出设计器同款最小骨架节点")
     sc.set_defaults(func=cmd_schema)
 
-    d = sub.add_parser("dump", help="解析后美化输出")
-    d.add_argument("file")
+    d = sub.add_parser("dump", help="按加载器规则解析后美化输出（拿不准嵌套层级时用它核对）")
+    d.add_argument("file", help="要解析并美化输出的 .xwl 文件")
     d.set_defaults(func=cmd_dump)
 
     x = sub.add_parser("expand", help="规范成设计器同款多行形态（解析→按设计器算法重排，含语义等价比对）")
-    x.add_argument("file")
+    x.add_argument("file", help="要规范成设计器形态的 .xwl 文件")
     x.add_argument("--out", help="输出到另一个文件（缺省原地覆盖）")
     x.add_argument("--indent", type=int, default=1, help="缩进因子（设计器固定用 1，一般不用改）")
     x.add_argument("--eol", choices=["auto", "lf", "crlf"], default="auto",
@@ -3315,18 +3463,18 @@ def build_parser() -> argparse.ArgumentParser:
     x.add_argument("--safe", action="store_true",
                    help="安全模式：不动值里的「字面反斜杠 + n」。与默认模式**语义等价**，"
                         "差异只在字节形态 —— 产出与设计器不一致，别用于要提交的文件")
-    x.add_argument("--dry-run", action="store_true")
+    x.add_argument("--dry-run", action="store_true", help="不写盘，只跑完校验")
     x.add_argument("--backup", action="store_true", help="原地覆盖时写 <file>.bak")
-    x.add_argument("--node")
-    x.add_argument("--no-js", action="store_true")
+    x.add_argument("--node", help="node 可执行文件路径（缺省从 NODE_BIN 与 PATH 找）")
+    x.add_argument("--no-js", action="store_true", help="跳过写盘后的事件 JS 语法校验")
     x.set_defaults(func=cmd_expand)
 
     s = sub.add_parser("sql", help="抽取 SQL 文本")
-    s.add_argument("file")
+    s.add_argument("file", help="要抽取 SQL 文本的 .xwl 文件")
     s.set_defaults(func=cmd_sql)
 
     v = sub.add_parser("events", help="抽取事件 JS")
-    v.add_argument("file")
+    v.add_argument("file", help="要抽取事件 JS 的 .xwl 文件")
     v.add_argument("--outdir", help="导出目录（缺省则打印到标准输出）")
     v.set_defaults(func=cmd_events)
 

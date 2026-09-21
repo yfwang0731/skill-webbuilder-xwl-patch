@@ -71,6 +71,7 @@
 from __future__ import annotations
 
 import contextlib
+import hashlib
 import importlib.util
 import io
 import json
@@ -1204,6 +1205,47 @@ def _check_docs(tmp, node, failures, write) -> None:
         ("端到端实操", "SKILL.md", "references/walkthrough.md", ["第 1 步"]),
         ("2.6 diffguard 判据细节", "SKILL.md", "references/faq.md", ["粗筛", "定义级"]),
         ("2.6 diffguard 因果", "SKILL.md", "references/workflow-notes.md", ["定义级", "粗筛"]),
+        # ---- 本批（第一步）：P1+P2 下沉批的外移点 ----
+        # 承载词取施工单 §2.1「必须存活」清单：把 SKILL 里的叙述搬进 references 后，
+        # 主文档留了指针（第一项断言）+ 目标文件里这些词必须还在（第二项断言）。
+        # 迁到 `--help`（通道 B）的那几处，其承载词同样在目标 references 里留一份兜底
+        # （`17g` 只加载 markdown，读不到 `scripts/*.py` 的 `--help`/注释）。
+        ("P1 2.3 静默语义损坏", "SKILL.md", "references/anti-patterns.md",
+         ["静默", "绝不能", "相对基线"]),
+        ("P1 2.4 规模占比", "SKILL.md", "references/measured-data.md",
+         ["≈ 三成", "别把 diff 当", "本次改动"]),
+        ("P1 2.4 --eol 回退", "SKILL.md", "references/faq.md",
+         ["不静默", "回退 LF", "三命令共用"]),
+        ("P1 2.5 字面反斜杠 n", "SKILL.md", "references/measured-data.md",
+         ["语义无损", "逐字节相同", "给谁看"]),
+        ("P1 三第0步 folder", "SKILL.md", "references/faq.md",
+         ["不登记就看不到", "只认文件路径", "不替你创建"]),
+        ("P1 三第3步 三点#3", "SKILL.md", "references/measured-data.md",
+         ["顺带规整", "语义等价", "diff 只含", "重定向"]),
+        ("P1 三第4步 两坑", "SKILL.md", "references/faq.md",
+         ["别写成", "不是替换成换行符"]),
+        ("P1 四 4.2 退出码", "SKILL.md", "references/faq.md",
+         ["不影响退出码", "严格二分", "行首标记", "报告类"]),
+        ("P1 五 5.2 url 口径", "SKILL.md", "references/sql-fragments.md",
+         ["不解析", "只判本 wb 根", "单 webapp", "url:"]),
+        ("P1 七 7.2 normalName", "SKILL.md", "references/measured-data.md",
+         ["不是所有控件都接受", "非法配置", "会跳过并回报"]),
+        ("P1 七 7.3 重名建议", "SKILL.md", "references/measured-data.md",
+         ["不猜顺序", "能用 normalName 就用", "必须同步改 JS", "tbarGrid"]),
+        ("P2 1.2 控件骨架", "SKILL.md", "references/controls.md",
+         ["必须唯一", "会与设计器产物不一致"]),
+        ("P2 三第3步 ops 示例", "SKILL.md", "references/sql-fragments.md",
+         ["insert", "append", "delete", "按顺序执行"]),
+        ("P2 三第3步 @itemId", "SKILL.md", "references/sql-fragments.md",
+         ["@名字#N", "串联", "不猜顺序"]),
+        ("P2 三第3步 改前核对", "SKILL.md", "references/anti-patterns.md",
+         ["configs` 一层", "照抄"]),
+        ("P2 五 5.4 四条易踩", "SKILL.md", "references/js-api.md",
+         ["能力边界不是错误", "不用写", "错误对象"]),
+        ("P2 五 5.1 引用读法", "SKILL.md", "references/sql-fragments.md",
+         ["补上 `.xwl`", "被引用的片段是", "从文件找引用方"]),
+        ("P2 七 7.3 命令示例", "SKILL.md", "references/measured-data.md",
+         ["--dups-only", "--name", "--suggest"]),
     ]
     for _lab, _src, _dst, _keys in _splits:
         if _dst not in "\n".join(docs.get(_src, [])):
@@ -1494,11 +1536,75 @@ def _check_docs(tmp, node, failures, write) -> None:
     # 17j-4 篇幅上限：**不是目标，是防回弹的护栏**。压缩过一次之后，新增内容很容易又堆回
     #     SKILL.md；到了上限就该问"这条是不是该下沉到 references/"。数字留了余量，
     #     正常的小幅增补不会触发。
-    for _nm, _cap in (("SKILL.md", 800), ("README.md", 140)):
+    for _nm, _cap in (("SKILL.md", 700), ("README.md", 150)):
         _n = len(docs.get(_nm, []))
         if _n > _cap:
             doc_fail.append("%s 已 %d 行，超过 %d 行上限（新增内容请考虑下沉到 references/）"
                             % (_nm, _n, _cap))
+
+    # 17j-7 `--help` 篇幅上限（通道 B 的护栏）：把 §一/§三/§五/§七 的细节搬进
+    #     `xwl.py` 的 `help=` / 参数 help / `epilog` 之后，`--help` 会变长；这条钉住它别再涨。
+    #     做法：**内省解析器对象**（`xwl.build_parser()`）逐面 `format_help()` 计行数 ——
+    #     **不比对文案**（文案本来就会随措辞改，快照式断言一改就假红），只比「行数 ≤ 上限」。
+    #     宽度钉 80 列：这正是管道下 argparse 的默认宽度，也是本批实测表的量法；
+    #     终端更窄会多折行、更宽会少折行，不钉死就会随环境漂（假红/假绿都可能）。
+    #     上限 = 实测 + 余量（顶层 +10 / 单子命令 +5）。余量依据：给「某个子命令再加 1 条选项
+    #     说明」留空间而不误报；再涨就该把内容挪去 `epilog` 或 `references/`（见 workflow-notes §二）。
+    #     ⚠️ 新增子命令必须同步在此登记上限（下面 `_h_unreg` 会把漏登的红出来）。
+    _help_caps = {
+        None: 36,        # 顶层 `xwl.py --help`（实测 26）
+        "check": 16, "edit": 22, "patch": 41, "params": 18, "paths": 12,
+        "new": 28, "folders": 15, "itemids": 27, "sqlrefs": 12, "diffguard": 14,
+        "schema": 26, "dump": 12, "expand": 25, "sql": 12, "events": 13,
+    }
+    try:
+        _hp_top = xwl.build_parser()
+        _hp_sub = next((_a for _a in _hp_top._actions if getattr(_a, "choices", None)), None)
+        _wild = os.environ.get("COLUMNS")
+        os.environ["COLUMNS"] = "80"
+        try:
+            _help_n = {None: len(_hp_top.format_help().splitlines())}
+            if _hp_sub is not None:
+                for _hn2, _hpar in _hp_sub.choices.items():
+                    _help_n[_hn2] = len(_hpar.format_help().splitlines())
+        finally:
+            if _wild is None:
+                os.environ.pop("COLUMNS", None)
+            else:
+                os.environ["COLUMNS"] = _wild
+        for _hn, _hcap in _help_caps.items():
+            _hn_lbl = "顶层 xwl.py --help" if _hn is None else "xwl.py %s --help" % _hn
+            _got = _help_n.get(_hn)
+            if _got is None:
+                doc_fail.append("`--help` 行数守卫：找不到 %s 对应的 parser" % _hn_lbl)
+            elif _got > _hcap:
+                doc_fail.append("%s 已 %d 行，超过 %d 行上限（新增说明请走 `epilog` 或 `references/`）"
+                                % (_hn_lbl, _got, _hcap))
+        _h_unreg = sorted(k for k in _help_n if k not in _help_caps)
+        if _h_unreg:
+            doc_fail.append("`--help` 行数守卫：这些子命令没登记上限（新增子命令要同步补）：%s" % _h_unreg)
+    except Exception as _hexc:  # noqa: BLE001 —— 解析器构造失败本身就该红，别静默放过
+        doc_fail.append("`--help` 行数守卫跑不起来：%s" % _hexc)
+
+    # 17j-8 支持矩阵的**操作系统**行必须存在（SKILL 适用范围表 + metadata.json limitations）。
+    #     起因：跨平台是真实约束（Windows 检出/存储形态差异、路径分隔符、换行），
+    #     平台适配性评测会看「有没有声明适用 OS」；而这条最容易在精简适用边界表时被顺手删掉。
+    #     判据（窄）：SKILL.md 适用范围表里有一行**项 = 操作系统**且同时含 `Windows` 与
+    #     `POSIX`（或 `macOS`）；`metadata.json` 的 `limitations` 里也有一条 OS 行（同口径）。
+    _os_sk = any(("操作系统" in _l and "Windows" in _l and ("POSIX" in _l or "macOS" in _l))
+                 for _l in docs.get("SKILL.md", []) if _l.strip().startswith("|"))
+    if not _os_sk:
+        doc_fail.append("SKILL.md 适用范围表缺「操作系统」行（须同时含 Windows 与 POSIX/macOS）")
+    try:
+        with open(os.path.join(root, "metadata.json"), "r", encoding="utf-8") as _fh:
+            _mdos = json.load(_fh)
+        _os_md = any(("Windows" in str(_x) and ("POSIX" in str(_x) or "macOS" in str(_x)))
+                     for _x in (_mdos.get("limitations") or []))
+        if not _os_md:
+            doc_fail.append("metadata.json 的 limitations 缺「操作系统」行"
+                            "（须同时含 Windows 与 POSIX/macOS）")
+    except (OSError, ValueError) as _exc:
+        doc_fail.append("metadata.json 读不了（OS 行检查）：%s" % _exc)
 
     # 17j-5 排他性断言（**同义改写**版）：说压平「只有 git diff / 只能靠人工」能发现的句子，
     #     它所在的**小节**里必须出现 `diffguard`。
@@ -1562,7 +1668,8 @@ def _check_docs(tmp, node, failures, write) -> None:
     #     ⚠️ 作用域 = `git ls-files`（与"仓库卫生"同一事实源）：不扫磁盘，避免把本地产物算进来。
     #        取不到 git ⇒ **记一条失败**（"没扫"不等于"通过"）。
     _chron = ["曾" "经", "原" "先", "早" "先", "此" "前", "一" "度", "当" "年", "旧" "版",
-              "旧" "实现", "旧" "判据", "原" "判据", "上" "一轮", "上" "一版", "当" "时", "历史" "上"]
+              "旧" "实现", "旧" "判据", "原" "判据", "上" "一轮", "上" "一版", "当" "时", "历史" "上",
+              "以" "前"]
     _date_verb = ("实测", "真机", "复现", "审查", "修正", "发布", "事故")
     _date_re = re.compile(r"\d{4}-\d{2}-\d{2}")
     _ver_re = re.compile(r"\d+\.\d+\.\d+")
@@ -1726,7 +1833,8 @@ def _check_docs(tmp, node, failures, write) -> None:
               "导航表与目录索引一致 / **「N 份参考材料」清单完整** / 无业务路径残留 / 反模式有入口 / "
               "**编年三臂（事件词·施工日期·发版号）** / **scripts 里的点名式引用可解析** / "
               "**触发场景锚点未丢** / 注册表不认 controlsold / **依据层只放因果·作废·守卫说明** / "
-              "**规模数字出自权威层**")
+              "**规模数字出自权威层** / **`--help` 行数上限（顶层 36 / 子命令实测+5）** / "
+              "**支持矩阵 OS 行（SKILL 适用范围表 + metadata.json limitations）**")
 
     # ---- 18. SKILL.md 必须声明平台边界、调用入口与规模约束 ----
     # 起因：SkillHub TRACE 评测的 adaptability 维给了这两个子项低分 ——
@@ -2422,6 +2530,310 @@ def _check_diffguard(tmp, node, failures, write) -> None:
               "短名与长名两种 cwd 写法都能比对 / **计数未变时判为内容移动而不报压平**")
 
 
+def _check_patch_contract(tmp, node, failures, write) -> None:
+    """`patch` 的 ops 契约（§5-1 … §5-13）：`create` 开关、`A-c` 越界、`A2`/`K17`/`L1` 输出。
+
+    全部是**行为断言**（不是 help 文案断言）：把对应行为改回去，本组立刻红。
+    """
+    pc_fail: list[str] = []
+
+    def _md5(p):
+        h = hashlib.md5()
+        with open(p, "rb") as fh:
+            for ch in iter(lambda: fh.read(65536), b""):
+                h.update(ch)
+        return h.hexdigest()
+
+    def _mkops(name, ops):
+        p = os.path.join(tmp, name)
+        with open(p, "w", encoding="utf-8", newline="\n") as fh:
+            json.dump(ops, fh, ensure_ascii=False, indent=1)
+        return p
+
+    def _patch(target, ops_name, ops, dry_run=False, backup=False):
+        return _run(xwl.cmd_patch, file=target, ops=_mkops(ops_name, ops), indent=1,
+                    eol="auto", dry_run=dry_run, backup=backup, node=None, no_js=True)
+
+    def _page(extra_top=None, children=None):
+        obj = {"hidden": False, "children": [] if children is None else children,
+               "roles": {}, "title": "t", "iconCls": "", "inframe": "", "pageLink": ""}
+        if extra_top:
+            obj.update(extra_top)
+        return json.dumps(obj, ensure_ascii=False, indent=1)
+
+    def _ok(num, fails, msg):
+        if fails:
+            pc_fail.extend("§%s %s" % (num, m) for m in fails)
+        else:
+            print("[ok]  §%s %s" % (num, msg))
+
+    dup_children = [{"type": "panel", "configs": {"itemId": "dp"}, "children": []},
+                    {"type": "panel", "configs": {"itemId": "dp"}, "children": []}]
+
+    # ---- §5-1 默认放行新建键 + `[warn]` 预告 + rc 不变 ----
+    t1 = {"title": "t", "children": []}
+    w1: list = []
+    xwl.apply_ops(t1, [{"op": "set", "path": ["newTopKey"], "value": "v"}], created=[], warned=w1)
+    p1 = write("pc_5_1.xwl", _page())
+    rc1, o1 = _patch(p1, "pc_5_1_ops.json", [{"op": "set", "path": ["newTopKey"], "value": "v"}])
+    f1 = []
+    if t1.get("newTopKey") != "v":
+        f1.append("默认未放行新建键（键没被建）")
+    if w1 != ["newTopKey"]:
+        f1.append("warned 未收集到新建键：%r" % w1)
+    if rc1 != 0:
+        f1.append("真跑 rc=%d（应 0）" % rc1)
+    if "[warn]" not in o1 or "本次新建了" not in o1:
+        f1.append("真跑未打 [warn] 预告:\n%s" % o1)
+    if xwl.load_xwl(p1)[2].get("newTopKey") != "v":
+        f1.append("真跑没把新键写进文件")
+    _ok("5-1", f1, "默认放行新建键、warned 收集、真跑 rc=0 且打 [warn] 预告")
+
+    # ---- §5-2 `create:true` 放行且无 `[warn]` ----
+    t2 = {"title": "t", "children": []}
+    w2, c2 = [], []
+    xwl.apply_ops(t2, [{"op": "set", "path": ["k2"], "value": "v", "create": True}],
+                  created=c2, warned=w2)
+    p2 = write("pc_5_2.xwl", _page())
+    rc2, o2 = _patch(p2, "pc_5_2_ops.json", [{"op": "set", "path": ["k2"], "value": "v", "create": True}])
+    f2 = []
+    if t2.get("k2") != "v":
+        f2.append("带 create 的键没被建")
+    if w2:
+        f2.append("带 create 却进了 warned：%r" % w2)
+    if c2 != ["k2"]:
+        f2.append("created 未收集该键：%r" % c2)
+    if rc2 != 0:
+        f2.append("真跑 rc=%d（应 0）" % rc2)
+    if "[warn] 本次新建了" in o2:
+        f2.append("带 create 却打了新建键预告")
+    _ok("5-2", f2, "create:true 放行、created 收集、warned 为空、stdout 不含 [warn] 预告")
+
+    # ---- §5-3 已存在键 + `create:true` ⇒ 不报错、不 `[warn]`（幂等保护）----
+    t3 = {"title": "t", "children": []}
+    w3: list = []
+    xwl.apply_ops(t3, [{"op": "set", "path": ["title"], "value": "t2", "create": True}],
+                  created=[], warned=w3)
+    p3 = write("pc_5_3.xwl", _page())
+    rc3, o3 = _patch(p3, "pc_5_3_ops.json",
+                     [{"op": "set", "path": ["title"], "value": "t2", "create": True}])
+    f3 = []
+    if t3.get("title") != "t2":
+        f3.append("已存在的键未被改写")
+    if w3:
+        f3.append("已存在键 + create 误报 [warn]：%r" % w3)
+    if rc3 != 0:
+        f3.append("真跑 rc=%d（应 0）" % rc3)
+    if "[warn] 本次新建了" in o3:
+        f3.append("已存在键 + create 打了新建键预告")
+    _ok("5-3", f3, "已存在键 + create:true ⇒ 不报错、不 [warn]、rc=0（幂等保护）")
+
+    # ---- §5-4 非 `set` op 带 `create` ⇒ rc=2 ----
+    f4 = []
+    for k4, op4 in (
+            ("insert", {"op": "insert", "path": ["children"], "value": {"type": "panel"}, "create": True}),
+            ("append", {"op": "append", "path": ["children"], "value": {"type": "panel"}, "create": True}),
+            ("delete", {"op": "delete", "path": ["children"], "create": True})):
+        try:
+            xwl.apply_ops({"children": []}, [op4])
+            f4.append("%s 带 create 未报错（应 ValueError）" % k4)
+        except ValueError as exc:
+            s4 = str(exc)
+            if "`create`" not in s4 or "只用于" not in s4:
+                f4.append("%s 的报错文本不含「只用于 set」：%s" % (k4, s4))
+    rc4, _o4 = _patch(write("pc_5_4.xwl", _page()), "pc_5_4_ops.json",
+                      [{"op": "append", "path": ["children"],
+                        "value": {"type": "panel"}, "create": True}])
+    if rc4 != 2:
+        f4.append("非 set 带 create 时 cmd_patch rc=%d（应 2）" % rc4)
+    _ok("5-4", f4, "insert/append/delete 带 create ⇒ ValueError + cmd_patch rc=2")
+
+    # ---- §5-5 `insert` 下标越界（正、负各一）⇒ rc=2 ----
+    f5 = []
+    for idx5 in (4, -1):
+        try:
+            xwl.apply_ops({"children": [1, 2, 3]},
+                          [{"op": "insert", "path": ["children"], "index": idx5, "value": 9}])
+            f5.append("insert index=%d 未报错" % idx5)
+        except ValueError as exc:
+            s5 = str(exc)
+            if any(w in s5 for w in ("IndexError", "KeyError", "ValueError")):
+                f5.append("insert index=%d 冒了裸异常类型名：%s" % (idx5, s5))
+            elif "数组长度" not in s5 or "合法区间" not in s5:
+                f5.append("insert index=%d 报错缺长度/区间：%s" % (idx5, s5))
+    _ok("5-5", f5, "insert 下标越界（+4 / -1）⇒ ValueError 含数组长度与合法区间")
+
+    # ---- §5-6 `delete` 越界 ⇒ rc=2；`delete` 缺失键 ⇒ rc=2，且不冒裸异常类型名 ----
+    f6 = []
+    try:
+        xwl.apply_ops({"children": [1, 2, 3]}, [{"op": "delete", "path": ["children"], "index": 99}])
+        f6.append("delete index=99 未报错")
+    except ValueError as exc:
+        s6 = str(exc)
+        if "合法区间" not in s6:
+            f6.append("delete 越界报错缺合法区间：%s" % s6)
+        if any(w in s6 for w in ("IndexError", "KeyError", "ValueError")):
+            f6.append("delete 越界报错冒了裸异常类型名：%s" % s6)
+    try:
+        xwl.apply_ops({"children": [{"configs": {"itemId": "a"}}]},
+                      [{"op": "delete", "path": ["children", 0, "serverScript"]}])
+        f6.append("delete 缺失键未报错")
+    except ValueError as exc:
+        s6 = str(exc)
+        if "不存在" not in s6 or "children[0].serverScript" not in s6:
+            f6.append("delete 缺失键报错未点名该键：%s" % s6)
+        if any(w in s6 for w in ("IndexError", "KeyError", "ValueError")):
+            f6.append("delete 缺失键报错冒了裸异常类型名：%s" % s6)
+    rc6, o6 = _patch(write("pc_5_6.xwl", _page(children=[{"type": "panel",
+                                                          "configs": {"itemId": "a"},
+                                                          "children": []}])),
+                     "pc_5_6_ops.json", [{"op": "delete", "path": ["children", 0, "serverScript"]}])
+    if rc6 != 2:
+        f6.append("delete 缺失键时 cmd_patch rc=%d（应 2）" % rc6)
+    if "Traceback" in o6:
+        f6.append("delete 缺失键冒了 traceback")
+    _ok("5-6", f6, "delete 越界 / 缺失键 ⇒ rc=2，报错不冒裸异常类型名、无 traceback")
+
+    # ---- §5-7 `--dry-run` 的 `[new-key]` 与 `[warn]` 分列，且不写盘 ----
+    p7 = write("pc_5_7.xwl", _page())
+    m7 = _md5(p7)
+    rc7, o7 = _patch(p7, "pc_5_7_ops.json",
+                     [{"op": "set", "path": ["kCreate"], "value": "v", "create": True},
+                      {"op": "set", "path": ["kWarn"], "value": "v"}], dry_run=True)
+    nk = [ln for ln in o7.splitlines() if ln.startswith("[new-key]")]
+    wn = [ln for ln in o7.splitlines() if ln.startswith("[warn] 本次新建了")]
+    f7 = []
+    if rc7 != 0:
+        f7.append("dry-run rc=%d（应 0）" % rc7)
+    if len(nk) != 1 or "kCreate" not in nk[0] or "kWarn" in nk[0]:
+        f7.append("[new-key] 行应恰 1 条且只列 kCreate：%r" % nk)
+    if len(wn) != 1 or "kWarn" not in wn[0] or "kCreate" in wn[0]:
+        f7.append("[warn] 行应恰 1 条且只列 kWarn：%r" % wn)
+    if _md5(p7) != m7:
+        f7.append("--dry-run 竟然写了盘")
+    _ok("5-7", f7, "--dry-run 下 [new-key]（只列带 create）与 [warn]（只列不带 create）分列且不写盘")
+
+    # ---- §5-8 `itemids --suggest` 产出逐条带 create:true，且能原样跑通 patch ----
+    p8 = write("pc_5_8.xwl", _page(children=dup_children))
+    rc8, o8 = _run(xwl.cmd_itemids, file=p8, name=None, dups_only=False, suggest=True,
+                   fix="auto", controls=None, json=False)
+    f8 = []
+    ops8 = None
+    if rc8 != 0:
+        f8.append("itemids --suggest rc=%d" % rc8)
+    else:
+        try:
+            ops8 = json.loads(o8)
+        except ValueError as exc:
+            f8.append("--suggest 产出不是合法 JSON：%s" % exc)
+    if isinstance(ops8, list):
+        if not ops8:
+            f8.append("--suggest 未产出 ops（缺 warn/error 组？）")
+        elif not all(isinstance(x, dict) and x.get("create") is True for x in ops8):
+            f8.append("--suggest 产出未逐条带 create:true：%r" % ops8)
+        else:
+            p8b = write("pc_5_8_patch.xwl", _page(children=dup_children))
+            rc8b, o8b = _patch(p8b, "pc_5_8_ops.json", ops8)
+            if rc8b != 0:
+                f8.append("--suggest 产出真跑 patch rc=%d（应 0 = 生成器/执行器不脱钩）:\n%s"
+                          % (rc8b, o8b))
+    _ok("5-8", f8, "itemids --suggest 产出逐条带 create:true 且能原样跑通 patch（rc=0）")
+
+    # ---- §5-9 `itemids --name --json` 产出也带 `create:true` ----
+    rc9, o9 = _run(xwl.cmd_itemids, file=p8, name="dp", dups_only=False, suggest=False,
+                   fix="auto", controls=None, json=True)
+    f9 = []
+    if rc9 != 0:
+        f9.append("itemids --name --json rc=%d" % rc9)
+    else:
+        try:
+            j9 = json.loads(o9)
+        except ValueError as exc:
+            f9.append("--name --json 不是合法 JSON：%s" % exc)
+            j9 = None
+        if isinstance(j9, list):
+            if not j9 or not all(isinstance(x, dict) and x.get("create") is True for x in j9):
+                f9.append("--name --json 候选未带 create:true：%r" % j9)
+    _ok("5-9", f9, "itemids --name --json 每条候选带 create:true")
+
+    # ---- §5-10 既有调用不回归（`apply_ops(tree, ops)` 签名兼容 + 已存在键不误报）----
+    t10 = {"children": [{"configs": {"itemId": "s", "url": "a"}}]}
+    w10: list = []
+    xwl.apply_ops(t10, [{"op": "set", "path": ["children", 0, "configs", "url"], "value": "z"}],
+                  created=[], warned=w10)
+    f10 = []
+    if t10["children"][0]["configs"]["url"] != "z":
+        f10.append("既有调用（set 已存在键）没改对")
+    if w10:
+        f10.append("既有调用（set 已存在键）误报新建：%r" % w10)
+    _ok("5-10", f10, "既有 apply_ops(tree, ops) 调用不回归（签名兼容 + 已存在键不误报）；"
+                     "本文件 586/599/607/620 与 970-987 由前置用例一并覆盖")
+
+    # ---- §5-11 `L1`：真跑且无 --dry-run / --backup ⇒ 恰打一行「没备份」[warn]，rc 不变 ----
+    p11 = write("pc_5_11.xwl", _page())
+    rc11, o11 = _patch(p11, "pc_5_11_ops.json", [{"op": "set", "path": ["title"], "value": "t2"}])
+    l1 = [ln for ln in o11.splitlines() if "未使用 --backup" in ln]
+    p11b = write("pc_5_11b.xwl", _page())
+    _rcb, ob = _patch(p11b, "pc_5_11b_ops.json", [{"op": "set", "path": ["title"], "value": "t2"}],
+                      backup=True)
+    p11c = write("pc_5_11c.xwl", _page())
+    _rcc, oc = _patch(p11c, "pc_5_11c_ops.json", [{"op": "set", "path": ["title"], "value": "t2"}],
+                      dry_run=True)
+    f11 = []
+    if rc11 != 0 or len(l1) != 1:
+        f11.append("真跑无 --backup：rc=%d，该行 %d 条（应 1）" % (rc11, len(l1)))
+    if "未使用 --backup" in ob:
+        f11.append("带 --backup 却打了「没备份」[warn]")
+    if "未使用 --backup" in oc:
+        f11.append("--dry-run 却打了「没备份」[warn]")
+    _ok("5-11", f11, "L1：真跑且无 --dry-run/--backup ⇒ 恰一行「没备份」[warn]，rc 不变")
+
+    # ---- §5-12 `K17`：--dry-run 对单行源打一行摘要；多行源仍逐行 diff ----
+    single = ('{"hidden":false,"children":[],"roles":{},"title":"t",'
+              '"iconCls":"","inframe":"","pageLink":""}')
+    p12s = write("pc_5_12_single.xwl", single)
+    rc12s, o12s = _patch(p12s, "pc_5_12s_ops.json",
+                         [{"op": "set", "path": ["title"], "value": "T"}], dry_run=True)
+    n12s = sum(1 for ln in o12s.splitlines() if ln.startswith("  "))
+    p12m = write("pc_5_12_multi.xwl", _page())
+    rc12m, o12m = _patch(p12m, "pc_5_12m_ops.json",
+                         [{"op": "set", "path": ["title"], "value": "T"}], dry_run=True)
+    n12m = sum(1 for ln in o12m.splitlines() if ln.startswith("  "))
+    f12 = []
+    if rc12s != 0 or rc12m != 0:
+        f12.append("dry-run rc=%d/%d（应 0/0）" % (rc12s, rc12m))
+    if n12s != 1:
+        f12.append("单行源 diff 段落行数 = %d（应 1 = 一行摘要）" % n12s)
+    if n12m <= 1:
+        f12.append("多行源 diff 段落行数 = %d（应 >1 = 逐行 diff）" % n12m)
+    _ok("5-12", f12, "K17：单行源打一行摘要、多行源仍逐行 diff（判据 = diff 段落行数）")
+
+    # ---- §5-13 `set` 末段数组下标越界 ⇒ rc=2（`A-c` 补齐）----
+    f13 = []
+    try:
+        xwl.apply_ops({"children": [1, 2, 3]}, [{"op": "set", "path": ["children", 99], "value": 0}])
+        f13.append("set 末段数组下标越界未报错")
+    except ValueError as exc:
+        s13 = str(exc)
+        if "合法区间" not in s13:
+            f13.append("报错缺合法区间：%s" % s13)
+        if "IndexError" in s13:
+            f13.append("冒了 IndexError 字样：%s" % s13)
+    except Exception as exc:  # noqa: BLE001 —— 非 ValueError 即不符契约
+        f13.append("抛了非 ValueError：%r" % exc)
+    p13 = write("pc_5_13.xwl", _page(children=dup_children))
+    rc13, o13 = _patch(p13, "pc_5_13_ops.json",
+                       [{"op": "set", "path": ["children", 99], "value": {"type": "panel"}}])
+    if rc13 != 2:
+        f13.append("cmd_patch rc=%d（应 2）" % rc13)
+    if "合法区间" not in o13:
+        f13.append("cmd_patch 报错未走 A-d 模板（缺合法区间）:\n%s" % o13)
+    _ok("5-13", f13, "set 末段数组下标越界 ⇒ ValueError + rc=2，走 A-d 模板（非裸 IndexError）")
+
+    if pc_fail:
+        failures.extend(pc_fail)
+
+
 def main() -> int:
     xwl.ensure_utf8_stdio()     # 输出全是中文；Windows 控制台默认非 UTF-8 会直接 UnicodeEncodeError
     tmp = tempfile.mkdtemp(prefix="xwl_selftest_")
@@ -2440,6 +2852,7 @@ def main() -> int:
     _check_basics(tmp, node, failures, write)
     _check_params_paths(tmp, node, failures, write)
     _check_itemids(tmp, node, failures, write)
+    _check_patch_contract(tmp, node, failures, write)
     _check_subcommands(tmp, node, failures, write)
     _check_docs(tmp, node, failures, write)
     _check_platform(tmp, node, failures, write)

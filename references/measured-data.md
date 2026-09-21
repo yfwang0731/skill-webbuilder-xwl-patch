@@ -15,6 +15,20 @@
 
 ---
 
+## 目录
+
+- [一、xwl 引用方式的使用次数](#一xwl-引用方式的使用次数)
+- [二、页面传参两条通路的分布](#二页面传参两条通路的分布)
+- [三、`Wb.requestAg` 的参数名频次](#三wbrequestag-的参数名频次)
+- [四、`Wb.requestAg` 成功回调里做什么](#四wbrequestag-成功回调里做什么)
+- [五、设计器写回算法的复刻一致性](#五设计器写回算法的复刻一致性)
+- [六、控件使用频次与父子结构](#六控件使用频次与父子结构)
+- [七、itemId 与 normalName](#七itemid-与-normalname)
+- [八、SQL 片段与 serverScript 的分布](#八sql-片段与-serverscript-的分布)
+- [九、页面顶层骨架与 folder.json](#九页面顶层骨架与-folderjson)
+- [十、规模与耗时](#十规模与耗时)
+- [十一、判据修正的对照数](#十一判据修正的对照数)
+
 ## 一、xwl 引用方式的使用次数
 
 | 引用什么 | 写法 | 写在哪里 | 次数 |
@@ -98,11 +112,18 @@
 |---|---|
 | 多行源 | 1875 个中 **1830 个逐字节一致 = 97.6%** |
 | 不一致的 45 个 | 都有明确外因：手工改过缩进（4 空格 + 行尾空格）、或另一种写法把 `\u201c` 转义 |
-| 单行源（紧凑一行） | **902 个** —— 需要时可 `xwl.py expand` 转多行。注意这类源**一个换行符都没有**，`--eol auto` 无从沿用 ⇒ 回退 LF；工作区惯例是 CRLF 时须显式 `--eol crlf` |
+| 单行源（紧凑一行） | **902 个** —— 需要时可 `xwl.py expand` 转多行。注意这类源**一个换行符都没有**，`--eol auto` 无从沿用 ⇒ 回退 LF；工作区惯例是 CRLF 时须显式 `--eol crlf`。⚠️ 上表口径是**检出形态**（**Windows 检出形态**示例），**与仓库存储形态可能不同**、跨平台会变 |
 | 解析失败 | 3 个：`modules/dev/template/{basic-dialog-edit,gridCrud,multiform_mainDetail}.xwl`（模板样本，不是纯 JSON） |
 
 → 结论：**算法复刻正确**，因此 `patch` 重排**不会顺带改动无关内容**，
 diff 只含真正改的内容（实测：377 KB 的一个多行源页面加一个带多行 JS 的按钮 + 改标题，diff **17 行**）。
+
+> 反过来，**源文件不是设计器原样**时，`patch` 会**顺带规整**整份格式（纯空白缩进 / `\uXXXX` 展开 /
+> 数字字面量形态），这些改动一律**语义等价**（见下表的 3 类计数）。噪声大就改用 `edit` 做定点插入。
+>
+> 动手前先估噪声量：**先 `--dry-run` 数一下噪声行数再决定** —— 把 `--dry-run` 的输出**重定向到文件**，
+> 数其中以 `  +` / `  -` 开头的行即可。噪声只有一两行就照用 `patch`（省心、格式有保证，
+> 且还原后的形态反而与设计器产物一致）；噪声可观就改用 `edit` 做定点插入（语义相同，diff 只含你改的那一处）。
 
 ⚠️ 但**"diff 只含本次改动"只对"设计器原样排版"的文件成立**。全量复算（8 个 wb 根 / 24933 个可解析文件）：
 设计器原样 **17530（70.3%）** / 单行源 **6812（27.3%）** / 多行但非原样 **591（2.4%）**
@@ -142,6 +163,9 @@ FileUtil.syncSave(file, s, "utf-8");                                // ④ UTF-8
 > ② 的正则是「**字面反斜杠 + n**」，所以值里本来就有这种序列时（SQL / JS 源码里写的 `\n`，
 > 在 JSON 里是 `\\n`），磁盘上会呈现成「`\\` + 反斜杠 + 换行」的别扭形态 ——
 > **语义无损**，加载器的正则 `\\(?:\r\n|\r|\n)` 恰好只吃「一个反斜杠 + 换行」。
+>
+> ⇒ 两个序列化模式（默认忠实 / `--safe`）都语义无损、差异只在字节形态；选哪个
+> **按"给谁看"决定**（要提交用默认，人读用 `--safe`），不按"哪个好看"。
 
 ## 六、控件使用频次与父子结构
 
@@ -179,7 +203,8 @@ FileUtil.syncSave(file, s, "utf-8");                                // ④ UTF-8
   `updater` `xwl`
   —— 绝大多数是纯 HTML 标签（`div` / `span` / `ul` / `p` …）、图表子元素（`eaxis` / `eseries` /
   `etitle` …）或后端节点（`module` / `dataprovider` / `serverscript` …），本来就没有 `normalName`
-  这个概念。**给这些类型写 `normalName` 是非法配置**（`itemids --fix normalName` 会跳过并回报）。
+  这个概念。**不是所有控件都接受 `normalName`** —— 给这些类型写它是**非法配置**
+  （`itemids --fix normalName` 会跳过并回报）。
 
 ### 7.2 重名组的实际分布（按「类型 + 是否被 JS 引用 + 有无 normalName」分级）
 
@@ -268,8 +293,23 @@ unregister: function (item) {
 | **`normalName` = 原名 + 父级 `itemId` 的"区分段"** | 4 处：`tbar` 挂在 `gridW` / `grid2` / `gridUser` 下，分别叫 `tbarW` / `tbar2` / `tbarUser`；同一页里**唯一没给 `normalName` 的就是那个不合惯例的** |
 | **`itemId` = 父级 `itemId` + `_` + 原名** | 7 处：父级 `itemId` 为 `panelX` 时，子项 `find` 写成 `panelX_find`（分布在 6 个文件） |
 
+> 查重名用 `xwl.py itemids <file>`，常用三个选项：`--dups-only`（只列重名组）、`--name NAME`（只看一个名字的全部候选）、`--suggest`（生成改名 ops 草稿，**需人工确认**）；另有 `--fix` / `--controls` / `--json`。
+>
+> **照抄示例**（点名单个重名项、并给它补 `normalName`；两条都取自真实工程里的用法）：
+> ```json
+> [{"op": "set", "path": ["@tbar#3", "configs", "normalName"], "value": "tbarGrid"}]
+> [{"op": "set", "path": ["@gridUser", "@tbar", "configs", "normalName"], "value": "tbarUser"}]
+> ```
+> ① `["@tbar#3"]` = **点名同名里的第 3 个**（写法 `@名字#N`，N 从 1 起）；
+> ② `["@gridUser", "@tbar"]` = **串联 `@` 按父子关系定位**（后一段只在上一段的子树里找）。
+> 两种写法都**只改真正要改的那一个**，**不要靠猜顺序**。
+
 > ⚠️ 一个容易误引的例子：`panelCustomRecord_ID` 看着像"`itemId` 用父级作前缀"，但它实测是
 > **`normalName`**（两个同名 `text` 靠它区分）—— 属"补 `normalName`"的语境，不要当成 `itemId` 的先例。
+
+处置顺序（重名时）：**不猜顺序**（先读祖先链判断哪个才是真目标）→ 把候选交用户选 →
+**能用 normalName 就用**（不动 `itemId`、零破坏）→ 只有类型不接受时才回退到改 `itemId`，
+且**必须同步改 JS 引用**、并复查 `itemids`。
 
 ## 八、SQL 片段与 `serverScript` 的分布（`sql-fragments.md` 的数字口径）
 
@@ -311,7 +351,8 @@ unregister: function (item) {
 hidden, children, roles, title, iconCls, inframe, pageLink
 ```
 
-**独立页面与被引用的 SQL 载体完全一样**（都是这一套）。少数派是缺 `inframe` / `pageLink` 的
+**独立页面与被引用的 SQL 载体完全一样**（都是这一套）：**两类格式规则完全相同**，
+区别只在"改片段时你要额外确认谁在用它"。少数派是缺 `inframe` / `pageLink` 的
 （20 个，如 `dev/ide/add-file.xwl`）与顺序略异的（6 个）。
 
 **7 把钥匙的取值形态**（在 1635 个页面类文件上计数）：

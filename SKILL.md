@@ -2,7 +2,7 @@
 name: webbuilder-xwl-patch
 slug: skill-webbuilder-xwl-patch
 displayName: webbuilder-xwl-patch
-version: 1.3.3
+version: 1.3.4
 license: MIT
 metadata:
   category: development-tools
@@ -47,6 +47,7 @@ WebBuilder 的页面与查询定义都写在 `.xwl` 里。它**看起来像 JSON
 |---|---|
 | **平台** | 仅 WebBuilder（wb）。**其他平台不适用** |
 | **对象** | 仅 `.xwl` 文件本身：格式、编辑、校验、抽取。**不含**后端 Java、模块打包、`target/` 部署副本同步、数据库菜单注册（`WB_MENU`） |
+| **操作系统** | Windows 与 POSIX（含 macOS）均支持；路径分隔符与换行按各平台惯例处理，跨平台时注意检出/存储形态差异 |
 | **环境** | Python 3.9+，**纯标准库零依赖**；`node` 可选，只用于事件 JS 语法校验，找不到时自动降级为提示 |
 | **规模** | 跨 5 个工程 / **8 个 wb 根**实测 **24957 个 xwl**，最大单文件 **728.8 KB**（746299 字节，按 1024 算；口径与耗时见 [`references/measured-data.md`](references/measured-data.md) §十）。该量级下 `check` 全开约 **0.56 s** —— **性能不是约束**。**工具没有任何文件大小上限**，但**未验证**过 1 MB 以上的文件、或单文件事件段极多的情形 |
 | **能改的前提** | 目标文件能被加载器解析（即 `check` 的 ④ 通过）。已经是坏文件的，先用 `edit` 做文本级修复 |
@@ -118,12 +119,8 @@ WebBuilder 的页面与查询定义都写在 `.xwl` 里。它**看起来像 JSON
 **别凭印象拼节点字段。** 权威来源是设计器自带的控件注册表 **`wb/system/controls.json`**
 （每个控件 id 的 `xtype` / 是否容器 / **允许的全部 `configs` 键**与事件名）——
 三套控件库的清单、配置载体说明与选型建议见 [`references/controls.md`](references/controls.md)。
-工具已内置查询：
+工具已内置查询（选项见 `xwl.py schema --help`）：
 
-```bash
-python scripts/xwl.py schema --tree --controls <工程>/wb/system/controls.json               # 按面板列出全部控件
-python scripts/xwl.py schema button --controls <工程>/wb/system/controls.json --skeleton   # 某控件的合法 configs / events + 骨架
-```
 
 **真实控件节点的键集合只有两种**（键序固定 `configs, expanded, children, type, events`）：
 
@@ -132,13 +129,7 @@ python scripts/xwl.py schema button --controls <工程>/wb/system/controls.json 
 ["configs", "expanded", "children", "type", "events"]  ← 有事件
 ```
 
-例如一个真实按钮：
 
-```json
-{"configs": {"itemId": "receiveAddBtn", "text": "添加", "iconCls": "record_add_icon"},
- "expanded": false, "children": [], "type": "button",
- "events": {"click": "if (Wb.isEmpty(app.h..."}}
-```
 
 > 少写 `expanded` / `children` 运行时通常有默认值兜底，但**会与设计器产物不一致**，
 > 下次被设计器保存就产生额外 diff。**用 `schema --skeleton` 生成骨架最稳。**
@@ -161,6 +152,13 @@ hidden, children, roles, title, iconCls, inframe, pageLink
 > 所以**新建时不要手写顶层键** —— 用 `xwl.py new`（内置了这套键序，见**第三章第 0 步**）。
 > 7 把钥匙各自的**取值形态与实测分布**（1635 个页面类文件的计数）见
 > [`references/measured-data.md`](references/measured-data.md) §九。
+
+> **要补齐这类「缺钥匙」文件时**：`set` 一个**原本不存在**的顶层键就是**新建键**，该 op 要带 `"create": true`
+> （`patch` 默认仍放行，只打一行预告，详见 §3.1）：
+
+```json
+[{"op": "set", "path": ["inframe"], "value": false, "create": true}]
+```
 
 ## 二、格式硬规则与文件形态
 
@@ -213,11 +211,8 @@ if (!rec) {\
 | **A 正确** | `\`+换行 → `\n`（两个字符的转义） | ✅ | 换行**保留**，语义等价 | — |
 | **B 错误** | `\`+换行 → **直接删除**（"合并行"） | ✅ **依然合法** | 换行**消失**，代码粘连 | ❌ 拦不住（走 `edit` 时会有 `[warn]`） |
 
-做法 B 是**静默语义损坏**（`//` 注释吃掉后续代码、ASI 依赖的换行消失后 `return` / `throw` / `++` / `--`
-语义改变、SQL token 粘连）—— **逐条后果见 [`references/anti-patterns.md`](references/anti-patterns.md) 第 4 条**。
-根因：xwl 是**图形化设计器的持久化格式**，设计器保存时会按自己的规则重排（见 2.4）⇒ 手工压平**维护不住**。
+> 静默语义损坏的逐条后果、"绝不能压一行"与相对基线判据见 [references/anti-patterns.md](references/anti-patterns.md) 第 4 条。
 
-⇒ "有没有被改坏"**只能靠"相对基线"判断**（文件自身看不出来）：人工 `git diff -w`，或交给 2.6 的 `diffguard`。
 
 ### 2.4 换行与展开：`expand` / `patch` / `edit` 的三个共同规则
 
@@ -234,16 +229,13 @@ python scripts/xwl.py expand <file.xwl> --eol lf    # 取设计器服务器上�
 **判读排版的两条**（否则会把设计器的原样误读成"被压坏了"）：缩进是 **1 个空格**；
 **只有 0 或 1 个元素的容器不换行**（`{"itemId": "x"}`、`[3]` 内联在一行）⇒ 会看到 `[{`、`}]`。
 
-**规则一 · `--eol auto` 的回退边界（三个命令共用）**：
+> 无换行单行源 → **回退 LF**（`patch` / `edit` / `expand` **三命令共用**、**不静默**）；工作区惯例是 CRLF 时请显式 `--eol crlf`。细节见 [references/faq.md](references/faq.md) §四。
 
 | 源 | `auto` 怎么定 |
 |---|---|
 | 有换行 | 沿用原文件（全 CRLF 就 CRLF，否则 LF）；**混用时按 CRLF 并给 `[warn]`** |
 | **一个换行符都没有**（紧凑单行源正属此类，样本工程 902 个） | 无从"沿用" ⇒ **回退 LF** |
 
-⇒ 对紧凑单行源跑默认参数，会在 CRLF 工作区里**新增一个 LF 文件** —— 工作区惯例是 CRLF 时请显式 `--eol crlf`。
-这一步**不静默**：`expand` 报 `规范化后: … 换行=LF`；`patch` 在头部注明 `换行=LF（源无换行符，auto 回退 LF）`；
-`edit` 写盘后由 `check` 按**写盘结果**给 note（LF ⇒ `[note] 该文件是 LF 换行…`；仍无换行 ⇒ `[note] 该文件是单行形态（无任何换行）…`）。
 
 **规则二 · `patch` 对单行源会把整份展开成多行**（⚠️ 与 §2.2 表格读起来有落差）：
 
@@ -251,21 +243,14 @@ python scripts/xwl.py expand <file.xwl> --eol lf    # 取设计器服务器上�
 "diff 只含本次改动"这条保证**对单行源不成立**。§2.2 说的"单行源就在一行形态上改"只是**格式上允许**；
 想在单行形态上做定点小改，只能走 3.2 的 `edit`。
 
-> **规模**（实测 8 个 wb 根 / 24933 个可解析文件）：设计器原样 **70.3%**、单行源 **27.3%**、
-> 多行但非原样 **2.4%** ⇒ **≈ 三成文件做一次 `patch` 会产生整份或大量与本次改动无关的 diff**。
-> 所以**别把 diff 当"本次改动"的证据**：要么先 `--dry-run`，要么在 git 里比对。
 
 **规则三 · `edit` 的换行推断**：按**目标文件的实际换行**归一锚点（混合换行按 CRLF 并给 `[warn]`），
 目标**一个换行符都没有**时同样按 LF 处理。
 
 ### 2.5 值里的「字面反斜杠 + n」为什么长得别扭
 
-② 的正则是**「字面反斜杠 + n」**，所以值里本来就有这种序列时
-（SQL / JS 源码里写的 `\n`，在 JSON 里是 `\\n`），磁盘上会呈现成
-「`\\` + 反斜杠 + 换行」这种看着别扭的形态。
+> 「字面反斜杠 + n」的机制、**语义无损**（与原文件**逐字节相同**）与"按给谁看决定"的取舍见 [references/measured-data.md](references/measured-data.md) §5.2。
 
-**这不是缺陷，语义无损**：加载器的正则恰好只吃「**一个**反斜杠 + 换行」，所以重载时
-精确还原回原来的 `\n`（回放校验：忠实模式产出与原文件**逐字节相同**，两种模式的回读值都与原值一致）。
 
 **该选哪个 —— 按"这个文件给谁看"决定，不要按"哪个好看"决定：**
 
@@ -337,17 +322,9 @@ python scripts/xwl.py new wb/modules/<模块>/xxxSql/queryXxx.xwl --kind sql --t
 | ② | SQL 载体验引用自洽 / 页面验传参链路 | `xwl.py sqlrefs` / `xwl.py params` |
 | ③ | **在设计器里打开一次**（真正的冒烟） | `check` 只证"格式能加载"，不证"页面能用" |
 
-**`folder.json` 是设计器导航树的目录索引**（每个目录一个，形如
-`{"hidden":false,"index":[…],"title":…}`）：`index` 里带 `.xwl` 后缀的是文件、不带后缀的是子目录；
-新文件不登记进它就**在设计器里看不到**。它自身的**键序不固定、是单行紧凑形态** ——
-用 `xwl.py folders <文件路径> --register` 来写（追加到 index 末尾，保原键序、保单行、幂等），别手工重排。
+> `folder.json` 的机制与前提（**不登记就看不到**、`--register` **只认文件路径**、缺 `folder.json` 时**不替你创建**）见 [references/faq.md](references/faq.md) §四。
 
-> **前提**：该目录得**已经被设计器管理**（目录里已有 `folder.json`）。没有的话 `--register` 会
-> 明确报错并退出 2，**不会**替你创建 —— 新目录先在设计器里建，或从同类目录复制一份再改 `title`。
-> 另外 `--register` 只认**文件路径**：给目录会被拒绝（一个目录里可能有好几个文件，工具不知道登记哪个）。
 
-> **还有一步在 xwl 之外**：要让**用户**能打开这个页面，得在数据库 `WB_MENU` 里挂菜单
-> （权限在 `WB_ROLE` / `WB_RESOURCE`）。那属于后端 / 数据库流程，本工具只负责 xwl 这一侧。
 
 ### 第 1 步 · 定位文件
 
@@ -376,39 +353,32 @@ python scripts/xwl.py new wb/modules/<模块>/xxxSql/queryXxx.xwl --kind sql --t
 
 `ops.json` 是操作数组，`path` 是「键 / 数组下标」的列表。**节点请用设计器的标准形态**（见 1.2）：
 
-```json
-[
-  {"op": "set", "path": ["title"], "value": "新标题"},
-  {"op": "set", "path": ["@dataprovider", "configs", "sql"], "value": "select 1 from dual\n{#sql#}"},
-  {"op": "append", "path": ["children", 0, "children"],
-   "value": {"configs": {"itemId": "newBtn", "text": "新按钮", "iconCls": "record_add_icon"},
-             "expanded": false, "children": [], "type": "button",
-             "events": {"click": "Wb.info('hi');"}}},
-  {"op": "delete", "path": ["children", 0, "children"], "index": 3}
-]
-```
+> `ops.json` 的四种 op（`set` / `insert` / `append` / `delete`）示例见 `xwl.py patch --help`（`epilog`）。
 
-> `path` 里的**对象键**能用 `@itemId` 就用；**数组元素**（如 `children`、`columns`）仍要用下标 —— 两者可混写：`["@grid1","children",0,"configs","title"]`。
->
-> **`@itemId` 要求唯一**。重名时工具**不猜顺序** —— 它会**报错并附上候选清单**：每个候选带
-> 祖先链（`panel2 › tab1 › grid2`）、原路径、"其下有什么控件"、以及**建议改名与依据**。
-> 三条出路：① `@名字#N` 点名第 N 个（N 从 1 起）；② 串联 `@` 段缩小范围（后一段只在上一段的子树里找）；
-> ③ 按父子关系只改真正要改的那个。**重名的由来、分级与处置流程见第七章。**
+> `path` 里对象键的 `@itemId` 写法与**不猜顺序**的三种出路（`@名字#N`、串联 `@`）见 `xwl.py patch --help`；重名处置见第七章。
 
-```json
-[{"op": "set", "path": ["@tbar#3", "configs", "normalName"], "value": "tbarGrid"}]
-[{"op": "set", "path": ["@gridUser", "@tbar", "configs", "normalName"], "value": "tbarUser"}]
-```
 
 > ⚠️ `paths` **只列** `sql` / `totalSql` / `serverScript` / `url` 四类字段 ——
 > **按钮、网格等控件的 `itemId` 不在它的输出里**。要 `patch` 某个 `events.*`（如给按钮改 `click`）时，
 > 用 **`xwl.py itemids <file>`** 看重名报告（第七章），或直接试跑并接受工具的候选清单报错。
 
-**改前先核对（几十秒，省一次返工）**：
+> `paths` / `dump` 的用途与选项见各自的 `--help`（写 `path` 时**别漏 `configs` 一层**）。
 
-```bash
-python scripts/xwl.py paths <file.xwl>    # ① 拿到目标字段的真实路径（含 @itemId 写法）
-python scripts/xwl.py dump  <file.xwl>    # ② 要看清层级时：解析后美化输出
+> `set` 到一个**原本不存在**的**对象键**（如给缺 `inframe` 的页面补它）就是**新建键**。**这个开关只约束对象键** ——
+> 补**数组元素**走 `append` / `insert`，本就不算新建键（`"create"` 挂在这两种 op 上属用法错误）。
+> 任意一条 set 可带 `"create": true`：补**原本不存在的键**时用它；写到已存在的键上是幂等保护。
+>
+> 中间态：**现在仍允许新建键，只打 `[warn]`；后续版本将默认拒绝，届时给已存在的键 `set` 不受影响、新建键要加 `"create": true`**。
+
+```json
+[{"op": "set", "path": ["@panel1", "configs", "newKey"], "value": "v", "create": true}]
+```
+
+> 不带 `create` 的新建键，真跑时在 stdout 打这条预告（`--dry-run` 另把**带 `create`** 的待建键单列一行 `[new-key]`）：
+
+```text
+[warn] 本次新建了 N 个键（本版仍允许；默认拒绝将在后续版本启用）：<path1>, <path2>, …
+       届时给已存在的键 set 不受影响；新建键请加 "create": true
 ```
 
 1. **能用 `@itemId` 就别手写下标** —— `paths` 给出的 `["@dataprovider","configs","sql"]`
@@ -443,13 +413,7 @@ python scripts/xwl.py patch <file.xwl> --ops ops.json --backup
    同一个数组上先 `insert` 再 `delete`，下标要按前一步之后的数组算。
 2. **事件 JS / SQL / serverScript 都写普通多行字符串**（`\n` 照常写）—— 序列化器会按设计器规则
    转成续行形态，你不用管。JS 里请用**单引号**。
-3. **diff 最小化有保证**：工具先比对"源文件是否设计器原样排版"。是 → 重排后逐字节一致，
-   diff **只含你真正改的内容**（口径与量级见 [`references/measured-data.md`](references/measured-data.md) §五）。源文件不是设计器原样时，重排会顺带规整整份格式，工具会明确提示。
-   - ⚠️ 那种"顺带规整"除缩进外，还可能把值里的 `\uXXXX` 转义**还原成真实字符**（语义等价）。
-     **先 `--dry-run` 数一下噪声行数再决定**：噪声只有一两行就照用 `patch`（省心，格式有保证——
-     且还原后的形态反而与设计器产物一致）；噪声可观就改用 3.2 的 `edit` 做定点插入
-     （语义相同，diff 只含你改的那一处）。
-   - 判断噪声量：把 `--dry-run` 输出重定向到文件，数以 `  +` / `  -` 开头的行即可。
+> 重排的"顺带规整"与 diff 最小化口径见 [references/measured-data.md](references/measured-data.md) §五；想压小 diff 改用 3.2 的 `edit`（语义相同、只含你改的那一处）。
 
 > 改 **SQL / serverScript** 时，`path` 用 `["@dataprovider","configs","sql"]` 这类写法 —— 见第六章。
 
@@ -484,9 +448,7 @@ python scripts/xwl.py check <file.xwl> --no-itemid          # 跳过 itemId 重�
 - **⑦ 的 `[FAIL]` 与 ①–⑥ 性质不同** —— ①–⑤ 是**格式**（文件坏了）、⑥ 是**事件 JS 语法**，⑦ 是**命名质量**
   （文件能用但取值有风险）。所以 `patch` / `edit` / `expand` **写盘后的自动校验只判 ①–⑥**，
   否则会出现"写盘成功却返回非 0"。要看 ⑦ 请单独跑 `check`，或直接 `itemids`。
-- **自己写校验脚本时别踩两个坑**：② 别写成"必须 CRLF"（设计器与仓库存的都是 LF，
-  那样会把合法文件判失败）；④ 是把「反斜杠 + 换行」替换成「**反斜杠 + 字母 n**」两个字符，
-  **不是**替换成换行符。
+> 自己写校验脚本的两坑（② **别写成"必须 CRLF"**、④ **不是替换成换行符**）见 [references/faq.md](references/faq.md) §一。
 
 ### 第 5 步 · 提交前扫一遍（`diffguard`。**只在 git 仓库里有意义**）
 
@@ -537,13 +499,8 @@ python scripts/xwl.py diffguard <改过的文件或目录> --strict    # CI / pr
 | `1` | **被检查对象或查询结果有问题**（`check` 有 `[FAIL]`；`paths` / `sqlrefs` 没找到目标字段） |
 | `2` | **用法或前置条件不满足**（缺必填参数、`edit` 锚点次数不符、`new` 拒绝覆盖、读不到目标文件） |
 
-行首标记：`[ok]` / `[FAIL]` / `[warn]`（**不影响退出码**）/ `[note]`。
-**带结论的三个命令**（`check` / `sqlrefs` / `diffguard`）：单个文件的结论是逐项的 `-> OK` / `-> FAIL`（两格缩进），
-整个命令的末行是 `=== 结果: ALL OK` / `=== 结果: FAIL`（`sqlrefs` 还有 `=== 结果: OK（有警告）`）。
-其余是**报告类**命令（`itemids` / `folders` / `paths` / `params`），没有这种末行 —— 判成败请认退出码。
+> 退出码与行首标记（`[warn]` **不影响退出码**，"1 与 2"**不是严格二分**）见 [references/faq.md](references/faq.md) §四。
 
-> **判断成败看退出码**（`[warn]` 有意设计成不阻塞）；它也不是"1 与 2 严格二分"——
-> 同为"文件不存在"，`check` 给 1、`patch` 给 2。详见 [`references/faq.md`](references/faq.md)（§四）。
 
 ### 4.3 环境依赖与自检
 
@@ -583,9 +540,7 @@ m?xwl=<模块>/<业务目录>/xxxSql/queryBizList
    → 文件 = wb/modules/<模块>/<业务目录>/xxxSql/queryBizList.xwl
 ```
 
-- **从引用找文件**：补上 `.xwl` 即可。
-- **从文件找引用方**：在 xwl 里搜 `m?xwl=<该路径去扩展名>`。
-- 被引用的片段是**常态**而不是特例（同一个工程里引用点常有数千处）。
+> 从引用找文件 / 从文件找引用方见 [references/sql-fragments.md](references/sql-fragments.md) §3.3（被引用的片段是常态）。
 
 ### 5.2 url 的三种写法
 
@@ -595,15 +550,7 @@ m?xwl=<模块>/<业务目录>/xxxSql/queryBizList
 | `/<短名>` | `/upload`、`/get-file`、`/download` | 短名注册表 **`wb/system/url.json`**，框架内部端点。改动时别自己编短名 |
 | `http://…` 或任意 url | `Wb.open({url:'http://…', inframe:true})` | 外部地址必须 `inframe:true` |
 
-> `Wb.request` / `Wb.open` / `Wb.upload` / `Wb.requestAg` 的 `url` 都可以给**完整带查询串**的形式，
-> 但参数的规范位置是 `params`（或 `out`），不要手拼查询串。
-> **解析口径**：工具认的是 **`url:` 这个键**（不论包在 `Wb.request` / `Wb.open` / `Wb.run` / `store.load` 里），
-> 且**只判本 wb 根** —— 跨 webapp / 跨工程的引用请在目标工程里跑；"跨工程存在"≠"本工程可用"。
-> **按单 webapp 判定**：实测多模块工程的 `target/` 展开产物里**只含其中一个模块**的 xwl（动态模块 jar 里没有 `wb/`）⇒ **各 webapp 是各自独立部署的**，不存在"部署时把别的 webapp 的页面合进来"这一步；
-> 但部署脚本 / 运维配置不在仓库里，**实际部署形态以运维为准**。
-> 上表第二行那种短名（捷径）工具**不解析**，只提示 —— 它**不只会出现在理论上**：
-> 全量 24957 个文件里，`url:` 的写法分三类 —— **字面量含 `m?xwl=`（已覆盖）**、**字面量不含 `m?xwl=`（捷径等）**、**变量 / 表达式（静态不可能解析）**，后两类工具都**不纳入核对**，
-> 量级见 [`references/measured-data.md`](references/measured-data.md) §十一。
+> `url` 的解析口径（短名**不解析**、**只判本 wb 根**、**按单 webapp 判定**）见 [references/sql-fragments.md](references/sql-fragments.md) §3.4。
 
 ### 5.3 引用位置：这些代码写在 xwl 的哪一处
 
@@ -620,15 +567,7 @@ m?xwl=<模块>/<业务目录>/xxxSql/queryBizList
 
 ### 5.4 四条最容易踩的
 
-1. **别用 `Wb.request` 代替 store** —— 列表 / 分页 / 排序要用 `store.load(...)`，
-   框架会带上 `page` / `start` / `limit` 并处理返回。
-2. **`Wb.requestAg` 不用写 `url`**（框架固定改成 `m?xwl=common/save-all`），但 `bean` / `method`
-   必须给；业务参数名要与后台取参名一致，否则取到空。
-3. **上传类失败的错误对象与别的通路不同**（`action.response.responseText` → `{msg}`），别混用。
-4. **跨页面传参不在核对范围** —— `Wb.open({url:'m?xwl=…', params:{…}})` 传进**子页面**的键，
-   写在**调用方**页面里，子页面自己看不到（运行时值从 request 取，静态不可见）。
-   所以 `xwl.py params <子页面>` 会把对应的 `{?名?}` 报成"未发现来源" —— 那是**能力边界，不是错误**；
-   要核对这条链，请到**调用方页面**去跑 `params`。
+> 四条易踩的完整说明见 [references/js-api.md](references/js-api.md) 与契约 `test-prompts.json`。
 
 ## 六、SQL 片段：`module.serverScript` ↔ `dataprovider`
 
@@ -696,10 +635,7 @@ python scripts/xwl.py sqlrefs <file.xwl>                            # 改完验 
 第四种情况：`itemId` **不是合法 JS 标识符**（含中文 / 空格 / `.` 等）—— 这种名字只能用
 `app.get('名')` 取，点号访问不适用，所以 `itemids` 把这类重名判为无害。
 
-> `normalName` 是**合法 configs 键**，但**不是所有控件都接受**：注册表 `wb/system/controls.json` 里
-> 有一部分控件的 `configs` 没有这个键（多是布局 / HTML / 后端节点）。给不接受它的类型写
-> `normalName` 属**非法配置** —— `itemids --fix normalName` 会跳过并回报。查具体某控件：
-> `xwl.py schema <type> --controls wb/system/controls.json`。
+> `normalName` 的合法性（**不是所有控件都接受**，写了属**非法配置**）见 [references/measured-data.md](references/measured-data.md) §7.1。
 
 各类在**样本工程**里的实测组数、比例与按类型的分布见
 [`references/measured-data.md`](references/measured-data.md) §七。那些数字只是**一个样本的量级参考**，
@@ -709,24 +645,10 @@ python scripts/xwl.py sqlrefs <file.xwl>                            # 改完验 
 
 **不要**"删一个"、"随便挑一个"、或"重名就不处理"。按这个顺序做：
 
-```bash
-python scripts/xwl.py itemids <file.xwl> --dups-only       # 重名组：分级 + 候选清单 + 建议值
-python scripts/xwl.py itemids <file.xwl> --name tbar       # 只看一个名字的全部候选
-python scripts/xwl.py itemids <file.xwl> --suggest         # 生成改名 ops 草稿（**需人工确认**）
-```
+> `itemids` 的常用三个选项（`--dups-only` / `--name` / `--suggest`）见 `xwl.py itemids --help`（另有 `--fix` / `--controls` / `--json`）。
 
-1. **读祖先链**判断"哪个才是真正要改的"。例如同名工具栏 `tbar` 分别挂在 4 个 `grid` 下，
-   其中 3 个已经各有 `normalName`、只有 1 个没有 —— 要"补"的就是那一个，而不是去动别人。
-2. **把候选列给用户，让他选** —— 工具只提建议、不替用户定。建议值由 `itemids` 按命名惯例给出，
-   可直接采用也可改：
-   - **补 `normalName`**（推荐，不动 `itemId`，零破坏）：**原名 + 父级 `itemId` 的"区分段"** ——
-     `tbar` 挂在 `gridLeft` 下 → `tbarLeft`；挂在 `gridUser` 下 → `tbarUser`。
-   - **改 `itemId`**（须同步改 JS 引用，所以是**兜底手段**）：**父级 `itemId` 作前缀** ——
-     父级 `panelX` 下的 `find` 按钮 → `panelX_find`。
-3. 用户定了之后才走 `patch`；改 `itemId` 的**必须同步改事件 JS 里的引用**，并复查 `itemids`。
+> 建议值的命名惯例与实测依据见 [references/measured-data.md](references/measured-data.md) §7.6。
 
-> 优先级：**能用 `normalName` 就用 `normalName`**（`--fix auto` 已如此）—— 它不动 `itemId`，
-> 不会破坏任何已有引用；只有类型不接受 `normalName` 时才回退到改 `itemId`。
 
 > 想知道**某个工程整体**有多少重名：在**你自己的工程**上跑一遍就是最新结果 ——
 > `itemids <file> --dups-only`（单文件明细）、`check`（该文件的 error / warn 计数）、

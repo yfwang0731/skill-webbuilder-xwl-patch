@@ -14,6 +14,13 @@
 
 ---
 
+## 目录
+
+- [1. `Wb.request`](#1-wbrequest--请求一个服务端片段)
+- [2. `Wb.open`](#2-wbopen--打开子页面列表页--弹窗)
+- [3. `Wb.upload`](#3-wbupload--文件上传--导入入口)
+- [4. `Wb.requestAg`](#4-wbrequestag--调后台-spring-方法)
+
 ## 1. `Wb.request` —— 请求一个服务端片段
 
 ```js
@@ -51,6 +58,9 @@ Wb.request({
 - 返回值是请求对象，可用于取消：`var req = Wb.request({...}); req.abort?` → 实际用 `Ext.Ajax.abort(req)`。
 - 相关近亲：`Wb.submit(url, params, target, method, isUpload)`（常规表单提交，涉及文件必须用它）、
   `Wb.download(url, params, isUpload, method)`（下载）。
+- **跨页面传参不在核对范围**：`Wb.open({url:'m?xwl=…', params:{…}})` 传进**子页面**的键写在
+  **调用方**页面里，子页面自己看不到（运行时值从 request 取，静态不可见）⇒ `params <子页面>`
+  会把对应的 `{?名?}` 报成"未发现来源"，那是**能力边界不是错误**；要核对就到**调用方页面**跑。
 
 ## 2. `Wb.open` —— 打开子页面（列表页 / 弹窗）
 

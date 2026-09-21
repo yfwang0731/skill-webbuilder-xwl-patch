@@ -71,7 +71,7 @@
 - [ ] 新增控件时 `itemId` **在文件内唯一**（列控件可重名，但要带 `_COL` / `Col` 后缀；
       按钮 / 面板 / `tab` / 数据承载**必须**区分开）
 - [ ] 若目标是"同一字段名出现在多处明细面板"：**优先补 `normalName`**（`app.<normalName>`），
-      而不是改 `itemId`
+      而不是改 `itemId` —— 补 `normalName` 是**新建键**，那条 `set` 要带 `"create": true`
 - [ ] 改了 `itemId` 的话：**事件 JS 里对它的引用已同步改**，且 `itemids` 复查过
 - [ ] `xwl.py check` 的 ⑦ 没有 `[FAIL]`（`[warn]` 级重名知道了就行 —— 老代码可留，新代码别再加）
 

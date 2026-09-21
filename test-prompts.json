@@ -2,7 +2,7 @@
   {
     "id": 1,
     "prompt": "帮我看看 wb/modules/<你的模块>/xxxSql/queryBizList.xwl 这个文件格式有没有问题",
-    "expected": "用 xwl.py check 跑七项校验（无 BOM / 换行一致 / 无「反斜杠+空白」/ 加载器等价解析 / 末行结构 / 事件 JS 语法 / itemId 重名分级），报告每项结果而不是只给一句『没问题』；不应打开文件手工看"
+    "expected": "用 xwl.py check 跑七项校验（无 BOM / 换行一致 / 无「反斜杠+空白」/ 加载器等价解析 / 末行结构 / 事件 JS 语法 / itemId 重名分级），报告每项结果而不是只给一句『没问题』；不应打开文件手工看。并提醒自己写校验脚本时别踩两坑：② 别写成『必须 CRLF』（设计器与仓库存的都是 LF）、④ 是把「反斜杠 + 换行」替换成「反斜杠 + 字母 n」两个字符、不是替换成换行符"
   },
   {
     "id": 2,
@@ -12,12 +12,12 @@
   {
     "id": 3,
     "prompt": "页面上的日期条件我改了 itemId，现在查询不生效了，SQL 也没报错，帮我看下哪里断了",
-    "expected": "指出「参数名 = 控件 itemId」这条命名契约，用 xwl.py params 做交叉核对（页面送的参数名 vs SQL 的 {?名?} / app.get('名')），说明名字对不上只会取到 null、条件静默失效；并覆盖 out / params 两条通路与同名参数覆盖方向相反的坑"
+    "expected": "指出「参数名 = 控件 itemId」这条命名契约，用 xwl.py params 做交叉核对（页面送的参数名 vs SQL 的 {?名?} / app.get('名')），说明名字对不上只会取到 null、条件静默失效；并覆盖 out / params 两条通路与同名参数覆盖方向相反的坑；顺带覆盖四条最易踩：① 别用 Wb.request 代替 store（列表 / 分页要用 store.load）② Wb.requestAg 不用写 url（框架固定改成 m?xwl=common/save-all），但 bean / method 必须给 ③ 上传类失败的错误对象不同（action.response.responseText → {msg}）④ 跨页面传参不在核对范围，params 报『未发现来源』是能力边界不是错误"
   },
   {
     "id": 4,
     "prompt": "这个页面里两个按钮都叫 findBton，我要改其中一个的点击事件，工具说重名了。是不是得先把名字改掉？",
-    "expected": "不要直接下结论改名。用 xwl.py itemids --name findBton（或 --dups-only）拿候选清单与分级：说明判据是「类型 + 是否被事件 JS 引用 + 有无 normalName」，列控件重名无害、取值控件优先补 normalName 而非改 itemId、按钮/面板/承载必须唯一；重名时 @ 不猜顺序，要指名第 N 个用 @findBton#2（N 从 1 起）或串联 @ 段限定；最后把候选列给用户选，而不是替他定"
+    "expected": "不要直接下结论改名。用 xwl.py itemids --name findBton（或 --dups-only）拿候选清单与分级：说明判据是「类型 + 是否被事件 JS 引用 + 有无 normalName」，列控件重名无害、取值控件优先补 normalName 而非改 itemId、按钮/面板/承载必须唯一；重名时 @ 不猜顺序，要指名第 N 个用 @findBton#2（N 从 1 起）或串联 @ 段限定；最后把候选列给用户选，而不是替他定；处置顺序：先读父子关系判断哪个才是真目标 → 把候选交用户选 → 能用 normalName 就用（不动 itemId、零破坏）→ 类型不接受时才回退改 itemId，且必须同步改事件 JS 引用、复查 itemids"
   },
   {
     "id": 5,
@@ -32,7 +32,7 @@
   {
     "id": 7,
     "prompt": "我要做一个从来没做过的页面：带查询条件、一个表格、还有导出。你能从头到尾帮我走一遍吗？",
-    "expected": "按 references/walkthrough.md 的端到端顺序走，而不是跳步或只给一段代码：先确认 Python 环境与 --kind（页面 vs SQL 载体）→ new --kind sql → paths 取 @ 路径 → patch 填 serverScript/sql → sqlrefs → new --kind page → patch 按标准节点形态整树搭控件 → params 核对传参 → check → folders --register。全程先 --dry-run 再 --backup；并提醒最后要在设计器里打开一次、以及 WB_MENU 挂菜单属范围外"
+    "expected": "按 references/walkthrough.md 的端到端顺序走，而不是跳步或只给一段代码：先确认 Python 环境与 --kind（页面 vs SQL 载体）→ new --kind sql → paths 取 @ 路径 → patch 填 serverScript/sql → sqlrefs → new --kind page → patch 按标准节点形态整树搭控件 → params 核对传参 → check → folders --register。全程先 --dry-run 再 --backup；并提醒最后要在设计器里打开一次、以及 WB_MENU 挂菜单属范围外。另注意：`set` 到原本不存在的**对象键**（如给页面补 `inframe` / `pageLink`、给控件补 `normalName`）属**新建键**，该 op 要带 `\"create\": true`（不带也放行，只打一行 `[warn]` 预告；补数组元素走 append/insert，不算新建键）"
   },
   {
     "id": 8,
