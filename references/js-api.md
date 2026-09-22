@@ -20,6 +20,7 @@
 - [2. `Wb.open`](#2-wbopen--打开子页面列表页--弹窗)
 - [3. `Wb.upload`](#3-wbupload--文件上传--导入入口)
 - [4. `Wb.requestAg`](#4-wbrequestag--调后台-spring-方法)
+- [5. 窗口：`createInstance` / `closeAction` 与 `app._X`](#5-窗口createinstance--closeaction-与-app_x)
 
 ## 1. `Wb.request` —— 请求一个服务端片段
 
@@ -172,3 +173,48 @@ Wb.requestAg({
 - 上传类失败的错误对象不同（`action.response.responseText` → `{msg}`），见本文 §3 —— **别混用**。
 - 保存成功后的标准三连：**关窗 → 刷新来源 store → `Wb.tip` 提示**。来源 store 可能是父页面
   （`app.grid1.store.load()`）或当前弹窗（`win.close()` 前先拿引用）。
+
+## 5. 窗口：`createInstance` / `closeAction` 与 `app._X`
+
+**两条规则先记住**：
+
+1. **`app._X` 是"配置模板键"，`app.X` 是"实例句柄"。** 二者在**生成期就指向同一对象**：
+   控件 `createInstance` 为真（缺省）时，服务端直接生成 `app.X = app._X = new <type>({…})`
+   ⇒ **两个键一开始就都是实例**；为 `"false"` 时生成 `app.X = app._X = {…}`
+   ⇒ **两个键一开始都是配置**、页面加载时不会实例化任何东西。
+2. **写法必须与 `closeAction` 配套**：
+
+| 路线 | `createInstance` | 打开 | 关闭 | `closeAction` |
+|---|---|---|---|---|
+| **常驻** | 真 / 缺省 | 加载时框架已建好；之后只 `app.X.show()` | `app.X.hide()` | **`'hide'`** |
+| **每次重建** | `"false"` | 每次 `new Ext.window.Window(app._X)` | 实例被销毁 | **`'destroy'`** |
+
+**为什么"每次重建"必须用 `app._X`**：`closeAction` 为 `destroy` 时，控件销毁会连带
+**把 `app.X` 从页面作用域里删掉**（框架按注册键注销）。之后 `app.X` 就是 `undefined`，
+再拿它当构造参数会得到一个**空白窗**。`app._X` 是普通属性、**永不被注销**，所以可以反复取用。
+
+**⚠️ 窗口挂在 `viewport` 下没有 `app._X`**：那对孪生键只会为 **`module` / `folder` 的直接子控件**
+生成。挂在 `viewport` 下的窗口只有 `app.X`（由框架注册器写入）= 实例，
+⇒ **想做"每次重建"就必须把窗口放到 `module` 直接子级**。
+
+**用途建议**（是建议、不是校验项）：
+
+- 常驻（`hide`）多用于**窗口内嵌 grid 做查询**。此时窗口在页面加载时就已实例化，
+  窗口内的 grid / store **建议不要 `autoLoad`**，改为每次打开时再查询（否则页面一打开就发查询、且数据会放旧）。
+- 每次重建（`destroy`）多用于**窗口内嵌 panel/form 做数据编辑**。每次销毁可避免旧数据残留，
+  但**取数据必须在销毁之前完成**（销毁会连带销毁子控件，之后取不到值）。
+
+**保活**：模块页签关闭/重载会清空整个模块作用域。常驻窗口若想活过这次清理，
+需先把引用摘掉（`delete app.X; delete app._X;`），否则会被一并销毁。
+
+**反例**：
+
+- `new Ext.window.Window(app.X)` —— 把**实例当配置**。`closeAction` 是 `destroy` 时
+  第二次打开得到空白窗；是 `hide` 时能显示但会留下泄漏的旧实例、并可能重复 id。
+- `app.X = new Ext.window.Window(app.X);` —— **回写**写法：靠"第一次 `app.X` 恰好还是配置"
+  侥幸成立；一旦销毁过就退化成空白窗。
+- `closeAction` 留缺省却每次 `new` —— 旧的隐藏实例不会被销毁，越开越多。
+
+**出处**：框架侧为 `ExtControl`（服务端生成那对孪生键）与 ExtJS 注册器（按注册键注销）；
+平台自带示例 `examples/basic/import-module.xwl` 的注释把两种用法都演示了。
+实测分布见 [`measured-data.md`](measured-data.md) §十二。

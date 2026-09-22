@@ -29,6 +29,84 @@
 
 ---
 
+## [1.3.5] - 2026-09-21
+
+**口径 / 判定修正版**：对外能力不变（子命令总数仍 **15**、无新参数、无新开关），
+两处**判定口径**变了 —— 重名分级改按**注册键** `normalName || itemId`、`check ②` 改按**风格集合** ⇒
+**既有文件的结论可能变**。每条都注明**变严 / 放松 / 口径变化**。
+
+### 升级须知（变严 / 放松 / 口径变化）
+
+**变严（既有文件可能因此新报问题）**
+
+- **`check ⑦` / `itemids` 改按注册键 `normalName || itemId` 分组**：原先按 `itemId` 分组，且对
+  「同名 `itemId` 但各有唯一 `normalName`」的节点做了 `ok_nn` 豁免；现在按注册键分组、豁免自然消失，
+  且**纯列控件重名一旦被事件 JS 引用就判 `error`**（原为 `[warn]`）⇒ 口径变更后既有文件**可能新报 `[FAIL]`**
+  （属既有问题、不是本次改坏）。
+- **`js_refs_of` 增认 `app['名']` / `app["名"]`**：原先只有 `app.X` 与 `app.get('X')`；
+  现三种写法都认 ⇒ 命中面变大。`params` 侧原自带一份 app-ref 正则副本，现**删副本、改复用共享符号**，
+  使 `params` 与 `itemids`（走 `js_refs_of`）对 `app['名']` 的判定**同源一致**。
+- **节点集纳入「只有 `normalName`、没有 `itemId`」的节点**（空串 `normalName` 视同缺失）。
+
+**放松（原先误报 / 误拒、现放行）**
+
+- **`check ②` 纯 CR 从 `[FAIL]` 降为 `[warn]`**：加载器接受 CR，设计器 / 仓库从不产出这种形态 ⇒
+  值得注意但**不算格式错**、**不影响退出码**。判「真·单行」改用 `ANY_EOL_RE`，纯 CR 文件不再同时得到
+  「单行形态」与「纯 CR」两条自相矛盾的提示。
+- **`K9`：`_number` 保真写出整数值浮点（含 `0.0`）**：原把 `1.0` 折叠成 `1`、`0.0` 折叠成 `0` ⇒
+  `equivalent`（含值类型）判定往返不等 ⇒ `expand` / `patch` **rc=2**；现一律保真写出 `.0` ⇒ **rc=0**（详见「判定变化」）。
+- **`check ④` 把「空文件 / 设计器模板 / 真坏」三类分开报**（rc 仍为 1）：原把三者混成一句，
+  空文件（尚未建内容）会被误读成「格式错误」；空文件那段另补「常集中出现、非均匀形态」的**定性**提示
+  （**不含任何具体计数或工程名** —— 运行时文案不能写死私有语料的实测值）。
+
+**口径变化（结论的构成变了，值可能不变）**
+
+- **重名分级只两级**：`warn` 级取消、**未被引用一律 `benign`**（`_LEVEL_TAG["warn"]` 保留键位但不再产出）；
+  `taken` 去重集合扩为「全文件所有 `itemId` ∪ 所有非空 `normalName` ∪ 本组已建议值」。
+- **`--json` 只增字段 + 声明语义变更**：`groups[]` 增 `itemIds` / `registryName`，`--name --json` 的 node 项增 `itemId`；
+  **`groups[].name` 的值 = 注册键**（原 = `itemId`）⇒ 脚本消费方改用 `itemIds` / `registryName`；`--name` 也认注册键。
+- **`patch` / `expand` / `edit` 三命令共用两层 `eol` 规则**（新建 `detect_eol` / `pick_eol_for_auto`）：
+  ① 源只有一种风格 → 沿用它（**含纯 CR**）；② 源 ≥2 种 → **只在 CRLF / LF 取多数**（等量取 CRLF）、**CR 不投票**；③ 无换行 → 回退 LF。
+- **`H11`：`params` 与 `check ⑦` 也打印注册表来源**（与 `itemids` 同一句）；**`schema` 不打印**（`--controls` 必填、来源已在命令行）。
+- **`H6`：`patch` / `expand` 的「非原样排版」提示具体化**为三类改写**处数**（缩进 / `\uXXXX` 转义 / 数字形态）＋「都无语义影响；建议先 `--dry-run` 看 diff」——只改提示、不改行为。
+- **文档口径同步**（`SKILL.md` / `README.md` / `references/*.md` / `metadata.json`）：重名统一写「**注册键重名**」（保留「重名」二字）、判据改注册键、分级只两级、非标识符名字取法写准为 `app.get('名')` **或** `app['名']`、§2.4 补两层换行规则；子命令名 `itemids` 与参数名 `--no-itemid` **不改**。
+- **`references/measured-data.md` §7.2 重做成两级**（原「类型 + 引用 + normalName」三档 → 按引用与否两档：
+  `error` 456 / `benign` 5312，原 `warn` 1919 并入）；`references/workflow-notes.md` §二写入 K9 判准与警告。
+
+### 判定变化
+
+- **`{"a":1.0}` / `{"a":0.0}`：`expand` / `patch` 由 rc=2 → rc=0**。根因：`_number` 现在把**整数值浮点**保真写出 `.0`
+  （原先折叠成整数 ⇒ 往返不等 ⇒ 判不一致）。⚠️ **偏差仅限合成样本**：全量 24933 个可解析文件「dump → 再解析」，
+  用 `==` 与用规范化文本比对**结论零例外**（真实工程 0 例）。**不是新能力**（子命令 / 参数都没变）⇒ 按尺子仍发 **patch**。
+- **`check ④` 与 `equivalent` 取向不同、不许统一**：`check ④` 管「能不能被加载器加载」（宽）、
+  `equivalent` 管「有没有悄悄改值」（严，含键序与值类型）；把两者取向「统一」会**打红既有 `K8` 断言**、
+  并让值类型漂移**重新变成静默通过**（因果见 `references/workflow-notes.md` §二）。
+- **命令级 `K8` 守卫改造**：原「`expand {"a":1.0}` ⇒ rc=2」的 round-trip 断言在 `K9` 后**无判别样本**
+  （实测全样本 `equivalent` 与 `==` 同值），改为**行为级调用点守卫** —— 进程内探针断言 `expand` / `patch` / `new`
+  三命令各调用模块级 `equivalent` **≥1 次**（把任一处换成 `==` ⇒ 该命令探针 0 次 ⇒ 红）。
+
+### 本批补充（措辞修正 · 窗口知识 · 守卫与回归）
+
+- **`app.<itemId>` 误导措辞修正（4 处）**：`SKILL.md`、`references/controls.md`、`scripts/xwl.py`（`schema` 骨架
+  占位值 + 子命令 epilog）原先把「工具 `@itemId` 寻址」与「运行时取名」混写；改为点明**工具寻址**才用
+  `configs.itemId`，运行时 `app.<名>` 取的是**注册键** `normalName || itemId`。
+- **`_APP_REF_RESERVED` 注释口径（F-2）**：`scripts/xwl.py` 里注释「控件 itemId」改为「控件名（注册键）」。
+- **`check ⑦` 欠报修复**：分组改按注册键之后，**只以 `app._X`（模块根孪生键）形式被引用**的重名组会被
+  漏判为 benign；现把 `_名字` 也计入引用面 ⇒ 该判 error 的组能判出来。
+- **`params` 按注册键 `normalName || itemId` 找容器**：同一页多个 toolbar 共用 `itemId`、靠 `normalName` 区分时，
+  原先只按 `itemId` 找会**假报「找不到容器 / 缺来源」**；现改为注册键优先、`itemId` 兜底。
+- **窗口知识落地**：新增 `references/js-api.md` §5（`createInstance` / `closeAction` / `app._X` 两种用法与正反例）、
+  `references/measured-data.md` §十二（窗口实测分布）、`references/anti-patterns.md` 第 22 / 23 条、
+  `references/controls.md` 的 `window` 行指针、`SKILL.md` 索引指针、`test-prompts.json` 第 13 条；
+  `schema --skeleton` 对 `type=window` 预填 `createInstance:"false"` + `closeAction:"destroy"`（编辑档）。
+- **新增守卫（`scripts/selftest.py`）**：`17j-9`（分发文件不得再出现误导措辞字面量——判据字面量用相邻字面量
+  拼接以规避自扫、取不到 `git ls-files` 时记 `[note]` 没扫）、`17j-10`（`schema --skeleton` 的 `itemId`
+  占位值口径，行为级）、`17j-11`（`schema window --skeleton` 预填两项推荐键，行为级）。
+- **两条回归断言**：`check ⑦` 对「只以 `app._X` 引用」的必要报（注入即红）、`params` 对「同 `itemId`
+  不同 `normalName`」的不假报（注入即红）。
+
+---
+
 ## [1.3.4] - 2026-09-21
 
 本步：**文档结构下沉 + 元纪律收口**（`patch` 性质 —— 无新子命令、无新参数，对外能力不变）。

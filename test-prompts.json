@@ -2,7 +2,7 @@
   {
     "id": 1,
     "prompt": "帮我看看 wb/modules/<你的模块>/xxxSql/queryBizList.xwl 这个文件格式有没有问题",
-    "expected": "用 xwl.py check 跑七项校验（无 BOM / 换行一致 / 无「反斜杠+空白」/ 加载器等价解析 / 末行结构 / 事件 JS 语法 / itemId 重名分级），报告每项结果而不是只给一句『没问题』；不应打开文件手工看。并提醒自己写校验脚本时别踩两坑：② 别写成『必须 CRLF』（设计器与仓库存的都是 LF）、④ 是把「反斜杠 + 换行」替换成「反斜杠 + 字母 n」两个字符、不是替换成换行符"
+    "expected": "用 xwl.py check 跑七项校验（无 BOM / 换行一致 / 无「反斜杠+空白」/ 加载器等价解析 / 末行结构 / 事件 JS 语法 / 注册键重名分级），报告每项结果而不是只给一句『没问题』；不应打开文件手工看。并提醒自己写校验脚本时别踩两坑：② 判据是『同一文件里混用多种换行才判失败』、单独的纯 CR 只降 `[warn]`（别写成『必须 CRLF』）、④ 是把「反斜杠 + 换行」替换成「反斜杠 + 字母 n」两个字符、不是替换成换行符"
   },
   {
     "id": 2,
@@ -17,7 +17,7 @@
   {
     "id": 4,
     "prompt": "这个页面里两个按钮都叫 findBton，我要改其中一个的点击事件，工具说重名了。是不是得先把名字改掉？",
-    "expected": "不要直接下结论改名。用 xwl.py itemids --name findBton（或 --dups-only）拿候选清单与分级：说明判据是「类型 + 是否被事件 JS 引用 + 有无 normalName」，列控件重名无害、取值控件优先补 normalName 而非改 itemId、按钮/面板/承载必须唯一；重名时 @ 不猜顺序，要指名第 N 个用 @findBton#2（N 从 1 起）或串联 @ 段限定；最后把候选列给用户选，而不是替他定；处置顺序：先读父子关系判断哪个才是真目标 → 把候选交用户选 → 能用 normalName 就用（不动 itemId、零破坏）→ 类型不接受时才回退改 itemId，且必须同步改事件 JS 引用、复查 itemids"
+    "expected": "不要直接下结论改名。用 xwl.py itemids --name findBton（或 --dups-only）拿候选清单与分级：说明判据是按**注册键 `normalName || itemId`** 分组、**只两级**（被事件 JS 引用 → error / 未被引用 → benign），列控件注册键重名一般无害、取值控件优先补 normalName 而非改 itemId、按钮/面板/承载被引用就必须唯一；重名时 @ 不猜顺序，要指名第 N 个用 @findBton#2（N 从 1 起）或串联 @ 段限定；最后把候选列给用户选，而不是替他定；处置顺序：先读父子关系判断哪个才是真目标 → 把候选交用户选 → 能用 normalName 就用（不动 itemId、零破坏）→ 类型不接受时才回退改 itemId，且必须同步改事件 JS 引用、复查 itemids"
   },
   {
     "id": 5,
@@ -58,5 +58,10 @@
     "id": 12,
     "prompt": "这个 xwl 我改完了，check 也全绿，但中间我手抖过，不确定有没有把哪段多行 JS 不小心挤成一行。怎么确认？",
     "expected": "不要只答「check 全绿就是没事」—— 压平后文件**自身是自洽的**，check 的七项与 node --check 都会放行，所以这一步必须**相对基线**判断。引导用 `xwl.py diffguard <file>`：主判据是「定义级」的（工作区某条物理行 == 基线里连续 ≥2 行各自去掉续行符后拼接的结果），所以**合法删减**（少内容）与**单行改长**（多内容）都不会误报，而压平会被精确指出「基线第几行到第几行被并成了工作区第几行」；另有一条粗筛兜「压平同时还改了内容」。默认只告警（rc=0），CI / pre-commit 里加 --strict 才阻塞（rc=1）；不是 git 仓库、或文件在基线里不存在（新文件）会以 [note] 跳过，--strict 下一个文件都没比成才 rc=2。若两者都测不到的形态（压平同时改内容且增量不足），仍需人工 git diff 复核"
+  },
+  {
+    "id": 13,
+    "prompt": "我要在页面上加一个查询窗口（点按钮弹出来、里面放几个查询条件和一个表格），窗口该用哪种写法？打开和关闭怎么配？",
+    "expected": "先分清两种写法再动手：① 常驻档 = createInstance 缺省（真）+ closeAction 'hide'，加载时框架已把 app.X 建成实例，打开只 app.X.show()、关闭 app.X.hide()，适合窗口内嵌 grid 做查询（窗口内 store 建议不要 autoLoad，改为每次打开再查）；② 每次重建档 = createInstance \"false\" + closeAction \"destroy\"，每次打开 new Ext.window.Window(app._X)——必须用下划线的模板键，因为 closeAction 为 destroy 时销毁会把 app.X 从页面作用域注销，再复用实例第二次打开就是空白窗。想做每次重建还必须把窗口挂在 module 直接子级才拿得到 app._X（挂 viewport 下没有这对孪生键）。落地：可先跑 schema window --skeleton 拿一份已预填 createInstance/closeAction 的骨架，再用结构级 patch 落控件、最后 check。别把实例当配置反复 new Ext.window.Window(app.X)。完整对照见 references/js-api.md"
   }
 ]

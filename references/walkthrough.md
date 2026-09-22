@@ -172,7 +172,7 @@ python <本skill目录>/scripts/xwl.py patch wb/modules/<模块>/orderQuery.xwl 
 
 1. `store` 是 **`grid` 的子节点**，不是 `grid` 的兄弟（骨架见 `references/controls.md` §4.2）；
 2. `store.url` 用**模块相对路径、不带 `.xwl` 后缀**；
-3. 新增控件的 `itemId` **在文件内唯一**（列控件可重名，见 SKILL.md 第七章）。
+3. 新增控件的**注册键 `normalName || itemId` 唯一**（列控件可重名，见 SKILL.md 第七章）。
 
 **预期**：`patch` 报告已应用 2 个 op、语义等价比对通过，`--backup` 生成 `.bak`，自动校验 `ALL OK`。
 

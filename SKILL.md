@@ -2,7 +2,7 @@
 name: webbuilder-xwl-patch
 slug: skill-webbuilder-xwl-patch
 displayName: webbuilder-xwl-patch
-version: 1.3.4
+version: 1.3.5
 license: MIT
 metadata:
   category: development-tools
@@ -74,10 +74,11 @@ WebBuilder 的页面与查询定义都写在 `.xwl` 里。它**看起来像 JSON
 | 动手改（第一次用） | **第三章**，照第 0 → 5 步走 |
 | 查子命令 / 退出码 / 环境依赖 | 第四章 |
 | 改引用、传参、写 `events` 里的 JS | 第五章 + [`references/js-api.md`](references/js-api.md) |
+| 加 / 改窗口（`createInstance`、`closeAction`、`app._X`） | [`references/js-api.md`](references/js-api.md) §5 |
 | 改 SQL 片段（`serverScript` ↔ `dataprovider`） | 第六章 + [`references/sql-fragments.md`](references/sql-fragments.md) |
-| 处理 `itemId` 重名 / `@itemId#N` 寻址 | 第七章 |
+| 处理注册键重名 / `@itemId#N` 寻址 | 第七章 |
 | 出问题了（按症状查） | 第八章 + [`references/faq.md`](references/faq.md) |
-| **动手前**扫一遍"别这么干" | [`references/anti-patterns.md`](references/anti-patterns.md) —— 21 条，标了哪些是**静默**的 |
+| **动手前**扫一遍"别这么干" | [`references/anti-patterns.md`](references/anti-patterns.md) —— 23 条，标了哪些是**静默**的 |
 | **交活前**逐条过 | 第九章 + [`references/checklist.md`](references/checklist.md) —— 30 项 |
 | 换控件 / 不知道用哪个 / 该挂哪里 | [`references/controls.md`](references/controls.md) |
 | 想看一次完整实操（从零造页面 + SQL 载体） | [`references/walkthrough.md`](references/walkthrough.md) |
@@ -133,7 +134,7 @@ WebBuilder 的页面与查询定义都写在 `.xwl` 里。它**看起来像 JSON
 
 > 少写 `expanded` / `children` 运行时通常有默认值兜底，但**会与设计器产物不一致**，
 > 下次被设计器保存就产生额外 diff。**用 `schema --skeleton` 生成骨架最稳。**
-> `itemId` 是寻址用的（`app.<itemId>`），**必须唯一**。
+> `itemId` 是**工具寻址**用的（`@itemId`），**必须唯一**；运行时 `app.<名>` 取的是**注册键** `normalName || itemId`。
 
 ### 1.3 页面顶层骨架（7 把钥匙，键序固定）
 
@@ -233,7 +234,8 @@ python scripts/xwl.py expand <file.xwl> --eol lf    # 取设计器服务器上�
 
 | 源 | `auto` 怎么定 |
 |---|---|
-| 有换行 | 沿用原文件（全 CRLF 就 CRLF，否则 LF）；**混用时按 CRLF 并给 `[warn]`** |
+| **只有一种**换行（全 CRLF / 全 LF / 全 CR） | **沿用它**（含纯 CR） |
+| **混用多种**换行 | 只在 **CRLF / LF** 取多数（等量取 CRLF）；**裸 CR 不参与投票** ⇒ 绝不产出 CR |
 | **一个换行符都没有**（紧凑单行源正属此类，样本工程 902 个） | 无从"沿用" ⇒ **回退 LF** |
 
 
@@ -244,8 +246,8 @@ python scripts/xwl.py expand <file.xwl> --eol lf    # 取设计器服务器上�
 想在单行形态上做定点小改，只能走 3.2 的 `edit`。
 
 
-**规则三 · `edit` 的换行推断**：按**目标文件的实际换行**归一锚点（混合换行按 CRLF 并给 `[warn]`），
-目标**一个换行符都没有**时同样按 LF 处理。
+**规则三 · `edit` 的换行推断**：按**目标文件的实际换行**归一锚点（判据与 `patch` / `expand` 同源：
+单风格沿用、混用只按 CRLF/LF 的多数），目标**一个换行符都没有**时同样按 LF 处理。
 
 ### 2.5 值里的「字面反斜杠 + n」为什么长得别扭
 
@@ -323,6 +325,7 @@ python scripts/xwl.py new wb/modules/<模块>/xxxSql/queryXxx.xwl --kind sql --t
 | ③ | **在设计器里打开一次**（真正的冒烟） | `check` 只证"格式能加载"，不证"页面能用" |
 
 > `folder.json` 的机制与前提（**不登记就看不到**、`--register` **只认文件路径**、缺 `folder.json` 时**不替你创建**）见 [references/faq.md](references/faq.md) §四。
+> 想看一次**完整实操**（从零造页面 + SQL 载体，含 `folder.json` 登记与设计器冒烟）见 [references/walkthrough.md](references/walkthrough.md)。
 
 
 
@@ -433,13 +436,13 @@ python scripts/xwl.py edit <file.xwl> --old-file old.txt --new-file new.txt --ex
 ### 第 4 步 · 格式校验（**改完必跑**）
 
 七项 = **格式五项 ①–⑤**（无 BOM / 换行一致 / 无「反斜杠 + 空白」行 / **加载器等价解析** /
-末行结构）+ **⑥ 事件 JS 语法**（提取后交 `node` 校验）+ **⑦ `itemId` 重名分级**。逐项判据与报错处置见
+末行结构）+ **⑥ 事件 JS 语法**（提取后交 `node` 校验）+ **⑦ 注册键重名分级**。逐项判据与报错处置见
 [`references/faq.md`](references/faq.md)；不通过时先用 `--backup` 的 `<file>.bak` 回退再排查。
 
 ```bash
 python scripts/xwl.py check <file.xwl> [more.xwl ...]
 python scripts/xwl.py check <file.xwl> --no-js              # 本机没有 node 时跳过 JS 校验
-python scripts/xwl.py check <file.xwl> --no-itemid          # 跳过 itemId 重名分级（只查格式）
+python scripts/xwl.py check <file.xwl> --no-itemid          # 跳过注册键重名分级（只查格式）
 ```
 
 三点必须记住：
@@ -477,9 +480,9 @@ python scripts/xwl.py diffguard <改过的文件或目录> --strict    # CI / pr
 | `patch` | **结构级编辑（默认方式）**：只给值 / 子树，按设计器算法重建整份文件 |
 | `edit` | 文本级安全替换（**例外**手段，改一小段文本且不希望整份重排时用） |
 | `expand` | 单行源 → 设计器同款多行 |
-| `check` | 七项校验：格式五项 + 事件 JS 语法 + `itemId` 重名分级 |
+| `check` | 七项校验：格式五项 + 事件 JS 语法 + **注册键**重名分级 |
 | `diffguard` | **相对 git 基线**检测「多行内容被压平」 |
-| `itemids` | `itemId` 重名报告 + 建议改名（只读） |
+| `itemids` | 注册键重名报告 + 建议改名（只读） |
 | `paths` | 列出 `sql` / `totalSql` / `serverScript` / `url` 四类字段的位置 |
 | `params` | 核对「页面 → store → SQL」传参链路 |
 | `sqlrefs` | 校验 `{#名字#}` ↔ `serverScript` 是否自洽 |
@@ -609,8 +612,8 @@ python scripts/xwl.py sqlrefs <file.xwl>                            # 改完验 
 
 ## 七、itemId 命名规范与重名处置
 
-`itemId` 既是设计器里的节点名，**也是事件 JS 取控件的键**。重名**不是一律有问题** ——
-判据是三条：**控件类型 + 是否已被 JS 引用 + 有没有 `normalName`**。
+`itemId` 是设计器里的节点名；框架真正用来注册与取值的是**注册键 `normalName || itemId`**（`normalName` 优先）。
+重名**不是一律有问题** —— 判据只有**两级**：按**注册键**分组，组内 ≥2 且**被事件 JS 引用 → `error`**、**未被引用 → `benign`**。
 
 ### 7.1 框架怎么把控件交给 JS（这决定了重名的后果）
 
@@ -626,14 +629,14 @@ python scripts/xwl.py sqlrefs <file.xwl>                            # 改完验 
 
 ### 7.2 三类控件，三种规则
 
-| 类型 | 重名 | 依据与约定 |
+| 类型 | 注册键重名时 | 依据与约定 |
 |---|---|---|
-| **grid 的列** `column` / `tcolumn` | **允许** | 命名约定：**字段名 + `_COL` / `Col` 后缀**。取数走 `app.<grid>.getSelection(0).data.XXX`，**不直接取列控件** ⇒ 列名撞车不影响取值 |
-| **取值控件**（14 个 `Ext.form.field.*`） | **靠 `normalName` 区分** | 一般是"选中一条数据的详细展现"，`itemId` 默认就用字段名，重名不可避免。**加了 `normalName` 之后 JS 写 `app.<normalName>`** |
-| **按钮 / `item` / 面板 / `tab` / `toolbar` / 数据承载** | **不允许** | 新代码**必须**把 `itemId` 区分开。老代码若已如此且**没被 JS 引用**，可以不改；**一旦被 JS 引用就是真 bug** |
+| **grid 的列** `column` / `tcolumn` | **一般无害** | 命名约定：**字段名 + `_COL` / `Col` 后缀**。取数走 `app.<grid>.getSelection(0).data.XXX`，**不直接取列控件** ⇒ 列名撞车不影响取值 |
+| **取值控件**（14 个 `Ext.form.field.*`） | **靠 `normalName` 区分** | 一般是"选中一条数据的详细展现"，`itemId` 默认就用字段名，重名不可避免。**各有唯一 `normalName` ⇒ 注册键不同、不成组**，JS 写 `app.<normalName>` |
+| **按钮 / `item` / 面板 / `tab` / `toolbar` / 数据承载** | **被引用即 `error`** | 新代码**必须**把 `itemId` 区分开。老代码若已如此且**没被 JS 引用**，可以不改；**一旦被 JS 引用就是真 bug** |
 
-第四种情况：`itemId` **不是合法 JS 标识符**（含中文 / 空格 / `.` 等）—— 这种名字只能用
-`app.get('名')` 取，点号访问不适用，所以 `itemids` 把这类重名判为无害。
+第四种情况：注册键**不是合法 JS 标识符**（含中文 / 空格 / `.` 等）—— 点号访问不适用，只能用
+`app.get('名')` **或** `app['名']` 取，所以 `itemids` 把这类重名判为无害（`configs.id` 命名空间不在本工具建模范围）。
 
 > `normalName` 的合法性（**不是所有控件都接受**，写了属**非法配置**）见 [references/measured-data.md](references/measured-data.md) §7.1。
 
@@ -651,10 +654,15 @@ python scripts/xwl.py sqlrefs <file.xwl>                            # 改完验 
 
 
 > 想知道**某个工程整体**有多少重名：在**你自己的工程**上跑一遍就是最新结果 ——
-> `itemids <file> --dups-only`（单文件明细）、`check`（该文件的 error / warn 计数）、
+> `itemids <file> --dups-only`（单文件明细）、`check`（该文件的 error / benign 计数）、
 > `itemids <file> --json`（机器可读，便于汇总）。
 > 样本工程的一份完整分布（各档组数 + 按控件类型的 Top）见
 > [`references/measured-data.md`](references/measured-data.md) §7.2，只作**量级参考**。
+>
+> `itemids <file> --json` 的**字段契约**（脚本消费用）：`groups[].name` 的值 = **注册键**
+> （`normalName || itemId`，**不是 `itemId`**）；`groups[]` 另有 `itemIds`（该组节点的 `itemId` 列表）
+> 与 `registryName`；`--name --json` 的每个 node 项含 `itemId`。字段名不变、但 `name` 的**值**按
+> 注册键走 —— 汇总一律用 `itemIds` / `registryName`，别再把 `name` 当 `itemId`。
 
 > **怎么在 `path` 里精确指到其中一个**（`@itemId#N` 与串联 `@`）见 **§3.1** —— 与 `patch` 的
 > 寻址规则是同一件事，写在那边，这里不重复。

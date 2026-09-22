@@ -91,9 +91,9 @@ python scripts/xwl.py diffguard page.xwl                            # 有没有�
 | `new <out.xwl> --kind page\|sql [--from-json F]` | **从零生成**：内置设计器真实键序的骨架（页面 / SQL 载体）；默认拒绝覆盖已有文件 |
 | `patch <file> --ops ops.json` | **结构级编辑（默认方式）**：只给值/子树，按设计器算法重建整份文件 |
 | `folders <path> [--register]` | `folder.json`（设计器导航树索引）一致性检查（**只读**）；`--register` 才写（只接文件路径） |
-| `check <file...>` | 七项校验：格式五项 + 事件 JS `node --check` + **itemId 重名分级**；任一 FAIL 返回非 0 |
+| `check <file...>` | 七项校验：格式五项 + 事件 JS `node --check` + **注册键重名分级**；任一 FAIL 返回非 0 |
 | `diffguard <path...>` | **相对 git 基线检测「多行内容被压平」**（`check` 查不出的那类静默损坏）；默认只告警，`--strict` 才阻塞 |
-| `itemids <file>` | **itemId 重名报告（只读）**：分级 + 候选清单 + 建议改名；`--suggest` 出 ops 草稿 |
+| `itemids <file>` | **注册键重名报告（只读）**：分级 + 候选清单 + 建议改名；`--suggest` 出 ops 草稿 |
 | `paths <file>` | 列出 `sql` / `totalSql` / `serverScript` / `url` 四类字段的位置（含 `@itemId` 写法） |
 | `params <page.xwl>` | 核对「参数控件 → store → SQL」传参链路（标出 `out` / `params` 两条通路） |
 | `sqlrefs <file>` | 校验 SQL 片段里 `{#名字#}` 与 `serverScript` 是否自洽 |

@@ -5,7 +5,7 @@
 设计目标：把「安全编辑 + 格式校验」从"凭记忆手工做"固化成可复跑的命令。
 
 子命令（15 个）：
-  check   <file...>                              七项校验：格式五项 + 事件 JS 语法 + itemId 重名分级
+  check   <file...>                              七项校验：格式五项 + 事件 JS 语法 + 注册键重名分级
   new     <out.xwl> [--kind page|sql]            **从零生成** xwl（内置设计器骨架）
   patch   <file> --ops ops.json                  结构级编辑（改对象 → 按设计器规则重建）
   edit    <file> --old-file O --new-file N       文本级安全替换（锚点按目标换行归一、断言出现次数、拍平多行时警示）
@@ -13,7 +13,7 @@
   diffguard <path...> [--strict]                 相对 git 基线检测「多行内容被压平」（check 查不出的那类）
   paths   <file>                                 列出 sql / serverScript / url 等字段位置
   params  <page.xwl>                             核对「页面 → store → SQL」的传参链路
-  itemids <file>                                 itemId 重名报告（分级 + 候选清单 + 建议改名）
+  itemids <file>                                 注册键重名报告（分级 + 候选清单 + 建议改名）
   sqlrefs <file>                                 校验 {#名字#} 与 serverScript 是否自洽
   folders <path> [--register [NAME]]             folder.json（导航树索引）一致性检查 / 登记
   schema  [<type>] --controls <…controls.json>   查控件注册表（合法 configs / events / 骨架）
@@ -49,6 +49,61 @@ CRLF = "\r\n"
 # 它在**检出形态**下很稀少（实测 8 个 wb 根 / 24957 个 xwl 里 LF-only 只有 32 个），
 # 所以这条长期没被测到。
 ANY_EOL_RE = re.compile(r"\r\n|\r|\n")
+
+# 风格名 → 真实换行串（`--eol` 的两层规则用**风格名**表达，避免 CR/LF 在字符串里肉眼难辨）
+_EOL_CHAR = {"crlf": CRLF, "lf": "\n", "cr": "\r"}
+_EOL_NAME = {"crlf": "CRLF", "lf": "LF", "cr": "CR"}
+
+
+def eol_name(eol: str) -> str:
+    """把真实换行串翻回可读风格名（给运行时的换行提示用）。"""
+    for _k, _c in _EOL_CHAR.items():
+        if eol == _c:
+            return _EOL_NAME[_k]
+    return "LF"
+
+
+def eol_styles(text: str) -> set:
+    """按「风格集合」返回文本里出现过的换行风格：`{"crlf"}` / `{"lf"}` / `{"cr"}` 的任意子集。
+
+    判据与 `check ②` 同源 —— 混用 = 集合里有 ≥2 个元素；纯 CR = 集合恰为 `{"cr"}`。
+    """
+    n_crlf = text.count(CRLF)
+    n_lf = text.count("\n") - n_crlf
+    n_cr = text.count("\r") - n_crlf
+    styles: set = set()
+    if n_crlf:
+        styles.add("crlf")
+    if n_lf:
+        styles.add("lf")
+    if n_cr:
+        styles.add("cr")
+    return styles
+
+
+def detect_eol(text: str) -> str | None:
+    """文本的**单一**换行风格：`"crlf"` / `"lf"` / `"cr"`；无换行或多风格 → `None`。"""
+    styles = eol_styles(text)
+    if len(styles) == 1:
+        return next(iter(styles))
+    return None
+
+
+def pick_eol_for_auto(text: str) -> str:
+    """`--eol auto` 的两层规则（`patch` / `expand` / `edit` 三命令共用），返回风格名。
+
+    ① 源**只有一种**风格 → **沿用它**（含纯 CR）；
+    ② 源 **≥2 种** → **只在 CRLF/LF 里取多数**；等量（含两者皆 0）取 **CRLF**；**CR 不参与投票**；
+    ③ 源**一个换行符都没有** → 回退 **LF**（无从"沿用"，且这一步在输出里写明）。
+    """
+    styles = eol_styles(text)
+    if not styles:
+        return "lf"
+    if len(styles) == 1:
+        return next(iter(styles))
+    n_crlf = text.count(CRLF)
+    n_lf = text.count("\n") - n_crlf
+    return "crlf" if n_crlf >= n_lf else "lf"
 
 
 def ensure_utf8_stdio() -> None:
@@ -292,21 +347,27 @@ def _quote(s: str) -> str:
 
 
 def _number(v) -> str:
-    """复刻 org.json 的 numberToString：整数值去掉尾部 '.0'。"""
+    """复刻 org.json 的 numberToString —— **但整数值浮点保真写出 `.0`**（K9）。
+
+    与老版 org.json 的唯一差异：它把 `1.0` 写成 `1`（走 longValue），那会让
+    `equivalent(parse_xwl(dumps(obj)), obj)` 判**不一致**（写回后值类型从 float 漂成 int）。
+    本工具改为**保留 float 的 `.0`**（含 `0.0` / `2.0` …），让往返等价成立 —— 真实工程里
+    **整数值浮点 0 例**（全量 24933 文件零例外），所以改动对外无副作用。
+    非有限值（`NaN`/`Infinity`）已在解析阶段被拒，这里不重复兜。
+    """
     if isinstance(v, bool):
         return "true" if v else "false"
     if isinstance(v, int):
         return str(v)
     if isinstance(v, float) and v == 0 and str(v).startswith("-"):
-        # 负零：**保留 `-0.0`**（不可折叠成 `-0`/`0`）。往返比对是
-        # `equivalent(parse_xwl(dumps(obj)), obj)`，右侧是文件原值 `-0.0`；
-        # 只要写出的形态被 Python 读回不是 `-0.0`，两侧就不等 ⇒ 三命令 rc=2。
-        # org.json 写 `0`（longValue），但真实工程无 `-0.0`（见 equivalent docstring）。
+        # 负零：**保留 `-0.0`**（不可折叠成 `-0`/`0`）。虽与下面的 float 分支同效，
+        # 但单列出来是为了钉住这条"不可折叠"的语义（与 K9 的 `0.0` 同型参照）。
         return "-0.0"
-    s = repr(v)
-    if ("." in s) and ("e" not in s) and ("E" not in s):
-        s = s.rstrip("0").rstrip(".")
-    return s
+    if isinstance(v, float):
+        # repr(float) 天然给出最短的、能唯一读回该值的十进制写法（`1.0` → `"1.0"`、
+        # `0.25` → `"0.25"`、`1e20` → `"1e+20"`）；**不再 rstrip 掉 `.0`** —— 那正是 K9 的病灶。
+        return repr(v)
+    return repr(v)
 
 
 def _value_to_string(v, f: int, ind: int) -> str:
@@ -428,6 +489,28 @@ def dumps_designer(obj, indent_factor: int = 1, eol: str = CRLF, safe: bool = Fa
     if eol != "\n":
         t = t.replace("\n", eol)
     return t  # 设计器不加尾换行
+
+
+_UESC_RE = re.compile(r"\\u[0-9a-fA-F]{4}")
+_NUMTOK_RE = re.compile(r"-?\d+(?:\.\d+)?(?:[eE][+-]?\d+)?")
+
+
+def rewrite_counts(text: str, out: str) -> tuple:
+    """估「重排会顺带改写」的三类**处数**：缩进 / `\\uXXXX` 转义 / 数字形态。
+
+    只为一个目的：把「非原样排版」这句泛泛提示**具体化**（给用户一个量级），
+    **不追求逐字节等价、也不进任何判定**（`equivalent` 才是判定）。三类各返回一个整数：
+      · 缩进   = 两版**行首空白长度不同**的行数（按行号对齐，够用）；
+      · `\\uXXXX` = 两版里 `\\uXXXX` 转义**个数之差的绝对值**（被展开或反过来收拢）；
+      · 数字形态 = 两版里数字 token 的**多重集之差**（如 `1.0`→`1` 算 1 处）。
+    """
+    la, lb = text.splitlines(), out.splitlines()
+    indent = sum(1 for x, y in zip(la, lb)
+                 if (len(x) - len(x.lstrip())) != (len(y) - len(y.lstrip())))
+    uesc = abs(len(_UESC_RE.findall(text)) - len(_UESC_RE.findall(out)))
+    numdiff = sum((collections.Counter(_NUMTOK_RE.findall(text))
+                   - collections.Counter(_NUMTOK_RE.findall(out))).values())
+    return indent, uesc, numdiff
 
 
 class XwlLoadError(Exception):
@@ -667,6 +750,10 @@ def bare_nul_in_strings(text: str) -> int:
     return n
 
 
+# 设计器模板变量标记（`dev/template/**` 里那些 `#{…}`）—— 用来把「模板文件」与「真坏文件」分开报。
+_TEMPLATE_RE = re.compile(r"#\{")
+
+
 def cmd_check(args) -> int:
     node = find_node(args.node)
     if node is None and not args.no_js:
@@ -693,25 +780,32 @@ def cmd_check(args) -> int:
         if has_bom:
             errors.append("① 文件带 UTF-8 BOM（必须无 BOM）")
 
-        # ② 换行：必须「全文件一致」，LF-only 与 CRLF-only 都合法（不能混用）
-        n_lf, n_crlf, n_cr = text.count("\n"), text.count("\r\n"), text.count("\r")
-        bare_lf, bare_cr = n_lf - n_crlf, n_cr - n_crlf
-        if n_crlf and bare_lf:
+        # ② 换行：按**风格集合**判 —— 混用（≥2 种）判 FAIL；**纯 CR 降为 [warn]**
+        #    （加载器接受 CR，但设计器/仓库从不产出这种形态 ⇒ 值得注意、不算格式错）。
+        eol_warns: list[str] = []
+        n_crlf = text.count(CRLF)
+        bare_lf = text.count("\n") - n_crlf
+        bare_cr = text.count("\r") - n_crlf
+        styles = eol_styles(text)
+        if len(styles) > 1:
             errors.append(
-                f"② 换行混用：{n_crlf} 个 CRLF 里夹着 {bare_lf} 个裸 LF（同一文件必须一致）"
+                f"② 换行混用：{n_crlf} 个 CRLF + {bare_lf} 个裸 LF + {bare_cr} 个裸 CR"
+                f"（同一文件必须一致）"
             )
-        if bare_cr:
-            errors.append(f"② 存在 {bare_cr} 处裸 CR（单独的 CR 不是合法换行）")
+        elif styles == {"cr"}:
+            eol_warns.append(
+                "该文件是 CR 换行（加载器接受，但设计器/仓库从不产出这种形态；改动它会整份 diff）"
+            )
 
         notes: list[str] = []
-        # 「单行形态」的判据必须是**任何换行都没有**（含裸 CR）。只数 `\n` / `\r\n` 的话，
-        # 纯 CR 文件会同时得到「存在 N 处裸 CR」的 FAIL 和「无任何换行」的 note —— 自相矛盾。
-        if not n_crlf and not n_lf and not n_cr and text.strip():
+        # 「单行形态」的判据 = **任何换行都没有** —— 用 `ANY_EOL_RE` 判真·无换行，
+        # 而不是只数 `\n`/`\r\n`（那样纯 CR 文件会同时得到「单行形态」note 与纯 CR 提示，自相矛盾）。
+        if text.strip() and not ANY_EOL_RE.search(text):
             notes.append(
                 "该文件是单行形态（无任何换行）。可用 `xwl.py expand` 转成规范多行；"
                 "**不要**把多行文件改成单行。"
             )
-        elif not n_crlf and n_lf:
+        elif styles == {"lf"}:
             notes.append("该文件是 LF 换行（设计器在服务器上的产物形态），合法。")
 
         lines = ANY_EOL_RE.split(text)
@@ -727,12 +821,21 @@ def cmd_check(args) -> int:
         if lines and lines[-1].endswith("\\"):
             errors.append("⑤ 末行以反斜杠结尾（最后一行不能加续行符）")
 
-        # ④ 加载器等价解析
+        # ④ 加载器等价解析 —— 三类「不能加载」分开说：空文件 / 设计器模板 / 真坏。
+        #    三者 rc 都是 1（确实加载不了），但把三句混成一句会让用户误判成"格式错误"，
+        #    尤其空文件（尚未建内容）与 dev/template 下的模板（本就不是可加载页面）。
         obj = None
         try:
             obj = parse_xwl(text)
         except Exception as exc:  # noqa: BLE001
-            errors.append(f"④ 加载器等价解析失败: {exc}")
+            if not text.strip():
+                errors.append("④ 这是空文件（尚未建内容），不是格式错误 —— 但它无法被加载器加载")
+                notes.append("空文件常**集中出现**、不是均匀形态（多半是脚本只建了文件、"
+                             "没填内容）。")
+            elif _TEMPLATE_RE.search(text):
+                errors.append("④ 疑似设计器模板 / 含模板变量（结构位有 `#{…}`），本就不是可加载页面")
+            else:
+                errors.append(f"④ 加载器等价解析失败: {exc}")
 
         # ⑥ 事件 JS 语法
         events: list[tuple[str, str]] = []
@@ -744,19 +847,23 @@ def cmd_check(args) -> int:
                     head = err.splitlines()[0] if err else "语法错误"
                     errors.append(f"⑥ events.{name} JS 语法错误: {head}")
 
-        # ⑦ itemId 重名（分级）—— 只有「重名 **且** 已被事件 JS 引用」才算 FAIL
+        # ⑦ 注册键重名（分级）—— 按 `normalName || itemId` 分组；只有「重名 **且** 已被
+        #    事件 JS 引用」才算 FAIL（**只两级**：被引用 error / 未被引用 benign）
         itemid_warns: list[str] = []
         itemid_note = ""
         no_itemid = bool(getattr(args, "no_itemid", False))
         if obj is not None and not no_itemid:
-            rep = audit_itemids(obj, controls_path=discover_controls(path))
+            ctl_c = discover_controls(path)
+            rep = audit_itemids(obj, controls_path=ctl_c)
+            # H11：注册表来源 —— 与 `itemids` / `params` 逐字同一句（三处复用 controls_source_line）
+            print("  " + controls_source_line(ctl_c))
             for m in rep["errors"]:
                 errors.append(f"⑦ {m}")
             itemid_warns = rep["warns"]
             n_g = len(rep["groups"])
             if n_g:
-                itemid_note = (f"⑦ itemId 重名 {n_g} 组（error {len(rep['errors'])} / "
-                               f"warn {len(rep['warns'])} / benign {rep['n_benign']}）"
+                itemid_note = (f"⑦ 注册键重名 {n_g} 组（error {len(rep['errors'])} / "
+                               f"benign {rep['n_benign']}）"
                                f" —— 明细: `xwl.py itemids {os.path.basename(path)}`")
 
         if errors:
@@ -777,7 +884,7 @@ def cmd_check(args) -> int:
             else:
                 print("  [ok]   ⑥ 无 events 节点")
             if no_itemid:
-                print("  [note] ⑦ itemId 重名分级：已按 `--no-itemid` 跳过")
+                print("  [note] ⑦ 注册键重名分级：已按 `--no-itemid` 跳过")
             elif itemid_note:
                 print("  [ok]   " + itemid_note)
             else:
@@ -791,6 +898,8 @@ def cmd_check(args) -> int:
                   "`Unterminated string` 分支、以及 `next()` 对 NUL 与 EOF 都返回 0 的机制推理，"
                   "**未实机跑 Java**")
             print("         本项**只告警、不进 rc**（工具自身按 `strict=False` 解析，会放行）")
+        for w in eol_warns:
+            print(f"  [warn] {w}")
         for w in itemid_warns:
             print(f"  [warn] {w}")
         for n in notes:
@@ -803,14 +912,14 @@ def cmd_check(args) -> int:
 def _post_check(file: str, args) -> int:
     """写盘后的**格式**自检 —— 只回答「这次改动有没有破坏格式」。
 
-    itemId 重名（第 ⑦ 项）是**文件既有的质量属性**，不是本次改动造成的：
+    注册键重名（第 ⑦ 项）是**文件既有的质量属性**，不是本次改动造成的：
     若一并判定，会出现"写盘成功却返回非 0"的误导。所以这里显式跳过，只在末尾给一条指引。
     """
     print("--- 自动校验（本次改动是否破坏格式）---")
     ns = argparse.Namespace(files=[file], node=getattr(args, "node", None),
                             no_js=getattr(args, "no_js", False), no_itemid=True)
     rc = cmd_check(ns)
-    print("提示：itemId 重名不在本步判定范围；要连它一起体检，跑 "
+    print("提示：注册键重名不在本步判定范围；要连它一起体检，跑 "
           "`xwl.py itemids %s`" % os.path.basename(file))
     return rc
 
@@ -831,12 +940,16 @@ def cmd_edit(args) -> int:
     # 锚点按**目标文件的实际换行**归一化 —— 否则 LF 文件上跨行锚点永远匹配不到
     # （写死 CRLF 时，跨行锚点在 LF 文件上必然失配，而失败信息是误导性的
     #   「锚点出现次数: 0」，会让人以为锚点写错）
-    n_crlf = text.count(CRLF)
-    n_lf = text.count("\n") - n_crlf
-    eol = CRLF if n_crlf else "\n"
-    if n_crlf and n_lf:
-        print(f"[warn] 目标文件换行混用（{n_crlf} 个 CRLF + {n_lf} 个 LF）：锚点按 CRLF 归一化；"
-              f"若匹配不到，先修文件换行（`check` 第 ② 项）")
+    # 换行判据与 `patch`/`expand` 同源（`pick_eol_for_auto`）：单风格沿用（含纯 CR）、
+    # 混用只在 CRLF/LF 取多数、CR 不投票、无换行回退 LF。
+    styles = eol_styles(text)
+    eol = _EOL_CHAR[pick_eol_for_auto(text)]
+    if len(styles) > 1:
+        n_crlf = text.count(CRLF)
+        n_lf = text.count("\n") - n_crlf
+        n_cr = text.count("\r") - n_crlf
+        print(f"[warn] 目标文件换行混用（{n_crlf} 个 CRLF + {n_lf} 个裸 LF + {n_cr} 个裸 CR）："
+              f"锚点按 {eol_name(eol)} 归一化；若匹配不到，先修文件换行（`check` 第 ② 项）")
 
     with open(args.old_file, "r", encoding="utf-8", newline="") as f:
         old = normalize_eol(f.read(), eol)
@@ -869,7 +982,7 @@ def cmd_edit(args) -> int:
     write_text(args.target, text.replace(old, new))
     print(f"已写入: {args.target}")
 
-    # 立即自检（只判格式；itemId 重名见 _post_check 注释）
+    # 立即自检（只判格式；注册键重名见 _post_check 注释）
     return _post_check(args.target, args)
 
 
@@ -891,14 +1004,15 @@ def cmd_expand(args) -> int:
         print("[FAIL] 目标文件带 BOM；本工具不处理，请先确认它本来就不该有 BOM")
         return 2
 
-    # EOL：auto = 沿用原文件（全 CRLF 就 CRLF，否则 LF）。
-    # 这条回退规则由 patch / edit / expand **三命令共用**：源文件一个换行符都没有时无从"沿用"
-    # ⇒ **回退 LF**，且这一步**不静默**（各命令都会在输出里写明选了哪个换行）。
-    # ⇒ 紧凑单行源在 CRLF 工作区里会新增一个 LF 文件；工作区惯例是 CRLF 时请显式 --eol crlf。
+    # EOL：auto = **两层规则**（① 源只有一种风格 → 沿用它（含纯 CR）；② 源 ≥2 种 →
+    # 只在 CRLF/LF 取多数、等量取 CRLF、**CR 不投票**；③ 无换行 → 回退 LF）。
+    # 这条规则由 patch / expand / edit **三命令共用**（`pick_eol_for_auto`）。
+    # ⇒ 无换行源回退 LF、这一步**不静默**（各命令都会在输出里写明选了哪个换行）。
+    styles = eol_styles(text)
     if args.eol == "auto":
-        eol = CRLF if text.count(CRLF) else "\n"
+        eol = _EOL_CHAR[pick_eol_for_auto(text)]
     else:
-        eol = "\n" if args.eol == "lf" else CRLF
+        eol = _EOL_CHAR[args.eol]
     if args.indent != 1:
         print(f"[warn] --indent {args.indent} ≠ 设计器缩进（1 个空格）：产出与设计器不一致，"
               f"设计器下次保存会产生整份 diff。除非在做排版复刻实验，否则用默认值")
@@ -912,10 +1026,20 @@ def cmd_expand(args) -> int:
     # 打成 `LF=text.count("\n")` 会把 CRLF 里的 `\n` 也算进去 ——
     # 一份纯 CRLF 文件会显示成「CRLF=17101, LF=17101」，读者极易误读成"混用了"。
     n_crlf = text.count(CRLF)
-    print(f"原文件: {_byte_len(text)} B, CRLF={n_crlf}, "
-          f"裸LF={text.count(chr(10)) - n_crlf}, 裸CR={text.count(chr(13)) - n_crlf}")
-    print(f"规范化后: {_byte_len(out)} B, 换行={'CRLF' if eol == CRLF else 'LF'}"
+    bare_lf = text.count(chr(10)) - n_crlf
+    bare_cr = text.count(chr(13)) - n_crlf
+    print(f"原文件: {_byte_len(text)} B, CRLF={n_crlf}, 裸LF={bare_lf}, 裸CR={bare_cr}")
+    print(f"规范化后: {_byte_len(out)} B, 换行={eol_name(eol)}"
           f"{', 安全模式(--safe)' if args.safe else ''}")
+    # C4：换行混用必须报（与 patch / edit 对齐）—— 重排会把整份统一成一种。
+    if len(styles) > 1:
+        print(f"[warn] 源文件换行混用（{n_crlf} 个 CRLF + {bare_lf} 个裸 LF + {bare_cr} 个裸 CR，"
+              f"见 `check` 第 ② 项）：重排后整份统一为 {eol_name(eol)}，diff 会含换行差异")
+    # H6：把「非原样排版」具体化（只提示、不改行为）—— 三类改写各给一个整数处数。
+    if out != text and ANY_EOL_RE.search(text):
+        _ci, _cu, _cn = rewrite_counts(text, out)
+        print("[note] 本次还会顺带改写：缩进 %d 处 / \\uXXXX 转义 %d 处 / 数字形态 %d 处 "
+              "—— 都无语义影响；建议先 --dry-run 看 diff" % (_ci, _cu, _cn))
 
     # 语义等价比对（**规范化文本**，必须过，否则不写）
     try:
@@ -949,30 +1073,27 @@ def cmd_expand(args) -> int:
 # --------------------------------------------------------------------------- #
 # patch（结构级编辑：改对象 + 按设计器规则重建，不碰文本层）
 # --------------------------------------------------------------------------- #
-# itemId 的「重名严重度」不是一刀切 —— 取决于「控件类型 + 是否已被 JS 引用 + 字段有无 normalName」。
-# 分级依据来自样本工程全量实测（2780 个 xwl / 59791 个含 itemId 的控件节点 / 12304 段事件 JS）：
+# 「注册键重名」的严重度（**只两级**）—— 按**注册键** `normalName || itemId` 分组。
+# 注册键与框架注册语义一致（`if(appScope && (normalName||itemId))`，normalName 优先、
+# 空串视同缺失）⇒ **各自有唯一 normalName 的同名节点天然落到不同组**，无需再"豁免"。
 #
-#   benign — 重名在实践中无害
-#     · 列控件 column / tcolumn：实测 3393 组重名，**0 组**被事件 JS 引用。
-#       取数走 `app.<grid>.getSelection(0).data.XXX`，不会去取列控件本身。
-#       命名约定：字段名 + `_COL` / `Col` 后缀（实测 14213 / 20771 个列 itemId 带此后缀）。
-#     · 取值控件（14 个 Ext.form.field.*）且**每个同名节点都有互不相同的非空 normalName**
-#       —— 此时 JS 走 `app.<normalName>` 区分（实测 129 组已这样做）。
-#     · itemId 不是合法 JS 标识符（含中文 / 空格 / `.` 等）—— 只能用 `app.get('名')` 取；
-#       实测仅 57 个节点属于此类（多在 query / 描述性 itemId 上）。
-#   warn  — 不规范；老代码可容忍，**新代码必须区分**
-#     · 其余类型重名（button / item / panel / tab / toolbar / grid / store …）
-#       实测 1651 组，其中 1488 组未被 JS 引用（仅不规范）
-#     · 取值控件重名但 normalName 缺失或彼此重复（实测 745 组）
-#   error — 真隐患：重名**且**该名字已被事件 JS 引用
-#     （框架按 `normalName || itemId` 把控件注册到页面作用域，重名时取到的对象与
-#      "你看着的那个节点"可能不是同一个；实测 must 类 163 组 / field 类 396 组被引用）
+#   error  — 真隐患：该注册键**已被事件 JS 引用**
+#            （框架注册是普通赋值、后注册的覆盖先注册的，且任一重复项销毁时 `unregister`
+#             会把整个名字 `delete` ⇒ `app.<键>` 取到的随时可能不是你要的那个）
+#   benign — 未被事件 JS 引用：实践中无害
+#            · 列控件 column / tcolumn：实测 3393 组重名、**0 组**被事件 JS 引用
+#              （取数走 `app.<grid>.getSelection(0).data.*`，不会去取列控件本身）
+#            · 名字不是合法 JS 标识符（含中文 / 空格 / `.` 等）：只能 `app.get('名')` / `app['名']` 取
+#            · 按钮 / 面板 / 数据承载… 等其余类型重名：老代码可暂留，但新代码应区分
 _IID_COL_TYPES = frozenset({"column", "tcolumn"})
 _IID_JS_IDENT_RE = re.compile(r"^[A-Za-z_$][\w$]*$")
 _IID_INDEX_RE = re.compile(r"^(?P<name>.+)#(?P<idx>\d+)$")
 _APP_REF_BARE = re.compile(r"\bapp\.([A-Za-z_$][\w$]*)")
 _APP_REF_GET = re.compile(r"""app\.get\(\s*['"]([^'"]+)['"]""")
-# `app.<名字>` 里属于方法/框架成员而非控件 itemId 的名字 —— 统计引用时排除
+# `app['名']` / `app["名"]`（B7）—— **要求闭合 `]`**：键内不许出现引号/加号/模板串，
+# 故 `app['a' + b]`（动态）、`app[`x`]`（模板）**都不认**（它们本就不是静态可判的引用）。
+_APP_REF_BRACKET = re.compile(r"""app\[\s*['"]([^'"]+)['"]\s*\]""")
+# `app.<名字>` 里属于方法/框架成员而非「控件名（注册键）」的名字 —— 统计引用时排除
 _APP_REF_RESERVED = frozenset({
     "get", "set", "add", "remove", "insert", "down", "up", "query", "queryBy", "find",
     "fireEvent", "on", "un", "suspendEvents", "resumeEvents", "getId", "getCmp",
@@ -1012,6 +1133,15 @@ def _find_upward(start_file: str, rel: str) -> str | None:
 def discover_controls(start_file: str) -> str | None:
     """从文件位置向上找设计器控件注册表 `wb/system/controls.json`。"""
     return _find_upward(start_file, os.path.join("system", "controls.json"))
+
+
+def controls_source_line(ctl: str | None) -> str:
+    """注册表来源提示 —— **`itemids` / `params` / `check ⑦` 三处复用同一句**（H11）。
+
+    只改一处会让三个入口的措辞漂移（A 组同款陷阱），所以做成一个函数、逐字复用。
+    未找到分支：`控件注册表: 未找到（normalName 白名单 = 注册表 ∪ 内置兜底）`。
+    """
+    return "控件注册表: %s（normalName 白名单 = 注册表 ∪ 内置兜底）" % (ctl or "未找到")
 
 
 def normalname_types(controls_path: str | None = None) -> tuple:
@@ -1133,15 +1263,38 @@ def _find_all_by_itemid(o, name, parent=None, key=None, acc=None):
     return acc
 
 
-def itemid_hits(o, name):
-    """所有 `configs.itemId == name` 的节点详情（重名时用来列候选）。"""
+def registry_key(cfg) -> str | None:
+    """节点的**注册键** = `normalName || itemId`（normalName 优先；空串视同缺失）。
+
+    与框架 `if(appScope && (normalName||itemId))` 的注册语义一致 —— 重名判定按它分组。
+    两者都缺（含空串）⇒ `None`（该节点不进注册键分组）。
+    """
+    nn = cfg.get("normalName")
+    if isinstance(nn, str) and nn:
+        return nn
+    iid = cfg.get("itemId")
+    if isinstance(iid, str) and iid:
+        return iid
+    return None
+
+
+def itemid_hits(o, name, by: str = "itemid"):
+    """节点详情（重名时用来列候选）。
+
+    `by="itemid"`（默认）：匹配 `configs.itemId == name` —— `@itemId` 寻址走它；
+    `by="registry"`：匹配**注册键** `normalName || itemId` —— `itemids --name` 走它
+    （这样 `--name` 也能用注册键点名，见 `--json` 契约）。
+    """
+    if by == "registry":
+        return [h for h in _iter_controls(o) if registry_key(h[2]) == name]
     return [h for h in _iter_controls(o) if h[2].get("itemId") == name]
 
 
 def js_refs_of(obj, filtered: bool = True) -> set:
-    """文件内**事件 JS** 里引用到的控件名（`app.X` 与 `app.get('X')`）。
+    """文件内**事件 JS** 里引用到的控件名（`app.X` / `app.get('X')` / `app['X']`）。
 
     - 先 `strip_js_comments` 剔注释 —— 注释里的 `app.X` 不是引用（否则会误报）。
+    - 三种写法都认：`app.X`、`app.get('X')`、`app['X']`（`_APP_REF_BRACKET`）。
     - `filtered=True`（默认）：再滤掉 `_APP_REF_RESERVED` 里的方法名/框架成员。
       判定"某个 itemId 是否被引用"时**应传 `filtered=False`** —— 那个名字既已确认是文件内的
       `itemId`，保留表那层"可能只是方法"的歧义就不存在了（`store` / `add` / `items` / `id`
@@ -1151,7 +1304,8 @@ def js_refs_of(obj, filtered: bool = True) -> set:
     if not blob:
         return set()
     clean = strip_js_comments(blob)
-    names = set(_APP_REF_BARE.findall(clean)) | set(_APP_REF_GET.findall(clean))
+    names = (set(_APP_REF_BARE.findall(clean)) | set(_APP_REF_GET.findall(clean))
+             | set(_APP_REF_BRACKET.findall(clean)))
     if not filtered:
         return names
     return {x for x in names if x not in _APP_REF_RESERVED}
@@ -1444,118 +1598,117 @@ def apply_ops(obj, ops, created=None, warned=None):
 
 
 def audit_itemids(obj, js_refs=None, controls_path=None) -> dict:
-    """给文件里每个重名 itemId 定级，并给出「候选清单 + 两种修法的建议值」。
+    """给文件里每个**注册键** `normalName || itemId` 重建组并定级（**只两级**），给出候选清单与两种修法。
 
-    判据（顺序即优先级）：
-      ① 每个同名节点都有**互不相同的非空 normalName** → 无害。框架按
-         `normalName || itemId` 注册到页面作用域，各自名字不同就不冲突。
-      ② 全是列控件（column / tcolumn）且未被引用 → 无害。
-      ③ itemId 不是合法 JS 标识符 → 无害（只能用 `app.get('名')` 取）。
-      ④ 其余：**已被事件 JS 引用 → error；未被引用 → warn**。
+    判据：
+      ① 分组键 = **注册键** `normalName || itemId`（normalName 优先、空串视同缺失）——
+         各自有唯一 normalName 的同名节点**天然分到不同组**（不再需要"豁免"）。
+      ② 节点集纳入「只有 normalName、没有 itemId」的节点（B2）。
+      ③ 组内 ≥2：该注册键**已被事件 JS 引用 → error**；未被引用 → **benign**（`warn` 级已取消）。
 
     返回 dict：nodes / js_refs / groups / errors / warns / n_benign
     """
     if js_refs is None:
         js_refs = js_refs_of(obj)
-    # 判定"是否被引用"用**未过滤**集合：名字既已确认是文件内的 itemId，
+    # 判定"是否被引用"用**未过滤**集合：名字既已确认是文件内的控件名，
     # 就不该再被 `_APP_REF_RESERVED`（为区分方法名而设）滤掉 —— 否则 `store`/`add`/`items`/`id` 会漏判。
     refs_all = js_refs_of(obj, filtered=False)
     nodes = [(n, t, cfg, p, anc) for n, t, cfg, p, anc, _c, _k in _iter_controls(obj)
-             if isinstance(cfg.get("itemId"), str) and cfg.get("itemId")]
-    all_names = {x[2]["itemId"] for x in nodes}
+             if registry_key(cfg) is not None]
+    # 去重集合 = 全文件所有 `itemId` ∪ 所有非空 `normalName`（B3：`taken` 换口径）
+    taken_all: set = set()
+    for _n, _t, _cfg, _p, _a in nodes:
+        for _v in (_cfg.get("itemId"), _cfg.get("normalName")):
+            if isinstance(_v, str) and _v:
+                taken_all.add(_v)
     field_ty = set(field_types(controls_path))
     nn_ty = set(normalname_types(controls_path))
-    by_name: dict = {}
+    by_key: dict = {}
     for it in nodes:
-        by_name.setdefault(it[2]["itemId"], []).append(it)
+        by_key.setdefault(registry_key(it[2]), []).append(it)
 
     groups = []
-    for name, items in sorted(by_name.items()):
+    for name, items in sorted(by_key.items()):
         if len(items) < 2:
             continue
         types = {x[1] for x in items}
-        referenced = name in refs_all
-        nns = [x[2].get("normalName") for x in items]
-        have_nn = [isinstance(x, str) and x for x in nns]
-        ok_nn = all(have_nn) and len(set(nns)) == len(nns)
+        # 运行时模块根级控件有 `app._X` **孪生键**（服务端生成：`app.X = app._X = …`）；
+        # `app._X` 抽名会带下划线 ⇒ 只按原名判就**看不见这条引用**，⑦ 会把该判 error 的组判成 benign。
+        # 前提：真实控件名以 `_` 开头的情况 = 0（全量实测）⇒ `_名字` 只可能是某控件 `名字` 的配置孪生体；
+        # 若将来真出现名为 `_w` 的控件，两种解释会撞，届时再收紧。
+        referenced = (name in refs_all) or ("_" + name in refs_all)
+        have_nn = [isinstance(x[2].get("normalName"), str) and x[2].get("normalName") for x in items]
 
-        if ok_nn:
-            level = "benign"
-            reason = ("每个同名节点都有**互不相同的 normalName** —— 框架按 `normalName || itemId` "
-                      "注册，各自名字不同即不冲突，JS 走 `app.<normalName>`")
-            short = "已有唯一 normalName，注册键不冲突"
-        elif types <= _IID_COL_TYPES and not referenced:
-            level = "benign"
-            reason = ("列控件重名：取数走 `<grid>.getSelection(0).data.*`，"
-                      "实测全项目 3393 组此类重名、**0 组**被事件 JS 引用")
-            short = "列控件重名（取数不直接引用列控件）"
-        elif types <= _IID_COL_TYPES:
-            level = "warn"
-            reason = ("列控件重名，且该名字出现在事件 JS 里 —— 列一般用 `<grid>.getSelection(0).data.*` "
-                      "取数；若确实直接引用了列控件，需点名")
-            short = "列控件重名但被 JS 引用 —— 需点名"
+        # 措辞按组成分：纯列控件 / 非 JS 标识符 / 纯取值控件 / 含列控件的跨类型 / 其它
+        if types <= _IID_COL_TYPES:
+            head = "列控件注册键重名（取数走 `<grid>.getSelection(0).data.*`）"
         elif not _IID_JS_IDENT_RE.match(name):
-            level = "benign"
-            reason = "itemId 不是合法 JS 标识符（含中文/空格/点等），只能 `app.get('名')` 取"
-            short = "itemId 非 JS 标识符，dot 访问不适用"
+            head = "注册键不是合法 JS 标识符（含中文/空格/点等）"
+        elif types <= field_ty:
+            miss = [i + 1 for i, x in enumerate(have_nn) if not x]
+            head = "字段控件注册键重名、normalName %s" % (
+                ("缺失的序号 %s" % miss) if miss else "彼此重复")
+        elif types & _IID_COL_TYPES:
+            head = ("**跨类型同名冲突**（组内含列控件：%s）—— 列本身可重名，"
+                    "但它与另一种控件撞了同一个注册键" % "/".join(sorted(types)))
         else:
-            # 措辞按组成分三类：纯取值控件 / 含列控件的跨类型冲突 / 其它（按钮·面板·承载）
-            if types <= field_ty:
-                miss = [i + 1 for i, x in enumerate(have_nn) if not x]
-                head = "字段控件重名、normalName %s" % (
-                    ("缺失的序号 %s" % miss) if miss else "彼此重复")
-            elif types & _IID_COL_TYPES:
-                head = ("**跨类型同名冲突**（组内含列控件：%s）—— 列本身可重名，"
-                        "但它与另一种控件撞了同一个名字" % "/".join(sorted(types)))
-            else:
-                head = "应唯一的类型（按钮/面板/数据承载…）重名"
-            if referenced:
-                level = "error"
-                reason = (head + "，且该名字**已被事件 JS 引用**。框架注册键是 `normalName || itemId`、"
-                          "是**普通赋值**（后注册的覆盖先注册的），且**任一重复项销毁时会把整个名字删掉**"
-                          "（`unregister` 里 `delete`），所以 `app.%s` 随时可能不是你要的那个" % name)
-                short = "重名且被事件 JS 引用 —— `app.%s` 取值不确定" % name
-            else:
-                level = "warn"
-                reason = head + "，但未被事件 JS 引用 —— 老代码可暂留，**新代码必须区分**"
-                short = "重名但未被 JS 引用 —— 老代码可留，新代码须区分"
+            head = "应唯一的类型（按钮/面板/数据承载…）注册键重名"
 
-        # 修法 A：补 normalName（只补「缺」的，不动 itemId —— 零破坏）
+        if referenced:
+            level = "error"
+            reason = (head + "，且该注册键**已被事件 JS 引用**。框架注册键是 `normalName || itemId`、"
+                      "是**普通赋值**（后注册的覆盖先注册的），且**任一重复项销毁时会把整个名字删掉**"
+                      "（`unregister` 里 `delete`），所以 `app.%s` 随时可能不是你要的那个" % name)
+            short = "注册键重名且被事件 JS 引用 —— `app.%s` 取值不确定" % name
+        else:
+            level = "benign"
+            reason = head + "，但未被事件 JS 引用 —— 实践中无害（老代码可暂留，新代码宜区分）"
+            short = "注册键重名但未被 JS 引用"
+
+        # 修法 A：补/改 `normalName`（只补「缺」的，不动 itemId —— 零破坏）
         fix_nn = []
-        if not ok_nn:
-            taken_nn = set(all_names) | {x for x in nns if isinstance(x, str) and x}
+        if any(not x for x in have_nn):
+            taken_nn = set(taken_all)
             for i, (n, t, cfg, p, anc) in enumerate(items):
                 if isinstance(cfg.get("normalName"), str) and cfg.get("normalName"):
                     continue
-                s, why = suggest_normalname(name, cfg, anc, taken_nn)
+                own = cfg.get("itemId") or name
+                s, why = suggest_normalname(own, cfg, anc, taken_nn)
                 taken_nn.add(s)
                 fix_nn.append({"index": i + 1, "type": t, "suggest": s, "why": why,
                                "type_ok": t in nn_ty,
                                "path": p + ["configs", "normalName"]})
-        # 修法 B：改 itemId（#1 保持原名，动 #2 起；须同步改 JS 里的引用）
-        taken = set(all_names)
+        # 修法 B：改 `itemId`（#1 保持原名，动 #2 起；须同步改 JS 里的引用）
+        # `taken` = 全文件所有 `itemId` ∪ 所有非空 `normalName` ∪ 本组已建议值（B3）
+        taken = set(taken_all)
         fix_id = []
         for i, (n, t, cfg, p, anc) in enumerate(items):
             if i == 0:
                 continue
-            s, why = suggest_itemid(name, cfg, anc, taken)
+            own = cfg.get("itemId")
+            if not (isinstance(own, str) and own):
+                continue        # 只有 normalName 的节点没有 itemId 可改
+            s, why = suggest_itemid(own, cfg, anc, taken)
             taken.add(s)
             fix_id.append({"index": i + 1, "type": t, "suggest": s, "why": why,
                            "type_ok": True, "path": p + ["configs", "itemId"]})
 
         groups.append({
-            "name": name, "level": level, "reason": reason, "short": short, "count": len(items),
-            "types": sorted(types), "referenced": referenced,
+            "name": name, "registryName": name, "level": level, "reason": reason,
+            "short": short, "count": len(items), "types": sorted(types), "referenced": referenced,
+            "itemIds": sorted({x[2].get("itemId") for x in items
+                               if isinstance(x[2].get("itemId"), str) and x[2].get("itemId")}),
             "fix_normalname": fix_nn, "fix_itemid": fix_id,
             "nodes": [{"index": i + 1, "type": t, "path": p, "anc": anc,
                        "ancestor": _anc_str(anc), "hint": _node_hint(cfg),
-                       "children": _children_summary(n), "normalName": cfg.get("normalName")}
+                       "children": _children_summary(n), "normalName": cfg.get("normalName"),
+                       "itemId": cfg.get("itemId")}
                       for i, (n, t, cfg, p, anc) in enumerate(items)],
         })
 
     order = {"error": 0, "warn": 1, "benign": 2}
     groups.sort(key=lambda g: (order[g["level"]], -g["count"], g["name"]))
-    fmt = lambda g: "itemId %r ×%d（%s）：%s" % (g["name"], g["count"], "/".join(g["types"]), g["short"])
+    fmt = lambda g: "注册键 %r ×%d（%s）：%s" % (g["name"], g["count"], "/".join(g["types"]), g["short"])
     return {
         "nodes": nodes, "js_refs": sorted(js_refs), "groups": groups,
         "errors": [fmt(g) for g in groups if g["level"] == "error"],
@@ -1646,28 +1799,34 @@ def cmd_itemids(args) -> int:
     rep = audit_itemids(obj, controls_path=ctl)
     groups = rep["groups"]
     counts = {lv: sum(1 for g in groups if g["level"] == lv) for lv in ("error", "warn", "benign")}
-    names = {x[2]["itemId"] for x in rep["nodes"]}
+    names = {registry_key(x[2]) for x in rep["nodes"]}
 
     if args.name:
-        hits = itemid_hits(obj, args.name)
+        # `--name` **也认注册键**（`normalName || itemId`）—— 命中时下面会点明"这是注册键"
+        hits = itemid_hits(obj, args.name, by="registry")
         if not hits:
             if args.json:   # 机器可读路径也要给 JSON，别混纯文本
                 print(json.dumps({"error": "not_found", "name": args.name,
-                                  "message": "找不到 configs.itemId == %r" % args.name},
+                                  "message": "找不到注册键（normalName||itemId）== %r" % args.name},
                                  ensure_ascii=False, indent=2))
             else:
-                print(f"[FAIL] 找不到 configs.itemId == {args.name!r}")
+                print(f"[FAIL] 找不到注册键（normalName||itemId）== {args.name!r}")
             return 1
         if args.json:
             # 每条候选若被消费方转成 ops，路径末端多半是「建议的新键」⇒ 带 `"create": true`
             # 供其直接复用（与 `--suggest` 产出同口径），免得转出来的 ops 被执行器拒掉。
+            # node 项增 `itemId`（消费方拿它无歧义定位，不依赖 `name` 的语义）。
             print(json.dumps(
                 [{"index": i + 1, "type": t, "path": p, "ancestor": _anc_str(anc),
                   "hint": _node_hint(cfg), "children": _children_summary(n),
-                  "normalName": cfg.get("normalName"), "create": True}
+                  "normalName": cfg.get("normalName"), "itemId": cfg.get("itemId"),
+                  "create": True}
                  for i, (n, t, cfg, p, anc, _c, _k) in enumerate(hits)],
                 ensure_ascii=False, indent=2))
         else:
+            if not itemid_hits(obj, args.name):     # 该名字没有任何节点以它为 itemId ⇒ 它是注册键
+                print(f"（{args.name!r} 是**注册键**（normalName||itemId），不是 itemId —— "
+                      f"组内 itemId: {sorted({h[2].get('itemId') for h in hits if h[2].get('itemId')})}）")
             print(format_itemid_candidates(args.name, hits, "文件全域", all_names=names))
         return 0
 
@@ -1691,10 +1850,10 @@ def cmd_itemids(args) -> int:
         return 0
 
     print(f"=== itemids: {os.path.basename(args.file)} ===")
-    print(f"含 itemId 的控件 {len(rep['nodes'])} 个 / 去重名字 {len(names)} 个；"
-          f"重名组 {len(groups)} 组 —— error {counts['error']} / warn {counts['warn']} / benign {counts['benign']}")
-    print(f"事件 JS 引用的名字 {len(rep['js_refs'])} 个 | "
-          f"控件注册表: {ctl or '未找到'}（normalName 白名单 = 注册表 ∪ 内置兜底）")
+    print(f"含注册键的控件 {len(rep['nodes'])} 个 / 去重注册键 {len(names)} 个；"
+          f"重名组 {len(groups)} 组 —— error {counts['error']} / benign {counts['benign']}")
+    print(f"事件 JS 引用的名字 {len(rep['js_refs'])} 个")
+    print(controls_source_line(ctl))
 
     cols = [(n, cfg) for n, t, cfg, *_ in rep["nodes"] if t in _IID_COL_TYPES]
     if cols:
@@ -1703,7 +1862,7 @@ def cmd_itemids(args) -> int:
               f"（约定：字段名 + Col，多 grid 时靠父级 itemId 区分）")
 
     if not groups:
-        print("\n（无重名 itemId）")
+        print("\n（无重名注册键）")
         return 0
 
     for lv in ("error", "warn", "benign"):
@@ -1724,7 +1883,8 @@ def cmd_itemids(args) -> int:
         print(f"  · 生成改名 ops 草稿：`xwl.py itemids <file> --suggest`"
               f"（默认修法 auto = 能补 normalName 就补，否则改 itemId；可用 --fix 指定）")
         print("  · 草稿**必须人工确认**：尤其修法 B 改 itemId 时，要同步改事件 JS 里的引用。")
-        print("  · 只改真正要改的那个：用 `--name <itemId>` 看候选清单，或 ops 里写 `\"@名字#2\"` 点名第 2 个。")
+        print("  · 只改真正要改的那个：用 `--name <itemId 或注册键>` 看候选清单，"
+              "或 ops 里写 `\"@名字#2\"` 点名第 2 个。")
     return 0
 
 
@@ -1743,26 +1903,35 @@ def cmd_patch(args) -> int:
         print("[FAIL] 文件带 BOM；本工具不处理")
         return 2
 
-    eol = (CRLF if text.count(CRLF) else "\n") if args.eol == "auto" else ("\n" if args.eol == "lf" else CRLF)
+    eol = _EOL_CHAR[pick_eol_for_auto(text)] if args.eol == "auto" else _EOL_CHAR[args.eol]
 
-    canonical = text == dumps_designer(obj, args.indent, eol)
-    n_crlf, n_lf = text.count(CRLF), text.count("\n") - text.count(CRLF)
+    _out0 = dumps_designer(obj, args.indent, eol)
+    canonical = text == _out0
+    styles = eol_styles(text)
+    n_crlf = text.count(CRLF)
+    bare_lf = text.count("\n") - n_crlf
+    bare_cr = text.count("\r") - n_crlf
     eol_note = ""
-    if args.eol == "auto" and not n_crlf and not n_lf:
+    if args.eol == "auto" and not ANY_EOL_RE.search(text):
         # 「源连一个换行符都没有」时 auto 无从沿用 → 回退 LF（与 expand 同一条规则）。
         # 这类文件（紧凑单行源）在 CRLF 工作区里跑完 patch 会变成 LF 文件，必须说清楚。
         eol_note = "（源无换行符，auto 回退 LF）"
-    print(f"源文件: {_byte_len(text)} B | 换行={'CRLF' if eol == CRLF else 'LF'}{eol_note} | "
+    print(f"源文件: {_byte_len(text)} B | 换行={eol_name(eol)}{eol_note} | "
           f"是否设计器原样排版: {'是（重排后与原文逐字节一致，diff 只含本次改动）' if canonical else '否（重排会顺带规整格式）'}")
-    if n_crlf and n_lf:
+    if not canonical:
+        # H6：把「非原样排版」具体化 —— 三类改写各给一个整数处数（只提示、不改行为）。
+        _ci, _cu, _cn = rewrite_counts(text, _out0)
+        print("[note] 本次还会顺带改写：缩进 %d 处 / \\uXXXX 转义 %d 处 / 数字形态 %d 处 "
+              "—— 都无语义影响；建议先 --dry-run 看 diff" % (_ci, _cu, _cn))
+    if len(styles) > 1:
         # 与 `edit` 对齐：混用换行在源文件里是既有的格式问题，patch 会**静默统一**成一种，
         # 所以这里必须报出来（否则用户只能靠 diff 发现换行被动了）。
-        print(f"[warn] 源文件换行混用（{n_crlf} 个 CRLF + {n_lf} 个 LF，见 `check` 第 ② 项）："
-              f"重排后整份统一为 {'CRLF' if eol == CRLF else 'LF'}，diff 会含换行差异")
+        print(f"[warn] 源文件换行混用（{n_crlf} 个 CRLF + {bare_lf} 个裸 LF + {bare_cr} 个裸 CR，"
+              f"见 `check` 第 ② 项）：重排后整份统一为 {eol_name(eol)}，diff 会含换行差异")
     if args.indent != 1:
         print(f"[warn] --indent {args.indent} ≠ 设计器缩进（1 个空格）：产出与设计器不一致，"
               f"设计器下次保存会产生整份 diff。除非在做排版复刻实验，否则用默认值")
-    if not canonical and not text.count("\n"):
+    if not canonical and not ANY_EOL_RE.search(text):
         print("[warn] 源是紧凑单行形态：重排会把它整份展开成多行（diff 是**整个文件**）。"
               "要把改动压到最小，改用 `edit` 做定点插入")
 
@@ -1941,10 +2110,16 @@ def cmd_schema(args) -> int:
         # 所以 configs 从注册表声明推导（不是写死 text），events 键按「该控件是否真有事件」决定。
         sk = collections.OrderedDict()
         cfgs = collections.OrderedDict()
-        cfgs["itemId"] = "<必填：app.<itemId> 用它寻址>"
+        cfgs["itemId"] = "<必填：工具寻址用（@itemId）>"
         for cand in ("text", "title"):          # 只加该控件**确实允许**的「显示名」键
             if cand in cfg:
                 cfgs[cand] = ""
+        if args.type == "window":
+            # 窗口这两个键**都是非缺省**（缺省分别是「真」与 'hide'），写错代价最大 ——
+            # `closeAction=destroy` 时若仍复用实例、第二次打开即空白窗 ⇒ 预填「每次重建」那一档。
+            # 纯查询（内嵌 grid 的常驻窗）靠缺省就对，不预填也不会错。
+            cfgs["createInstance"] = "false"
+            cfgs["closeAction"] = "destroy"
         sk["configs"] = cfgs
         sk["expanded"] = False
         sk["children"] = []
@@ -1959,7 +2134,7 @@ def cmd_schema(args) -> int:
             print("\n> 该控件 events 为 0 个 —— 骨架里**不带** events 键（与真实文件形态一致）。")
         elif "click" not in shown:
             print(f"\n> 该控件没有 click 事件；可挂的是：{' / '.join(shown)} —— 需要时自己加 events 键。")
-        print(f"> 提示：configs 只放上表列出的键（共 {len(cfg)} 个）；itemId 必须唯一。")
+        print(f"> 提示：configs 只放上表列出的键（共 {len(cfg)} 个）；注册键（normalName||itemId）必须唯一。")
     return 0
 
 
@@ -2837,10 +3012,11 @@ def cmd_sqlrefs(args) -> int:
 _OUT_KEY_RE = re.compile(r"\bout\s*:")
 _PARAMS_KEY_RE = re.compile(r"\bparams\s*:")
 _GETVALUE_RE = re.compile(r"Wb\.getValue\s*\(")
-_APP_REF_RE = re.compile(r"\bapp\.([A-Za-z_$][\w$]*)")
+# ⚠️ app-ref 正则**不在本段另立副本** —— 直接用 `js_refs_of` 侧共享的
+#   `_APP_REF_BARE` / `_APP_REF_GET` / `_APP_REF_BRACKET`（F14 同源化）。
+#   曾因这里各存一份，导致 `app['名']` 在 `params` 下认不出、与 `itemids` 判定漂移。
 _OBJ_KEY_RE = re.compile(r"([A-Za-z_$][\w$]*)\s*:")
 _REQ_URL_RE = re.compile(r"url\s*:\s*['\"]([^'\"]*m\?xwl=[^'\"]*)['\"]")
-_GETNAME_RE = re.compile(r"""app\.get\(\s*['"]([^'"]+)['"]""")
 # 有 getValue() 的控件 = 会被 out 收集的。权威来源是 wb/system/controls.json
 # （general.type 以 `Ext.form.field.` 开头的那些）；这里是内置兜底名单。
 _FIELD_FALLBACK = ("check", "combo", "date", "datetime", "displayfield", "file",
@@ -2982,6 +3158,15 @@ def obj_keys(inner: str) -> list[str]:
     return keys
 
 
+def _app_refs_in(expr: str) -> list:
+    """从一段 JS 表达式里取所有 `app.<名>` / `app['名']` 引用（**与 `js_refs_of` 同源**）。
+
+    F14：`params` 侧不再自带正则副本 —— 复用 `js_refs_of` 用的同一批符号，保证
+    「`params` 认定被引用的容器」与「`itemids` 认定被引用」对 `app['名']` 的判断一致。
+    """
+    return _APP_REF_BARE.findall(expr) + _APP_REF_BRACKET.findall(expr)
+
+
 def find_transfers(js: str, field_set) -> list[tuple]:
     """从一段 JS 里提取传参点。
 
@@ -2992,13 +3177,13 @@ def find_transfers(js: str, field_set) -> list[tuple]:
     found: list[tuple] = []
     for m in _OUT_KEY_RE.finditer(js):
         expr = read_expr(js, m.end()).strip()
-        conts = _APP_REF_RE.findall(expr)
+        conts = _app_refs_in(expr)
         if conts:
             found.append(("out", conts, [], expr))
     for m in _PARAMS_KEY_RE.finditer(js):
         expr = read_expr(js, m.end()).strip()
         if _GETVALUE_RE.match(expr):
-            conts = _APP_REF_RE.findall(expr)
+            conts = _app_refs_in(expr)
             if conts:
                 found.append(("params=Wb.getValue", conts, [], expr))
         elif expr.startswith("{"):
@@ -3078,6 +3263,8 @@ def cmd_params(args) -> int:
     print(f"页面: {args.file}")
     print(f"模块根: {root or '（未找到 modules 目录，请用 --module-root 指定）'}")
     print(f"取值控件类型（{len(field_set)} 种）: {', '.join(field_set)}")
+    # H11：注册表来源 —— 与 `itemids` / `check ⑦` 逐字同一句（三处复用 controls_source_line）
+    print(controls_source_line(getattr(args, "controls", None)))
 
     stores: list[dict] = []
     transfers: list[tuple] = []   # (通路, 容器列表, 键列表, 原文, 来源文件相对路径)
@@ -3142,11 +3329,16 @@ def cmd_params(args) -> int:
         if conts:
             detail = []
             for a in conts:
-                locs = _find_all_by_itemid(obj, a)
+                # 先按**注册键** `normalName || itemId` 找容器：同一页多个 toolbar 常共用
+                # itemId="tbar"、靠 normalName 区分，而事件 JS 引用的正是 normalName
+                # ⇒ 只按 itemId 找会假报「找不到容器」、进而在下面凭空多出假「缺来源」。
+                locs = [(h[5], h[6]) for h in itemid_hits(obj, a, by="registry")]
                 if not locs:
-                    detail.append(f"app.{a} → [warn] 页面里找不到 itemId={a!r} 的容器")
+                    locs = _find_all_by_itemid(obj, a)   # itemId 兜底（硬要求，别删）
+                if not locs:
+                    detail.append(f"app.{a} → [warn] 页面里找不到注册键（normalName||itemId）== {a!r} 的容器")
                     continue
-                dup = f"（同 itemId ×{len(locs)}，取第一个）" if len(locs) > 1 else ""
+                dup = f"（同注册键 ×{len(locs)}，取第一个）" if len(locs) > 1 else ""
                 ids = _collect_name_islands(obj, locs[0][0][locs[0][1]], field_set)
                 provided |= set(ids)
                 detail.append(f"app.{a}{dup} → 容器内取值控件 {ids or '（无）'}")
@@ -3192,7 +3384,7 @@ def cmd_params(args) -> int:
         for t, cfg, _p in iter_nodes(so):
             if t == "module" and isinstance(cfg.get("serverScript"), str):
                 ss = cfg["serverScript"]
-                g, hs = _GETNAME_RE.findall(ss), _PARAM_RE.findall(ss)
+                g, hs = _APP_REF_GET.findall(ss), _PARAM_RE.findall(ss)
                 print(f"  serverScript: app.get(名)={g or []}  {{?名?}}={hs or []}")
                 need_req |= set(g) | set(hs)
             if t == "dataprovider":
@@ -3311,11 +3503,11 @@ def build_parser() -> argparse.ArgumentParser:
     )
     sub = p.add_subparsers(dest="cmd", required=True)
 
-    c = sub.add_parser("check", help="七项校验：格式五项 + 事件 JS 语法 + itemId 重名分级")
+    c = sub.add_parser("check", help="七项校验：格式五项 + 事件 JS 语法 + 注册键重名分级")
     c.add_argument("files", nargs="+", help="一个或多个 .xwl 文件")
     c.add_argument("--node", help="node 可执行文件路径")
     c.add_argument("--no-js", action="store_true", help="跳过事件 JS 语法校验")
-    c.add_argument("--no-itemid", action="store_true", help="跳过 itemId 重名分级检查")
+    c.add_argument("--no-itemid", action="store_true", help="跳过注册键重名分级检查")
     c.set_defaults(func=cmd_check)
 
     e = sub.add_parser("edit", help="文本级安全替换（锚点按目标换行归一、断言出现次数、拍平多行时警示）")
@@ -3358,7 +3550,8 @@ def build_parser() -> argparse.ArgumentParser:
     pt.add_argument("--ops", required=True, help="ops JSON 文件：set/insert/append/delete 的数组")
     pt.add_argument("--indent", type=int, default=1, help="缩进因子（设计器固定用 1，一般不用改）")
     pt.add_argument("--eol", choices=["auto", "lf", "crlf"], default="auto",
-                    help="换行：auto=沿用原文件（无换行时回退 lf）；lf / crlf=指定")
+                    help="换行：auto=沿用原文件（只有一种换行就沿用它；混用时只在 CRLF/LF 取多数、"
+                         "等量取 CRLF、CR 不投票；无换行回退 lf）；lf / crlf=指定")
     pt.add_argument("--dry-run", action="store_true", help="只显示将产生的 diff，不写入")
     pt.add_argument("--backup", action="store_true", help="写盘前先备份为 <file>.bak")
     pt.add_argument("--node", help="node 可执行文件路径（缺省从 NODE_BIN 与 PATH 找）")
@@ -3386,7 +3579,8 @@ def build_parser() -> argparse.ArgumentParser:
     n.add_argument("--roles", default=None,
                    help='角色权限，逗号分隔（如 "default" / "default,developer"）；给空串得到 {}')
     n.add_argument("--eol", choices=["lf", "crlf"], default="lf",
-                   help="换行：lf=设计器写在服务器上的产物形态（默认）；crlf=Windows 工作区形态")
+                   help="换行：lf=设计器写在服务器上的产物形态（默认）；crlf=Windows 工作区形态"
+                        "（new 无 auto —— 新文件没有源可沿用，直接选一种）")
     n.add_argument("--indent", type=int, default=1, help="缩进因子（设计器固定用 1，一般不用改）")
     n.add_argument("--force", action="store_true", help="允许覆盖已存在的文件")
     n.add_argument("--dry-run", action="store_true", help="只打印将写入的内容，不写盘")
@@ -3402,20 +3596,21 @@ def build_parser() -> argparse.ArgumentParser:
     fld.add_argument("--dry-run", action="store_true", help="只打印 before/after，不写盘")
     fld.set_defaults(func=cmd_folders)
 
-    ii = sub.add_parser("itemids", help="itemId 重名分级报告（候选清单 + 建议值），只读",
+    ii = sub.add_parser("itemids", help="注册键重名分级报告（按 normalName||itemId；候选清单 + 建议值），只读",
                         formatter_class=argparse.RawDescriptionHelpFormatter,
                         epilog="常用三个选项（另有 --fix / --controls / --json）：\n"
                                "  --dups-only   只列重名组（长报告时用）\n"
-                               "  --name NAME   只看一个名字的全部候选\n"
+                               "  --name NAME   只看一个名字的全部候选（itemId 或注册键）\n"
                                "  --suggest     生成改名 ops 草稿（需人工确认后再 patch）")
     ii.add_argument("file", help="要检查的 .xwl 文件")
-    ii.add_argument("--name", help="只点名一个 itemId，打印它的候选清单与建议值")
+    ii.add_argument("--name", help="只点名一个 itemId 或注册键（normalName||itemId），打印候选清单与建议值")
     ii.add_argument("--dups-only", action="store_true", help="benign 组不展开（长报告时用）")
     ii.add_argument("--suggest", action="store_true", help="输出「改名 ops 草稿」JSON（需人工确认后再 patch）")
     ii.add_argument("--fix", choices=["auto", "normalName", "itemId"], default="auto",
                     help="--suggest 用哪种修法：auto=能补 normalName 就补（默认）")
     ii.add_argument("--controls", help="wb/system/controls.json；缺省从文件位置向上自动找")
-    ii.add_argument("--json", action="store_true", help="机器可读输出")
+    ii.add_argument("--json", action="store_true",
+                    help="机器可读输出（groups[] 的 name=注册键，另含 itemIds/registryName）")
     ii.set_defaults(func=cmd_itemids)
 
     sr = sub.add_parser("sqlrefs", help="检查 SQL 文件里 serverScript ↔ dataprovider 的引用是否自洽")
@@ -3437,7 +3632,7 @@ def build_parser() -> argparse.ArgumentParser:
                                "  [\"configs\", \"expanded\", \"children\", \"type\"]\n"
                                "  [\"configs\", \"expanded\", \"children\", \"type\", \"events\"]\n"
                                "少写 expanded / children 通常有默认值兜底，但会与设计器产物不一致；\n"
-                               "用 --skeleton 生成骨架最稳。itemId 是寻址用的（app.<itemId>），必须唯一。\n"
+                               "用 --skeleton 生成骨架最稳。itemId 是工具寻址用的（@itemId）；运行时 app.<名> 取的是注册键（normalName||itemId）、必须唯一。\n"
                                "\n"
                                "例：\n"
                                "  xwl.py schema button --controls <工程>/wb/system/controls.json --skeleton")
@@ -3457,7 +3652,8 @@ def build_parser() -> argparse.ArgumentParser:
     x.add_argument("--out", help="输出到另一个文件（缺省原地覆盖）")
     x.add_argument("--indent", type=int, default=1, help="缩进因子（设计器固定用 1，一般不用改）")
     x.add_argument("--eol", choices=["auto", "lf", "crlf"], default="auto",
-                   help="换行符：auto=沿用原文件（默认；原文件连一个换行符都没有时回退 lf）；"
+                   help="换行符：auto=沿用原文件（默认）。只有一种换行就沿用它；混用时只在 CRLF/LF "
+                        "取多数、等量取 CRLF（CR 不投票）；连一个换行符都没有时回退 lf。"
                         "lf=设计器写在服务器上的产物形态（换行随服务器而定，Linux 上为 LF）；"
                         "crlf=Windows 工作区形态")
     x.add_argument("--safe", action="store_true",

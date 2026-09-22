@@ -51,7 +51,7 @@
 | `viewport` | Ext.container.Viewport | 桌面 | ✔ | ✔ | 570 | 全屏根容器（浏览器视口）。PC 页面的最外层，通常再放 panel/grid |
 | `folder` | — | 结构/服务端 |  | — | 3 | 树上的分组节点，不渲染。只用于把多个对象归到一组 |
 | `panel` | Ext.panel.Panel | 桌面 | ✔ | ✔ | 1800 | 最通用的面板/容器。放表单、网格、工具栏都行 |
-| `window` | Ext.window.Window | 桌面 | ✔ | ✔ | 1064 | 弹窗。新增/编辑/选择类交互的载体 |
+| `window` | Ext.window.Window | 桌面 | ✔ | ✔ | 1064 | 弹窗。新增/编辑/选择类交互的载体。⚠️ 放 `module` 直接子级才拿到 `app._X`；写法与 `closeAction` 必须配套，见 `js-api.md` §5 |
 | `form` | Ext.form.Panel | 桌面 | ✔ | ✔ | 153 | 表单面板。比 panel 多出表单提交/校验语义，`Wb.upload` 的 `form` 参数要指这里 |
 | `tab` | Ext.tab.Panel | 桌面 | ✔ | ✔ | 165 | 页签容器，子节点通常是多个 panel |
 | `fieldset` | Ext.form.FieldSet | 桌面 | ✔ | ✔ | 122 | 带标题的分组框，用来给表单分区 |
@@ -315,7 +315,7 @@ module                          ← 每个 xwl 的 children[0]（页面级节点
 
 **每个控件节点的键序也固定**：`configs, expanded, children, type`；**有事件时才多一个 `events`，排在最后**。
 所以「无事件的控件节点没有 `events` 键」—— 拿骨架时按 `schema --skeleton` 给的来（它只输出该控件合法的键）。
-**`itemId` 是寻址用的（`app.<itemId>`），必须唯一**；少写 `expanded` / `children` 通常有默认值兜底，
+**`itemId` 是**工具寻址**用的（`@itemId`），必须唯一**；运行时 `app.<名>` 取的是**注册键** `normalName || itemId`（**`normalName` 优先**）；少写 `expanded` / `children` 通常有默认值兜底，
 但**会与设计器产物不一致**，下次被设计器保存就产生额外 diff。
 
 其它常见组合：`tab → panel`（页签页）、`combo → store`（下拉数据源）、`form → 字段控件`、`window → form/panel`（弹窗）、`panel → panel`（嵌套布局）、`toolbar → item`（分隔符/菜单项）。
