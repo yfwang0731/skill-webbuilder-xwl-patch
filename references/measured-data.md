@@ -285,7 +285,6 @@ unregister: function (item) {
 
 规则本身（谁优先、为什么会"取不到值"）见 `SKILL.md` 7.1。
 
-注册键 = **`normalName || itemId`**（normalName 优先）。
 `unregister` 的 `delete` 是"重复会取不到值"的**确切机制**：任一重复项被销毁，
 整个名字就从页面作用域消失，哪怕另一个同名控件还活着。
 （另见 `ext-all-debug.js:453` 起：`appScope` 在 `Ext.clone` / `Ext.merge` 里被**特意保留引用、不深拷贝**。）
@@ -350,11 +349,7 @@ unregister: function (item) {
 > `folder.json` **不只是设计器索引**：框架侧（`XwlBuffer` / `FileGenProcess` / `IDE`）三处都会读它
 > ⇒ "没登记"在运行期也可能取不到，`folders` 命令的价值有依据。
 
-**顶层键序**（样本工程 `wb/` 下 2780 个 xwl）：**2750 个**的顶层键集合与顺序都是
-
-```text
-hidden, children, roles, title, iconCls, inframe, pageLink
-```
+**顶层键序**（样本工程 `wb/` 下 2780 个 xwl）：**2750 个**的顶层键集合与顺序都与 `SKILL.md` §1.3 一致。
 
 **独立页面与被引用的 SQL 载体完全一样**（都是这一套）：**两类格式规则完全相同**，
 区别只在"改片段时你要额外确认谁在用它"。少数派是缺 `inframe` / `pageLink` 的

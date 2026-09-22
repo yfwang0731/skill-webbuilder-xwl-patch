@@ -66,10 +66,13 @@
 
 改完 xwl.py 先跑它；输出末尾应为 `selftest ALL OK`：
 
-    python scripts/selftest.py
+    python scripts/selftest.py              # 全跑（默认；CI 行为不变）
+    python scripts/selftest.py --jobs 4     # 并行跑（默认 min(6, CPU 数)；--jobs 1 = 串行）
+    python scripts/selftest.py --fast       # 本地快回路：跳最贵的两块（diffguard / eol_and_guards）
 """
 from __future__ import annotations
 
+import argparse
 import contextlib
 import hashlib
 import importlib.util
@@ -80,6 +83,7 @@ import re
 import subprocess
 import sys
 import tempfile
+import time
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 _spec = importlib.util.spec_from_file_location("xwl", os.path.join(HERE, "xwl.py"))
@@ -1851,6 +1855,151 @@ def _check_docs(tmp, node, failures, write) -> None:
                 doc_fail.append("SKILL.md:%d 承诺的输出文案 `%s…` 在 xwl.py 里找不到"
                                 % (_i, (_m.group(1) + _body)[:34]))
 
+    # 17j-12 跨文件节号指针必须指向**真实存在**的小节（③ 引用漂移）。
+    #   起因：文档里「见某 references/*.md 的 §九 / §3.3 / 紧贴文件名的「小节名」」这类指针没人守 ——
+    #     目标文件里那个小节被改名 / 搬走 / 删掉，指针就成了**死指针**（指向空气）。
+    #   判据：只看**文件与小节标记落在同一格 / 同一句**的指针（同句 = 按 。；！？ 切、同格 = 按表格 | 切）；
+    #     小节标记 = `§N` / `§N.M` / `§中文数字` / `第N节` / **紧贴文件名**的「小节名」。
+    #     ⚠️ `第N章` **不算** —— 那是 SKILL 自身章号：首页「怎么用」索引表把「第五/六/八/九章」
+    #       与同一行的 references 文件名并列，不加这条会把 SKILL 自己的章号误当成指针目标（实测误报 3–4 条）。
+    #   现状全绿（54 条指针全解析）⇒ 纯**防回归**。
+    _pt_file = re.compile(r"([A-Za-z0-9][A-Za-z0-9-]*\.md)")
+    _pt_num = re.compile(r"§\s*([0-9]+(?:\.[0-9]+)?)")
+    _pt_cn = re.compile(r"§\s*([一二三四五六七八九十]+)")
+    _pt_jie = re.compile(r"第\s*([一二三四五六七八九十]+)\s*节")
+    _pt_tail = re.compile(r"[）)的\s]{0,2}「([^」]{2,60})」")
+    _pt_base = {k.split("/")[-1]: k for k in docs}
+
+    def _pt_heads(_ls):
+        return "\n".join(_x for _x in _ls if re.match(r"^#{1,6}\s", _x))
+
+    def _pt_norm(_t):
+        return re.sub(r"\s+", "", _t).replace("`", "")
+
+    for _nm, _ls in docs.items():
+        if _nm == "CHANGELOG.md":
+            continue
+        _fence = 0
+        for _i, _l in enumerate(_ls, 1):
+            if _l.strip().startswith("```"):
+                _fence += 1
+                continue
+            if _fence % 2:
+                continue
+            _segs = _l.split("|") if _l.strip().startswith("|") else re.split(r"[。；！？]", _l)
+            for _seg in _segs:
+                _fils = [(_m.start(), _m.end(), _m.group(1))
+                         for _m in _pt_file.finditer(_seg) if _m.group(1) in _pt_base]
+                if not _fils:
+                    continue
+                _dsg = []
+                for _m in _pt_num.finditer(_seg):
+                    _dsg.append((_m.start(), _m.end(), "num", _m.group(1)))
+                for _m in _pt_cn.finditer(_seg):
+                    _dsg.append((_m.start(), _m.end(), "cn", _m.group(1)))
+                for _m in _pt_jie.finditer(_seg):
+                    _dsg.append((_m.start(), _m.end(), "cn", _m.group(1)))
+                for _ds, _de, _kind, _tok in _dsg:
+                    _fx = min(_fils, key=lambda _f: min(abs(_ds - _f[1]), abs(_f[0] - _de)))
+                    _tg = _pt_base[_fx[2]]
+                    _hs = _pt_heads(docs[_tg])
+                    if _kind == "num":
+                        _hit = re.search(r"^#{1,6}\s*" + re.escape(_tok) + r"(?:[.\s、）)]|$)", _hs, re.M)
+                        _sy = "§"
+                    else:
+                        _hit = re.search(r"^#{1,6}\s*" + re.escape(_tok) + r"(?:[、.\s]|$)", _hs, re.M)
+                        _sy = "§"
+                    if not _hit:
+                        doc_fail.append("17j-12 %s:%d 跨文件指针「%s %s%s」在目标文件 %s 里没有对应小节"
+                                        "（按标题文本匹配，不许按行号）" % (_nm, _i, _fx[2], _sy, _tok, _fx[2]))
+            # 紧贴文件名的「小节名」指针：整行扫描（句读会把「…？」里的标题切断，故不按句切）
+            for _fm in _pt_file.finditer(_l):
+                if _fm.group(1) not in _pt_base:
+                    continue
+                _tm = _pt_tail.match(_l[_fm.end():])
+                if _tm and _pt_norm(_tm.group(1)) not in _pt_norm("\n".join(docs[_pt_base[_fm.group(1)]])):
+                    doc_fail.append("17j-12 %s:%d 跨文件指针「%s「%s」」在目标文件 %s 里找不到"
+                                    % (_nm, _i, _fm.group(1), _tm.group(1)[:20], _fm.group(1)))
+
+    # 17j-13 结构顺序（④）：目录条目顺序与实际小节顺序一致。
+    #   ⚠️「标题不跳级」由 17h 按同一判据守，此处不再重复（曾作冗余双保险，会让**一处缺陷报两行**）。
+    #   目录：带 `## 目录` 的文件，TOC 条目（`- [label](#anchor)`）必须**逐个**对得上正文小节
+    #     （锚点按标题 slug **前缀**匹配 —— 标签可缩写），且顺序与正文出现顺序**单调一致**。
+    #   现状全绿（7 个带目录文件 52 条目录项全部解析且单调）⇒ 纯**防回归**。
+
+    def _toc_link(_t):
+        _m = re.search(r"\[(.+?)\]\(#([^)]+)\)", _t)
+        return _m
+
+    def _toc_key(_t):
+        _s = _t.strip().replace("`", "")
+        _s = re.sub(r"[*_~]", "", _s).lower()
+        _s = re.sub(r"[^\w\s\u4e00-\u9fff-]", "", _s)
+        return re.sub(r"[-]", "", _s).replace(" ", "")
+
+    for _nm, _ls in docs.items():
+        _ti = next((_k for _k, _l in enumerate(_ls) if re.match(r"^##\s*目录\s*$", _l)), None)
+        if _ti is None:
+            continue
+        _j = _ti + 1
+        _toc = []
+        while _j < len(_ls) and not re.match(r"^#", _ls[_j]):
+            if _ls[_j].strip():
+                _toc.append(_ls[_j])
+            _j += 1
+        _body = [_toc_key(_hm.group(1)) for _hm in
+                 (re.match(r"^#{1,6}\s*(.+?)\s*$", _x) for _x in _ls[_j:]) if _hm]
+        _idxs = []
+        for _t in _toc:
+            _m = _toc_link(_t)
+            if not _m:
+                continue
+            _anch = _toc_key(_m.group(2))
+            _cand = [_bi for _bi, _s in enumerate(_body) if _s.startswith(_anch)]
+            if not _cand:
+                doc_fail.append("17j-13 %s 目录条目「%s」的锚点 #%s 在正文找不到对应小节"
+                                % (_nm, _m.group(1)[:24], _m.group(2)[:40]))
+            else:
+                _idxs.append(_cand[0])
+        if any(_idxs[_z] >= _idxs[_z + 1] for _z in range(len(_idxs) - 1)):
+            doc_fail.append("17j-13 %s 目录条目顺序与正文小节顺序不一致" % _nm)
+
+    # 17j-14 把 17j-6 扩到**围栏块**：围栏里以 `[note]/[warn]/[FAIL]/[ok]` 开头的**示例输出**，
+    #   其文案前缀也必须在 `xwl.py` 里找得到。
+    #   扫描面 = `docs` 的 **12 份** markdown 的围栏块（**不含 `examples/README.md`**）。
+    #     ⚠️ 不纳入 `examples/README.md` 是**有意**的：该文件里有**运行期 f-string 拼出来**的示意输出
+    #       （模板形如 `（{why}）—— {stat}`、在 `xwl.py` 一带），其**前缀在源码里根本不存在** ⇒
+    #       纳入会**误报**（QA 实测：那一行在 xwl.py 里找不到、而同文件别的 tag 行找得到）。
+    #   起因：17j-6 只扫 SKILL 的**行内反引号**、且不扫 faq.md ⇒ 写在 ``` 块里的输出文案对它
+    #     **零覆盖**（绿但空）⇒ 本臂补上"围栏块"这一面。
+    #   误报控制：围栏示例可能是**示意**（占位符 `<path>` / `…` / `%s` / `%d`）⇒ 含这类占位符的行
+    #     **跳过**（不判），避免把"示例"当成"承诺文案"。实测：3 条围栏输出行，1 条含占位符被跳过、
+    #     2 条被检查且全在实现里 ⇒ 全绿（这档 = 加白名单，见本批 eng-139 报告）。
+    #   ⚠️ 边界：本臂用**前缀匹配**（`_nf[:16]`），**验不了运行期拼接**出来的文案 —— 拼接结果在源码里
+    #     没有字面前缀，所以这类**不是漏扫、是扫了会错**（故排除）。
+    _fence_ph = re.compile(r"[<>]|…|%[sd]|\.\.\.")
+    for _nm, _ls in docs.items():
+        _fence = 0
+        for _i, _l in enumerate(_ls, 1):
+            if _l.strip().startswith("```"):
+                _fence += 1
+                continue
+            if _fence % 2 == 0:
+                continue
+            _st = _l.strip()
+            _tag = next((_t for _t in ("[note]", "[warn]", "[FAIL]", "[ok]") if _st.startswith(_t)), None)
+            if not _tag:
+                continue
+            _body2 = _st[len(_tag):].strip()
+            if _fence_ph.search(_body2):
+                continue
+            _nf = re.sub(r"\s+", "", _body2)
+            if len(_nf) < 8:
+                continue
+            if _nf[:16] not in _xwl_src:
+                doc_fail.append("17j-14 %s:%d 围栏块输出文案 `%s…` 在 xwl.py 里找不到"
+                                % (_nm, _i, (_tag + _body2)[:34]))
+
     # 17l 编年纪律（三条臂）：非编年文件里不得出现"哪天 / 哪一版发生过什么"。
     #     分工与豁免面的完整说明在 `references/workflow-notes.md` 第一节 —— 改词表或豁免面前先读它。
     #     ⚠️ 词表用**相邻字面量拼接**写：守卫扫的是全部分发文件（**含本文件**），
@@ -2024,7 +2173,9 @@ def _check_docs(tmp, node, failures, write) -> None:
               "**编年三臂（事件词·施工日期·发版号）** / **scripts 里的点名式引用可解析** / "
               "**触发场景锚点未丢** / 注册表不认 controlsold / **依据层只放因果·作废·守卫说明** / "
               "**规模数字出自权威层** / **`--help` 行数上限（顶层 36 / 子命令实测+5）** / "
-              "**支持矩阵 OS 行（SKILL 适用范围表 + metadata.json limitations）**")
+              "**支持矩阵 OS 行（SKILL 适用范围表 + metadata.json limitations）** / "
+              "**跨文件节号指针可解析（17j-12）** / **目录顺序与实际小节一致（17j-13）** / "
+              "**围栏块输出文案符实（17j-14）**")
 
     # ---- 18. SKILL.md 必须声明平台边界、调用入口与规模约束 ----
     # 起因：SkillHub TRACE 评测的 adaptability 维给了这两个子项低分 ——
@@ -2542,15 +2693,19 @@ def _check_diffguard(tmp, node, failures, write) -> None:
         ' "roles": {"default": 1},',
         ' "title": "SELFTEST_T", "iconCls": "", "inframe": false, "pageLink": ""', '}'])
 
+    # 只起必要的 git 进程：身份用 `-c` 内联（省 2 次 `git config`）、仓库是否建起来由
+    # 首次 commit 的 returncode 判定（省 1 次 `git rev-parse`）；已跟踪文件的改动一律用
+    # `commit -am` 一条收口（省 `git add`）。基线内容另用变量 `BASE` 跟踪，恢复基线直接
+    # `_mk` 写回（省掉 8 次 `git checkout -- dg.xwl`）—— 语义等价：`checkout` 本来也只是
+    # 把文件恢复成基线内容。
+    GIT_ID = ("-c", "user.email=selftest@local", "-c", "user.name=selftest")
     _git("init", "-q")
-    _git("config", "user.email", "selftest@local")
-    _git("config", "user.name", "selftest")
-    page = _mk("dg.xwl", SRC)
+    _mk("dg.xwl", SRC)                          # 新文件 ⇒ 首次入库仍须 `git add`
     _git("add", "-A")
-    _git("commit", "-q", "-m", "base")
-    if _git("rev-parse", "--verify", "HEAD").returncode != 0:
+    if _git(*GIT_ID, "commit", "-q", "-m", "base").returncode != 0:
         print("[note] 无法建立临时 git 仓库，跳过 diffguard 断言")
         return
+    BASE = SRC                                  # dg.xwl 的当前基线（= 最近一次提交的内容）
 
     dg: list[str] = []
 
@@ -2585,7 +2740,7 @@ def _check_diffguard(tmp, node, failures, write) -> None:
         dg.append("diffguard --strict 下疑似压平应 rc=1，实得 rc=%d" % rc)
 
     # ③ 反面对照：合法删掉两行多行 JS → 续行符也净减少，但**不得**报（否则天天误报）
-    _git("checkout", "-q", "--", "dg.xwl")
+    _mk("dg.xwl", BASE)
     lines = SRC.split("\r\n")
     del lines[9]
     del lines[9]
@@ -2597,7 +2752,7 @@ def _check_diffguard(tmp, node, failures, write) -> None:
         dg.append("diffguard 对合法删减应 rc=0，实得 rc=%d" % rc)
 
     # ④ 反面对照：只在同一行里加长内容（续行符不变）→ 不得报
-    _git("checkout", "-q", "--", "dg.xwl")
+    _mk("dg.xwl", BASE)
     _mk("dg.xwl", SRC.replace('"title": "SELFTEST_T"', '"title": "' + "X" * 300 + '"'))
     rc, out = _cli("diffguard", "dg.xwl")
     if "[warn]" in out:
@@ -2612,8 +2767,8 @@ def _check_diffguard(tmp, node, failures, write) -> None:
     ):
         short = _build(first, rest)
         _mk("dg.xwl", short)
-        _git("add", "-A")
-        _git("commit", "-q", "-m", "short")
+        _git(*GIT_ID, "commit", "-q", "-am", "short")
+        BASE = short
         new = _flat(short)
         if new == short:
             dg.append("夹具无效：%s 的变异没改变文件" % label)
@@ -2626,10 +2781,10 @@ def _check_diffguard(tmp, node, failures, write) -> None:
             dg.append("diffguard 报「%s」时没标出是精确命中" % label)
         if rc != 1:
             dg.append("「%s」--strict 下应 rc=1，实得 %d" % (label, rc))
-        _git("checkout", "-q", "--", "dg.xwl")
+        _mk("dg.xwl", BASE)
 
     # ⑤ 正常走一遍 patch 之后不得报（否则这个守卫会被日常改动淹没）
-    _git("checkout", "-q", "--", "dg.xwl")
+    _mk("dg.xwl", BASE)
     ops = os.path.join(repo, "dg_ops.json")
     with open(ops, "w", encoding="utf-8") as fh:
         fh.write('[{"op":"append","path":["children",0,"children"],"value":'
@@ -2654,8 +2809,8 @@ def _check_diffguard(tmp, node, failures, write) -> None:
                  ["if (!rec) { Wb.info('pick'); return; }",
                   "Wb.requestAg({ params: { bean: 'b', method: 'm', id: rec.data.ID } });"])
     _mk("dg.xwl", big)
-    _git("add", "-A")
-    _git("commit", "-q", "-m", "prio")
+    _git(*GIT_ID, "commit", "-q", "-am", "prio")
+    BASE = big
     _mk("dg.xwl", _flat(big))
     _mk("dg_fresh2.xwl", SRC)
     rc, out = _cli("diffguard", "dg.xwl", "dg_fresh2.xwl", "--strict")
@@ -2684,7 +2839,7 @@ def _check_diffguard(tmp, node, failures, write) -> None:
     #     **静默跳过**（于是压平也不报、`--strict` 变成 rc=2、`--rev` 写错也只给 rc=0）。
     #     现在 rel 由 git 自报（`git rev-parse --show-prefix`），两种写法都必须命中。
     #     本机 repo 是长名 ⇒ 这里测短名；CI 上 repo 是短名 ⇒ 这里测长名。
-    _git("checkout", "-q", "--", "dg.xwl")
+    _mk("dg.xwl", BASE)
     _mk("dg.xwl", _flat(big))                   # `big` 已在 ⑥b 提交
     for _label, _api in (("短名", "GetShortPathNameW"), ("长名", "GetLongPathNameW")):
         _alt = _win_path(repo, _api)
@@ -2700,9 +2855,11 @@ def _check_diffguard(tmp, node, failures, write) -> None:
     #    但**续行符与行数都没减少**」的样本 ⇒ 必须**不报压平**，只给一句 [note] 说明判为"内容移动"。
     #    守的是判据本身：缺了前置必要条件，`}` / `');'` 这类**极短行**的"内容恰好等于相邻两行拼接"
     #    会在**真实历史版本**上误报，而三个计数一个都没变（`行数 4470 → 4470` 在数学上就排除了压平）。
-    _git("checkout", "-q", "--", "dg.xwl")
-    _mk("dg.xwl", "MOvE_A" + BS + '\n"x"\nP\nQ')          # 行数 4 / 续行符 1
-    _git("commit", "-q", "-am", "move-fixture")
+    _mk("dg.xwl", BASE)
+    _move0 = "MOvE_A" + BS + '\n"x"\nP\nQ'                # 行数 4 / 续行符 1
+    _mk("dg.xwl", _move0)
+    _git(*GIT_ID, "commit", "-q", "-am", "move-fixture")
+    BASE = _move0
     _mk("dg.xwl", 'MOvE_A"x"' + "\nR" + BS + "\nS\nT")    # 行数 4 / 续行符 1（都没减少）
     _rc, _out = _cli("diffguard", "dg.xwl", "--rev", "HEAD")
     if "[warn]" in _out and "压平" in _out:
@@ -2710,7 +2867,7 @@ def _check_diffguard(tmp, node, failures, write) -> None:
                   "精确命中缺前置必要条件（压平必然让行数或续行符减少）")
     if "内容移动" not in _out:
         dg.append("判为内容移动时没给 [note] 说明 —— 用户无从知道它为什么不计入告警")
-    _git("checkout", "-q", "--", "dg.xwl")
+    _mk("dg.xwl", BASE)
 
     if dg:
         failures.extend(dg)
@@ -3397,34 +3554,139 @@ def _check_bc_contract(tmp, node, failures, write) -> None:
         failures.extend(bc)
 
 
-def main() -> int:
-    xwl.ensure_utf8_stdio()     # 输出全是中文；Windows 控制台默认非 UTF-8 会直接 UnicodeEncodeError
-    tmp = tempfile.mkdtemp(prefix="xwl_selftest_")
-    node = xwl.find_node()
-    print(f"node: {node or '(未找到，跳过事件 JS 校验)'}")
+def _blocks() -> list[tuple[str, object]]:
+    """按**固定顺序**列出全部自检块（块名 → 函数）。
+
+    该顺序 = 输出顺序（父进程末尾按此顺序汇总失败），也 = `--jobs` 并行的派发顺序。
+    """
+    return [
+        ("basics", _check_basics),
+        ("params_paths", _check_params_paths),
+        ("itemids", _check_itemids),
+        ("patch_contract", _check_patch_contract),
+        ("subcommands", _check_subcommands),
+        ("docs", _check_docs),
+        ("platform", _check_platform),
+        ("write_failures", _check_write_failures),
+        ("edit_eol", _check_edit_eol),
+        ("eol_and_guards", _check_eol_and_guards),
+        ("diffguard", _check_diffguard),
+        ("bc_contract", _check_bc_contract),
+    ]
+
+
+# `--fast` 跳过的两块：最贵、且与「编辑动作」无直接关系（本地快回路让位给速度）。
+FAST_SKIP = ("diffguard", "eol_and_guards")
+
+
+def _run_block(name: str, fn, node) -> list[str]:
+    """在**独占**临时目录里跑一个块，返回它的 failures 列表。
+
+    每块独占一个 `mkdtemp`（并行时天然隔离；串行档也用它 ⇒ 两档语义一致，
+    互不依赖 tmp 中的文件）。
+    """
+    tmp = tempfile.mkdtemp(prefix="xwl_selftest_%s_" % name)
     failures: list[str] = []
 
-    def write(name: str, text: str, bom: bool = False) -> str:
-        p = os.path.join(tmp, name)
+    def write(nm: str, text: str, bom: bool = False) -> str:
+        p = os.path.join(tmp, nm)
         with open(p, "wb") as f:
             if bom:
                 f.write(b"\xef\xbb\xbf")
             f.write(text.encode("utf-8"))
         return p
 
-    _check_basics(tmp, node, failures, write)
-    _check_params_paths(tmp, node, failures, write)
-    _check_itemids(tmp, node, failures, write)
-    _check_patch_contract(tmp, node, failures, write)
-    _check_subcommands(tmp, node, failures, write)
-    _check_docs(tmp, node, failures, write)
-    _check_platform(tmp, node, failures, write)
-    _check_write_failures(tmp, node, failures, write)
-    _check_edit_eol(tmp, node, failures, write)
-    _check_eol_and_guards(tmp, node, failures, write)
-    _check_diffguard(tmp, node, failures, write)
-    _check_bc_contract(tmp, node, failures, write)
+    fn(tmp, node, failures, write)
+    return failures
 
+
+def _run_serial(blocks, node) -> list[str]:
+    """串行（`--jobs 1`）：按块顺序在**本进程**逐个跑。"""
+    failures: list[str] = []
+    for name, fn in blocks:
+        failures.extend(_run_block(name, fn, node))
+    return failures
+
+
+def _run_parallel(blocks, node, jobs: int) -> list[str]:
+    """并发（`--jobs N`）：每块在**独立子进程**里跑（各自 mkdtemp、失败写 JSON）。
+
+    子进程把 `[ok]` / `[note]` **直接打到自己继承的 stdout**（行缓冲 ⇒ 每行一次原子写，
+    不会交错成半行）；父进程收齐后只按**固定块顺序**汇总打印 `[FAIL]`。
+    """
+    rdir = tempfile.mkdtemp(prefix="xwl_selftest_res_")
+    procs: dict[str, tuple] = {}
+    pending = list(blocks)
+    active: list[str] = []
+    while pending or active:
+        while pending and len(active) < jobs:
+            name, _fn = pending.pop(0)
+            result = os.path.join(rdir, name + ".json")
+            proc = subprocess.Popen(
+                [sys.executable, "-B", os.path.abspath(__file__),
+                 "--only", name, "--result", result, "--node", node or ""],
+                env={**os.environ, "PYTHONIOENCODING": "utf-8"})
+            procs[name] = (proc, result)
+            active.append(name)
+        time.sleep(0.1)
+        for name in list(active):
+            if procs[name][0].poll() is not None:
+                active.remove(name)
+
+    failures: list[str] = []
+    for name, _fn in blocks:
+        proc, result = procs[name]
+        if proc.returncode != 0:
+            failures.append("块 %s 的子进程异常退出（rc=%s）" % (name, proc.returncode))
+        try:
+            with open(result, encoding="utf-8") as fh:
+                failures.extend(json.load(fh))
+        except Exception as exc:  # noqa: BLE001
+            failures.append("块 %s 的失败清单读不到：%s" % (name, exc))
+    return failures
+
+
+def main(argv: list[str] | None = None) -> int:
+    ap = argparse.ArgumentParser(
+        prog="selftest.py", description="xwl.py 的自检（内置样本，不依赖外部 xwl 文件）")
+    ap.add_argument("--jobs", type=int, default=None,
+                    help="并行跑的自检块数（默认 min(6, CPU 数)；1 = 串行，做对照用）")
+    ap.add_argument("--fast", action="store_true",
+                    help="本地快回路：跳过最贵的两块（diffguard / eol_and_guards）")
+    # 以下三个是**内部**参数（仅供 `--jobs>1` 派生的子进程用），不写进 --help。
+    ap.add_argument("--only", default=None, help=argparse.SUPPRESS)
+    ap.add_argument("--result", default=None, help=argparse.SUPPRESS)
+    ap.add_argument("--node", default=None, help=argparse.SUPPRESS)
+    args = ap.parse_args(argv)
+
+    xwl.ensure_utf8_stdio()     # 输出全是中文；Windows 控制台默认非 UTF-8 会直接 UnicodeEncodeError
+    try:
+        sys.stdout.reconfigure(line_buffering=True)     # 并行时每行一次原子写，不与其他子进程交错
+    except Exception:           # noqa: BLE001
+        pass
+
+    # ---- 子进程模式：只跑指定块，把 failures 写 JSON 即退出 ----
+    if args.only:
+        fn = dict(_blocks()).get(args.only)
+        if fn is None:
+            sys.stderr.write("未知自检块：%s\n" % args.only)
+            return 2
+        failures = _run_block(args.only, fn, args.node or None)
+        with open(args.result, "w", encoding="utf-8") as fh:
+            json.dump(failures, fh, ensure_ascii=False)
+        return 0
+
+    node = xwl.find_node()
+    print(f"node: {node or '(未找到，跳过事件 JS 校验)'}", flush=True)
+
+    blocks = _blocks()
+    if args.fast:
+        print("[note] --fast：已跳过 _check_diffguard / _check_eol_and_guards"
+              "（本地快回路用；CI 与默认档仍全跑）", flush=True)
+        blocks = [(n, f) for n, f in blocks if n not in FAST_SKIP]
+
+    jobs = args.jobs if args.jobs is not None else min(6, os.cpu_count() or 4)
+    failures = _run_serial(blocks, node) if jobs <= 1 else _run_parallel(blocks, node, jobs)
 
     print()
     if failures:

@@ -79,7 +79,7 @@
 ## 七、新建文件时（额外必查）
 
 - [ ] 用 `xwl.py new` 生成的（**没有**手写顶层键、**没有**拿别的文件当种子）
-- [ ] 顶层 7 把钥匙齐全，且键序是 `hidden, children, roles, title, iconCls, inframe, pageLink`
+- [ ] 顶层 7 把钥匙齐全，且键序与 `SKILL.md` §1.3 一致
       （`new` 已保证；手写或 `--from-json` 时自查）
 - [ ] `xwl.py folders <file>`：**已登记进所在目录的 `folder.json`**（否则设计器导航树里看不到）
 - [ ] SQL 载体跑过 `sqlrefs`；引用 SQL 的页面跑过 `params`

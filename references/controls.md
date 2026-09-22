@@ -285,11 +285,8 @@
 ### 4.2 典型骨架（照这个搭就不会错）
 
 **页面顶层 —— 7 把钥匙，键序固定**（样本工程里绝大多数 xwl 都是这个顺序，
-**独立页面与被引用的 SQL 载体完全一样**；份额见 [`measured-data.md`](measured-data.md) §九）：
-
-```text
-hidden, children, roles, title, iconCls, inframe, pageLink
-```
+**独立页面与被引用的 SQL 载体完全一样**；份额见 [`measured-data.md`](measured-data.md) §九）。
+**键序见 `SKILL.md` §1.3**（`xwl.py new` 已内置）。
 
 取值形态：`roles` 是 **dict（角色名 → 1）**，如 `{"default":1}`；`iconCls` / `pageLink` 多为空串；
 `hidden` / `inframe` 是 bool。序列化按 dict 插入序输出 ⇒ **键序写错，产出即与设计器不一致**。
@@ -315,7 +312,7 @@ module                          ← 每个 xwl 的 children[0]（页面级节点
 
 **每个控件节点的键序也固定**：`configs, expanded, children, type`；**有事件时才多一个 `events`，排在最后**。
 所以「无事件的控件节点没有 `events` 键」—— 拿骨架时按 `schema --skeleton` 给的来（它只输出该控件合法的键）。
-**`itemId` 是**工具寻址**用的（`@itemId`），必须唯一**；运行时 `app.<名>` 取的是**注册键** `normalName || itemId`（**`normalName` 优先**）；少写 `expanded` / `children` 通常有默认值兜底，
+**`itemId` 是**工具寻址**用的（`@itemId`），必须唯一**；运行时 `app.<名>` 取的是**注册键**（见 `SKILL.md` 第七章）；少写 `expanded` / `children` 通常有默认值兜底，
 但**会与设计器产物不一致**，下次被设计器保存就产生额外 diff。
 
 其它常见组合：`tab → panel`（页签页）、`combo → store`（下拉数据源）、`form → 字段控件`、`window → form/panel`（弹窗）、`panel → panel`（嵌套布局）、`toolbar → item`（分隔符/菜单项）。

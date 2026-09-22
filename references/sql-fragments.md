@@ -26,7 +26,7 @@
 被 store 引用的「SQL 文件」**不是散装 SQL**，而是固定两级：
 
 ```text
-(页面钥匙 7 把，真实键序：hidden / children / roles / title / iconCls / inframe / pageLink)
+(页面钥匙 7 把，键序见 SKILL.md §1.3)
 └─ type="module"          configs{ itemId, serverScript }        ← 取参数、拼条件
    └─ type="dataprovider" configs{ itemId, sql, totalSql?, … }   ← 执行 SQL、出数据
 ```
