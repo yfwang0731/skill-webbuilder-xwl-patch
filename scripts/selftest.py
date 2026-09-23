@@ -174,6 +174,7 @@ def _check_basics(tmp, node, failures, write) -> None:
         failures.append(f"前置样本自检失败: {exc}")
 
     # ---- 1. 合法样本：check 必须通过 ----
+    # 起因：只留“破坏用例必须红”，会漏掉“check 对**任何**输入都判红”这种误报 —— 需要一条必绿的正例做对照，否则误报与真检出不辨。
     good = write("valid.xwl", VALID)
     code, out = _run_check([good], node)
     if code != 0:
@@ -182,6 +183,7 @@ def _check_basics(tmp, node, failures, write) -> None:
         print("[ok]  check 对合法样本判 OK")
 
     # ---- 2. 五种破坏必须被检出 ----
+    # 起因：check 的价值全在“能检出破坏”；不逐类钉住就可能退化成永远判绿，缺陷漏到用户手里才发现。
     cases: list[tuple[str, str, str, bool]] = [
         # (用例名, 文件内容, 期望出现在输出里的关键词, 是否 BOM)
         ("裸LF", VALID.replace(CRLF, "\n", 1), "裸 LF", False),
@@ -201,6 +203,7 @@ def _check_basics(tmp, node, failures, write) -> None:
             print(f"[ok]  破坏用例「{name}」已检出（关键词 {keyword}）")
 
     # ---- 3. edit：锚点不唯一必须拒绝且不落盘 ----
+    # 起因：锚点不唯一时若照改或静默跳过，都会改错对象却不报错 —— 文件已被写坏，用户却以为成功。
     p = write("edit.xwl", VALID)
     old = os.path.join(tmp, "old.txt")
     new = os.path.join(tmp, "new.txt")
@@ -222,6 +225,7 @@ def _check_basics(tmp, node, failures, write) -> None:
         print("[ok]  edit 对锚点不匹配已拒绝且未落盘")
 
     # ---- 4. edit：唯一锚点正例 ----
+    # 起因：上面的 §3 只证“该拒的拒了”；若 edit 对**合法**锚点也拒绝，就退化成没法用 —— 故配一条必成功的正例。
     old2 = os.path.join(tmp, "old2.txt")
     new2 = os.path.join(tmp, "new2.txt")
     with open(old2, "w", encoding="utf-8") as f:
@@ -245,6 +249,7 @@ def _check_basics(tmp, node, failures, write) -> None:
         print("[ok]  edit 正例：替换成功、CRLF 与无 BOM 均保持")
 
     # ---- 5. expand：单行源 → 设计器同款多行 ----
+    # 起因：expand 的用途是把压平的单行还原成设计器保存的同款多行；产出形态若与设计器不一致，后续 diff／人工比对都会误判。
     one = os.path.join(tmp, "one.xwl")
     compact = (
         '{"hidden":false,"children":[{"configs":{"itemId":"module"},'
@@ -294,6 +299,7 @@ def _check_basics(tmp, node, failures, write) -> None:
             failures.append(f"{name} 失败（忠实={faithful_out!r} 安全={safe_out!r}）")
 
     # ---- 7. patch：结构级编辑（只给值，格式由序列化器产出） ----
+    # 起因：patch 的契约是“结构级编辑”（只改值、格式由序列化器统一产出）；哪条路径若退化成字符串拼接，会产出与序列化器不一致的键序／缩进／转义却看不出。
     pf = write("patch.xwl", VALID)
     ops = [
         {"op": "set", "path": ["title"], "value": "改后标题"},
@@ -777,6 +783,7 @@ def _check_itemids(tmp, node, failures, write) -> None:
         failures.append("--fix normalName 未回报被跳过的项: %s" % sk)
 
     # ---- 11e. 跨类型混名要单独措辞，不能说成「应唯一的类型」 ----
+    # 起因：跨类型同名（如 column 与 combo 同名）与普通重名的处置不同；措辞不独特，用户会按“改个名就行”的错误方法去改。
     rep_mix = xwl.audit_itemids({"children": [
         {"type": "column", "configs": {"itemId": "mixed"}, "children": []},
         {"type": "combo", "configs": {"itemId": "mixed"}, "children": []}]})
@@ -786,6 +793,7 @@ def _check_itemids(tmp, node, failures, write) -> None:
         failures.append("跨类型混名的理由措辞未区分: %s" % rep_mix["groups"][0]["reason"][:60])
 
     # ---- 11f. 读文件失败一律给 XwlLoadError（不冒裸 OSError/JSONDecodeError）----
+    # 起因：调用方按 `XwlLoadError` 统一兜读盘失败；个别路径若抛别的异常（OSError/JSONDecodeError），上层漏 catch 就冒 traceback。
     miss = os.path.join(tmp, "definitely_missing.xwl")
     empty_p11 = os.path.join(tmp, "empty_p11.xwl")
     open(empty_p11, "w", encoding="utf-8").close()
@@ -827,6 +835,7 @@ def _check_itemids(tmp, node, failures, write) -> None:
         failures.append("read_xwl_text 不该对坏文件报错: %s" % exc)
 
     # ---- 11i. 防御性：recommend_fixes 不该因 group 缺键就崩 ----
+    # 起因：recommend_fixes 吃的是半结构化的分析结果、字段可能缺；不防御就 KeyError 崩 —— 把“给条建议”升级成整命令失败。
     try:
         xwl.recommend_fixes({"groups": [{"level": "error"}, {"level": "warn"}]}, "auto")
         xwl.recommend_fixes({"groups": [{"level": "error"}]}, "normalName", skipped=[])
@@ -835,6 +844,7 @@ def _check_itemids(tmp, node, failures, write) -> None:
         failures.append("recommend_fixes 对缺键 group 抛错: %s: %s" % (type(exc).__name__, exc))
 
     # ---- 11j. itemids --name 找不到名字时，--json 路径要给 JSON（不能混纯文本）----
+    # 起因：--json 是给脚本吃的契约；“找不到”也须吐合法 JSON（含 error 字段）—— 混进纯文本会让消费方解析崩。
     page_obj2 = {"children": [{"type": "panel", "configs": {"itemId": "p"}, "children": []}]}
     pj = os.path.join(tmp, "noname.xwl")
     with open(pj, "w", encoding="utf-8", newline="") as f:
@@ -855,6 +865,7 @@ def _check_itemids(tmp, node, failures, write) -> None:
         failures.append("itemids --name --json 的输出不是 JSON: %s | %r" % (exc, out[:80]))
 
     # ---- 11k. SKILL.md 章节顺序守卫（语义分组：认知→格式→操作→专题→经验→收尾）----
+    # 起因：压缩会搬动章节；顺序被打乱后“先建心智模型 → 再看格式规则 → 再看流程”的阅读路径就断了（内容没丢、但难读）。
     skill_md = os.path.join(os.path.dirname(HERE), "SKILL.md")
     if os.path.exists(skill_md):
         with open(skill_md, "r", encoding="utf-8", newline="") as f:
@@ -1087,6 +1098,7 @@ def _check_docs(tmp, node, failures, write) -> None:
                 docs[nm] = fh.read().splitlines()
 
     # 17a emoji 不得进标题
+    # 起因：无（待补或删）
     for nm, ls in docs.items():
         for i, l in enumerate(ls, 1):
             if l.startswith("#") and any(ch in l for ch in ("⚠", "❗", "✅", "❌")):
@@ -1094,6 +1106,7 @@ def _check_docs(tmp, node, failures, write) -> None:
 
     # 17b **任意两份文档**之间不得有逐字重复的表格行（同一张表不该在两处各写一遍）。
     #     原来只比 README↔SKILL —— 实测 SKILL↔faq 也会重复（退出码表就是这么漏掉的）。
+    #     起因：只比 README↔SKILL 会漏掉其余文档对之间的重复（退出码表就因 SKILL↔faq 重复而漏检）—— 不扩到任意两文档，同一张表两处各写一遍发现不了。
     def _trows(ls):
         return {l.strip() for l in ls
                 if l.strip().startswith("|") and l.strip().endswith("|")
@@ -1110,6 +1123,7 @@ def _check_docs(tmp, node, failures, write) -> None:
     #     原来含 `.md` 的行整行跳过 ⇒ 跨文件引用无人管：把 §五/§四 外移时漏掉两处
     #     （SKILL.md 还指向语义已变的小节、measured-data 指向已搬走的 §5.6）。
     #     判定：以该引用**左侧最近的文档名**为归属；没有则归属本文件。
+    #     起因：含 `.md` 的行若整行跳过，跨文件引用就没人管 —— 外移章节后 SKILL.md 指向语义已变的小节、measured-data 指向已搬走的小节，都发现不了。
     _fn = re.compile(r"([\w-]+\.md)")
     _heads = {k: "\n".join(l for l in v if l.startswith("#")) for k, v in docs.items()}
     _base = {k: k.split("/")[-1] for k in docs}
@@ -1135,6 +1149,7 @@ def _check_docs(tmp, node, failures, write) -> None:
     # 17c-2 「第 N 章」「第 N 步」也要能解析 —— 原来完全没查这一类引用。
     #     只在**能确定归属 SKILL.md** 时判：本文件是 SKILL，或该行里出现了 SKILL.md。
     #     references 里不带文档名的「第 N 步」多指该文件自己的步骤（如 walkthrough 的教程步骤），不判。
+    #     起因：完全不查「第 N 章」「第 N 步」这类引用时，章/步被改名或搬走后就成了死指针、无人发现。
     _cn = "一二三四五六七八九十"
     _sk_lab = set()
     for _l in docs.get("SKILL.md", []):
@@ -1161,6 +1176,7 @@ def _check_docs(tmp, node, failures, write) -> None:
     # 判据用**结构**而不是业务名黑名单 —— 后者等于把业务名又写进代码里。
     #   · `m?xwl=` 后面必须是占位符（`<…>` / `…`），只有框架端点 `common/` 例外；
     #   · 出现的 `.xwl` 路径若是**多段**且不含占位符标记、又不属于平台自带目录，即视为真实业务路径。
+    #     起因：skill 是通用资产 —— 文档或工具里一旦写进具体工程路径／本机盘符路径，就等于绑定某个环境，别人照抄即错。
     mref = re.compile(r"m\?xwl=(?!<|…)([A-Za-z0-9_./-]+)")
     paths = re.compile(r"[A-Za-z0-9_<>.…/-]+\.xwl")
     # 路径**首段**白名单：通用目录 / 占位段。真实业务路径的首段（工程代号、模块名）不在此列。
@@ -1355,6 +1371,7 @@ def _check_docs(tmp, node, failures, write) -> None:
 
     # 17h 文档格式：表格列数一致 / 标题不跳级 / 代码块闭合 / 无行尾空白 / 末尾有换行。
     #     起因：外移与重排章节时最容易留下这五类瑕疵，而且人眼扫不出来。
+    #     ⚠️ 本号另有一处（管 test-prompts 覆盖率：每个子命令至少被一条 prompt 提到）—— 见本文件 `_uncovered` 那段（grep `_uncovered`）。
     for nm, _lines in docs.items():
         _cur = None
         _fence = 0
@@ -1387,6 +1404,8 @@ def _check_docs(tmp, node, failures, write) -> None:
 
     # 17i 文档自称的数字必须与实际一致 —— 外移/增删内容后最容易过期的一类。
     #     只按**具体句式**精确核对，不用「N 条」这类粗匹配（那会把反模式条数套到清单上）。
+    #     ⚠️ 本号另有一处（管 metadata.json 打包元数据一致性）—— 见本文件 `_mdp` 那段（grep `_mdp`）。
+    #     起因：外移或增删内容后，自称数字（FAQ／清单／反模式／prompt 条数）最容易过期，读者会照错数走。
     import json as _json
     _txt = {k: "\n".join(v) for k, v in docs.items()}
     _real = {
@@ -1426,6 +1445,8 @@ def _check_docs(tmp, node, failures, write) -> None:
     #     提到 —— 否则"新加了命令，但评测语料里没人测它"会一直没人发现。
     #     实测：`diffguard` 会在 prompt 语料里出现 **0 次**（其余 14 个命令都有），
     #     而三种评审方法（darwin / TRACE / 文档审计）**没有一个能看见这件事**。
+    #     ⚠️ 本号另有一处（管 文档格式五查：表格列数/标题跳级/代码块闭合/行尾空白/末尾换行）—— 见本文件 `行尾有多余空白`（grep `行尾有多余空白`）。
+    #     起因：新加子命令但评测语料里没人测它 ⇒ 无人发现（实测 `diffguard` 在语料里出现 0 次，三种评审法都没看见）。
     try:
         with open(os.path.join(root, "test-prompts.json"), "r", encoding="utf-8") as _fh:
             _tps = json.load(_fh)
@@ -1442,6 +1463,8 @@ def _check_docs(tmp, node, failures, write) -> None:
     # 17i 打包元数据必须与 SKILL.md 一致。`metadata.json` 是**平台与本地评测器读的**打包声明
     #     （TRACE 的 T/R/E 维直接看它），却一直没有守卫 —— 版本号 / name / references 列表
     #     一旦漂移，评测读到的就是错的。而三种评审方法都只看工作树，**看不出这个**。
+    #     ⚠️ 本号另有一处（管 文档自称数字）—— 见本文件 `自称数字不符`（grep `自称数字不符`）。
+    #     起因：metadata.json 是平台与本地评测器读的打包声明却长期无守卫 —— version／name／references 一旦漂移，评测读到错值，而评审只看工作树、看不出。
     _mdp = os.path.join(root, "metadata.json")
     if not os.path.exists(_mdp):
         doc_fail.append("缺少 metadata.json（SkillHub 打包与平台评测会读它）")
@@ -1466,7 +1489,7 @@ def _check_docs(tmp, node, failures, write) -> None:
         except (OSError, ValueError) as _exc:
             doc_fail.append("metadata.json 读不了或不是合法 JSON：%s" % _exc)
 
-    # 清单的「改已有文件 X + 新建文件 Y」拆分在 SKILL.md 里出现两次（§九 与参考清单），两处都要对
+    # 清单的「改已有文件 X + 新建文件 Y」拆分须与参考清单实算一致（SKILL.md 内该形态出现 1 处；`finditer` 会核全部命中）
     _grp2: dict = {}
     _g2 = None
     for _l in _txt.get("references/checklist.md", "").split("\n"):
@@ -1488,6 +1511,7 @@ def _check_docs(tmp, node, failures, write) -> None:
     #     注意判据要"窄"：仅仅**提到**「最长行」不算 —— SKILL.md 2.3 有一段专门复盘
     #     "为什么不能只用最长行这一条"，那里提到它是**正确**的（误报就出在这）。
     #     围栏内的**工具真实输出**也要跳过（那里出现"最长行"是统计行原文）。
+    #     起因：判据升级时最容易漏改侧翼的描述（实测漏 README 速查表／checklist／faq 三处）—— 正文改了、侧翼没跟上。
     for _nm, _ls in docs.items():
         if _nm == "CHANGELOG.md":
             continue
@@ -1506,20 +1530,6 @@ def _check_docs(tmp, node, failures, write) -> None:
                     doc_fail.append("%s:%d 把「续行符净减少 / 最长行」当成判据陈述，"
                                     "却没标明它只是**粗筛**（主判据是定义级的）：%s"
                                     % (_nm, _i + 1, _l.strip()[:60]))
-    _m = re.search(r"\*\*(\d+)\s*项\*\*清单（改已有文件\s*(\d+)\s*项\s*\+\s*新建文件\s*(\d+)\s*项）", _sk_txt)
-    if _m:
-        _grp, _g = {}, None
-        for _l in _txt.get("references/checklist.md", "").split("\n"):
-            if _l.startswith("## "):
-                _g = _l[3:].strip()
-                _grp[_g] = 0
-            elif _g and re.match(r"^- \[ \]", _l):
-                _grp[_g] += 1
-        _new = sum(v for k, v in _grp.items() if "新建" in k)
-        _old = sum(_grp.values()) - _new
-        if _old != int(_m.group(2)) or _new != int(_m.group(3)):
-            doc_fail.append("清单拆分不符：写「%s + %s」，实际「%d + %d」"
-                            % (_m.group(2), _m.group(3), _old, _new))
     with open(os.path.join(HERE, "xwl.py"), "r", encoding="utf-8") as _fh:
         _subs = set(re.findall(r'sub\.add_parser\(\s*"([a-z]+)"', _fh.read()))
     # 取**第一列**里出现的全部反引号命令名 —— 一行里可以合并几个命令
@@ -1535,6 +1545,7 @@ def _check_docs(tmp, node, failures, write) -> None:
 
     # 17j 索引与节号：中文节号（`§五` / `§7`）可解析 + 导航表目标存在 +
     #     references 无孤儿/悬空 + README 目录树里的文件都在磁盘上。
+    #     起因：压缩时材料清单与章节被搬动，索引/节号最容易「指了却没有」；references 里的孤儿与悬空文件也没人发现。
     def _has_sec(relp, key):
         for _l in docs.get(relp, []):
             if re.match(r"^##\s*" + re.escape(key) + r"\s*[、.]", _l):
@@ -1578,6 +1589,7 @@ def _check_docs(tmp, node, failures, write) -> None:
         doc_fail.append("SKILL.md 提到的 references 文件不存在：%s" % sorted(_listed - _on_disk))
     # 17j-2 「N 份参考材料」的 N、清单条数、磁盘文件数 三者必须相等。
     #   曾漏过一次：写「五份」只列 5 条，而磁盘上已经有 8 个 —— 读者会以为只有五份。
+    #     起因：字面 N、清单条数、磁盘文件数三者必须相等 —— 只列 5 条却写「五份」，读者会以为材料只有五份。
     _cn_map = {c: i + 1 for i, c in enumerate(_cn2)}
     _sks = _sk_txt.split("\n")
     for _i, _l in enumerate(_sks):
@@ -1634,6 +1646,7 @@ def _check_docs(tmp, node, failures, write) -> None:
     # 17j-4 篇幅上限：**不是目标，是防回弹的护栏**。压缩过一次之后，新增内容很容易又堆回
     #     SKILL.md；到了上限就该问"这条是不是该下沉到 references/"。数字留了余量，
     #     正常的小幅增补不会触发。
+    #     起因：压缩过一轮后，新增内容很容易又堆回 SKILL.md —— 到上限该下沉到 references/，不该抬数字（防回弹护栏）。
     for _nm, _cap in (("SKILL.md", 700), ("README.md", 150)):
         _n = len(docs.get(_nm, []))
         if _n > _cap:
@@ -1649,6 +1662,7 @@ def _check_docs(tmp, node, failures, write) -> None:
     #     上限 = 实测 + 余量（顶层 +10 / 单子命令 +5）。余量依据：给「某个子命令再加 1 条选项
     #     说明」留空间而不误报；再涨就该把内容挪去 `epilog` 或 `references/`（见 workflow-notes §二）。
     #     ⚠️ 新增子命令必须同步在此登记上限（下面 `_h_unreg` 会把漏登的红出来）。
+    #     起因：通道 B 把细节搬进 `--help` 后它会一路变长 —— 不钉住就会淹没「必读面」，读者找不到关键项。
     _help_caps = {
         None: 36,        # 顶层 `xwl.py --help`（实测 26）
         "check": 16, "edit": 22, "patch": 41, "params": 18, "paths": 12,
@@ -1814,6 +1828,7 @@ def _check_docs(tmp, node, failures, write) -> None:
     #     这类同义改写 —— 实测漏掉 2 处，其中一处还是**文件内部自相矛盾**
     #     （同文件别处正说 diffguard 是唯一的自动化防线）。
     #     判据按**小节**取而不是按行取：同一节里出现过 diffguard 就算交代过了。
+    #     起因：只匹配字面词的守卫会漏同义改写（实测漏 2 处、其一自相矛盾）—— 换个说法就不认了。
     for _nm, _ls in docs.items():
         if _nm == "CHANGELOG.md":      # 历史文档，按写入时的事实记，不回改
             continue
@@ -1934,6 +1949,7 @@ def _check_docs(tmp, node, failures, write) -> None:
     #   目录：带 `## 目录` 的文件，TOC 条目（`- [label](#anchor)`）必须**逐个**对得上正文小节
     #     （锚点按标题 slug **前缀**匹配 —— 标签可缩写），且顺序与正文出现顺序**单调一致**。
     #   现状全绿（7 个带目录文件 52 条目录项全部解析且单调）⇒ 纯**防回归**。
+    #     起因：章节被搬动后，目录条目顺序若与正文不一致，读者按目录跳会到错处；此臂只作防回归（现状全绿）。
 
     def _toc_link(_t):
         _m = re.search(r"\[(.+?)\]\(#([^)]+)\)", _t)
@@ -2014,6 +2030,7 @@ def _check_docs(tmp, node, failures, write) -> None:
     #        整词直写会让本文件被自己这三条臂判红。
     #     ⚠️ 作用域 = `git ls-files`（与"仓库卫生"同一事实源）：不扫磁盘，避免把本地产物算进来。
     #        取不到 git ⇒ **记一条失败**（"没扫"不等于"通过"）。
+    #     起因：正文只该留结论；「哪天在哪一版发生过什么」属编年，只许进 CHANGELOG 与依据层 —— 混进正文会让现行事实与历史不分。
     _chron = ["曾" "经", "原" "先", "早" "先", "此" "前", "一" "度", "当" "年", "旧" "版",
               "旧" "实现", "旧" "判据", "原" "判据", "上" "一轮", "上" "一版", "当" "时", "历史" "上",
               "以" "前"]
@@ -2098,6 +2115,7 @@ def _check_docs(tmp, node, failures, write) -> None:
 
     # 17n frontmatter description 的**触发场景下限**：少一条锚点就失败
     #     （description 是路由真正读的字段，瘦身时最容易顺手删掉的就是触发词）。
+    #     起因：description 是路由真正读的字段，瘦身时最容易顺手删掉触发词 —— 少一条锚点，对应场景就路由不到本 skill。
     _skfm = _sk_txt.split("---")[1] if _sk_txt.startswith("---") else ""
     _dm2 = re.search(r"description: >-\n(.*?)\n\w+:", _skfm, re.S)
     _dsc = _dm2.group(1) if _dm2 else ""
@@ -2111,6 +2129,7 @@ def _check_docs(tmp, node, failures, write) -> None:
                         % len(_skfm))
 
     # 17o `controlsold.json` 不得被当成注册表（`discover_controls` 只认 controls.json）
+    #     起因：目录里可能并存 controls.json 与 controlsold.json；若把后者当注册表，推断出的控件会失真却看不出（故真跑一次钉住）。
     _probe = os.path.join(tmp, "regprobe", "a", "b")
     os.makedirs(os.path.join(_probe, "system"), exist_ok=True)
     with open(os.path.join(_probe, "system", "controlsold.json"), "w", encoding="utf-8") as _fh:
@@ -2121,6 +2140,7 @@ def _check_docs(tmp, node, failures, write) -> None:
     # 17p 依据层的内容守卫：`references/workflow-notes.md` 三臂全豁免（它记的就是"什么时候发现了什么"），
     #     所以它的内容必须另有几条**形式**约束 —— 否则豁免会把它慢慢变成编年垃圾场。
     #     判据只认**结构**（小节锚点 + 发版编年的格式），不判语义 —— 语义判据会引来误报。
+    #     起因：依据层两文件享有编年三臂全豁免 ⇒ 必须另有形式约束，否则豁免会把它慢慢变成编年垃圾场。
     _wn = _txt.get("references/workflow-notes.md", "")
     _lack = [k for k in ("判据的因果", "已作废的做法", "编年纪律") if k not in _wn]
     if _lack:
@@ -2248,6 +2268,34 @@ def _check_docs(tmp, node, failures, write) -> None:
             print("[ok]  17r 分发面自包含：22 个分发文件里无包外引用"
                   "（无《验收基线》/《落地清单》/施工索引/施工单、无施工单条目代号、无 §N-M 形式的节号指针、无前置批次号/过程角色编号；"
                   "`.py` 只判字符串字面量之外；CHANGELOG 豁免）")
+
+    # 17s 守卫维护规则：本文件里每个守卫块（头 `# 17<字母>`）之后 15 行内必须有「起因」备注。
+    #     起因：本仓出现过“说不清目的的守卫”（清账时多组无出处）⇒ 后人不敢删、也不敢改；钉住它，
+    #     新增/修改守卫时必须同步写清“不这么做会漏什么”。
+    #     判据（宽）：从头行起 16 行窗口内出现「起因」二字即算过 —— 宁可少报，别乱报。
+    #     已知盲区：① 相邻守卫块的起因可能落进前一守卫的窗口（漏报，可接受）；
+    #               ② 只认「起因」二字、不判因果质量（写「起因：无（待补或删）」也算过）；
+    #               ③ 只管 `# 17<字母>` 形式的块，`# ---- 18.` 等其它编号块不在管辖内。
+    _s_ok = True
+    try:
+        with open(os.path.join(HERE, "selftest.py"), "r", encoding="utf-8", newline="") as _sfh:
+            _self_lines = _sfh.read().splitlines()
+    except OSError as _sexc:
+        doc_fail.append("17s 守卫维护规则跑不起来（读不出 selftest.py）：%s" % _sexc)
+        _s_ok = False
+    else:
+        _s_missing = []
+        for _sx, _sline in enumerate(_self_lines):
+            if re.match(r"^\s*# 17[a-z]", _sline):
+                if "起因" not in "\n".join(_self_lines[_sx:_sx + 16]):
+                    _s_missing.append((_sx + 1, _sline.strip()[:48]))
+        if _s_missing:
+            doc_fail.append("17s 守卫维护规则：这些守卫块之后 15 行内没有「起因」备注：%s"
+                            % ["%d:%s" % (_a, _b) for _a, _b in _s_missing[:12]])
+            _s_ok = False
+    if _s_ok:
+        print("[ok]  17s 守卫维护规则：每个 `# 17<字母>` 守卫块之后 15 行内都有「起因」备注"
+              "（宽判据：16 行窗口内出现「起因」二字即过；盲区见注释）")
 
     if doc_fail:
         failures.extend(doc_fail[:12])
