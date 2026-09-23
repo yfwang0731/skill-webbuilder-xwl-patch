@@ -1302,6 +1302,13 @@ def _check_docs(tmp, node, failures, write) -> None:
          ["补上 `.xwl`", "被引用的片段是", "从文件找引用方"], "### 5.1 怎么读一个"),
         ("P2 七 7.3 命令示例", "SKILL.md", "references/measured-data.md",
          ["--dups-only", "--name", "--suggest"], "### 7.3 遇到重名"),
+        # ---- PRE1 下沉批（核心 8 块）新增的外移点 ----
+        # 2.1：5 条硬规则搬进 faq §一（第 4 步的 ①–⑤ 清单是就地承载体）；
+        # 4.3：环境依赖搬进 README（SKILL 适用范围表的环境行是就地承载体）。
+        ("PRE1 2.1 硬规则", "SKILL.md", "references/faq.md",
+         ["无 BOM", "换行一致", "末行结构"], "### 2.1 硬规则（多行源的磁盘形态）"),
+        ("PRE1 4.3 环境依赖", "SKILL.md", "README.md",
+         ["Python 3.9+", "NODE_BIN"], "### 4.3 环境依赖与自检"),
     ]
     # 断言①-机理（为什么把「全文 contains」收成「锚点小节区间 contains」）：`_dst` **恒**出现在
     #   `SKILL.md` 开头「怎么用」那张参考材料索引表里 ⇒ 只看「全文 contains」时这条臂**恒真**

@@ -46,7 +46,7 @@ A：先看是第几项。①–⑤ 是**格式**层面（文件坏了）、⑥ �
 **Q：页面白屏 / 加载报解析错误？**
 A：先 `check` 看 ④（加载器等价解析）。常见外因是改的时候**写成了裸 LF** ——
 普通编辑器与通用文本替换工具都会造成这个，必须走 `patch`（文本级 `edit` 也要保留原换行）。
-详见 [`SKILL.md`](../SKILL.md) 2.1。
+详见本文 §一（磁盘形态与硬规则）。
 
 **Q：工具报「不是 UTF-8 文本」，文件在编辑器里看着好好的？**
 A：文件被存成了别的编码（中文 Windows 上最常见的是 **GBK / ANSI**，其次是 **UTF-16**，
@@ -70,6 +70,20 @@ iconv -f gbk -t utf-8 page.xwl > page.utf8.xwl && mv page.utf8.xwl page.xwl   # 
 A：加载器是 **org.json**，字符串里的裸控制字符（未转义的换行 / Tab）它照收；
 Python `json` 默认会报 `Invalid control character`。
 本工具用 `json.loads(..., strict=False)` 对齐这个宽容度。
+
+多行源的**磁盘形态**（续行符是单个 `\`、紧邻换行；值里的 `"` 写成 `\"`）：
+
+```text
+{ ... "click": "var rec = app.headGrid.getSelection()[0];\
+if (!rec) {\
+  Wb.info('请选择一条记录！');\
+  return;\
+}" ... }
+```
+
+> **原理**：加载器先把「反斜杠 + 换行」换回 JSON 的 `\n` 转义，再按 JSON 解析 ——
+> 所以磁盘形态与运行时形态不是一回事。另外**加载器是 org.json、比标准 JSON 宽容**
+> （字符串里的裸控制字符照收）⇒ 判"能不能加载"**别用严格 JSON 解析器**下结论。
 
 ## 二、命名与引用
 
@@ -161,7 +175,7 @@ A：`events.tagEvents` 的值是 **JSON 对象字面量字符串**（形如 `{"b
 **Q：`expand` 跑完文件没变化，是没生效吗？**
 A：可能是它本来就已经是设计器排版。**不是所有 xwl 都由设计器写过** ——
 手工改过的文件缩进可能是 4 空格 + 行尾空格。判断是否"设计器原样"别用眼睛看，
-用 `expand --dry-run` 比字节。该用忠实模式还是 `--safe` 见 [`SKILL.md`](../SKILL.md) 2.5。
+用 `expand --dry-run` 比字节。该用忠实模式还是 `--safe` 见 [`measured-data.md`](measured-data.md) §5.2。
 
 另有一种"变化很小但换行变了"的情况：**源文件是紧凑一行、末尾也没有换行符**时，
 `--eol auto` 无从"沿用"，会**回退 LF**。这条回退规则 `patch` / `edit` / `expand`

@@ -49,7 +49,7 @@ python <本skill目录>/scripts/xwl.py --help        # 能列出子命令就说�
 python <本skill目录>/scripts/xwl.py new wb/modules/<模块>/xxxSql/queryOrder.xwl --kind sql --title "出库单查询"
 ```
 
-产出两层，各管一件事（见 SKILL.md 第六章）：
+产出两层，各管一件事（见 [`sql-fragments.md`](sql-fragments.md)）：
 
 ```
 module(serverScript)  → 取参数、拼条件
@@ -136,7 +136,7 @@ python <本skill目录>/scripts/xwl.py new wb/modules/<模块>/orderQuery.xwl --
 ## 第 5 步 · 把控件树搭进去
 
 新建页面里 `module.children` 是空的 —— 所以这次用 `set` 一次把整棵子树写进去，最省事。
-**节点形态照 SKILL.md 1.2 的标准形态写**：键序 `configs, expanded, children, type`，有事件才加 `events`。
+**节点形态照 [`controls.md`](controls.md) §4.2 的标准形态写**：键序 `configs, expanded, children, type`，有事件才加 `events`。
 
 写 `ops-page.json`：
 

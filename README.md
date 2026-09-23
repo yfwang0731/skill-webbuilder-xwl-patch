@@ -126,5 +126,6 @@ webbuilder-xwl-patch/
 - **Python 3.9+**（纯标准库，零第三方依赖）
 - （可选）**Node.js** —— 仅用于事件 JS 语法校验；缺失时自动降级为警告。
   可用 `--node <path>` 或环境变量 `NODE_BIN` 指定。
+- **改完 `scripts/xwl.py` 后先跑** `python -B scripts/selftest.py`（内置样本自检，不碰工程语料）。
 
 MIT，见 [LICENSE](LICENSE)。
