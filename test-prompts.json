@@ -63,5 +63,10 @@
     "id": 13,
     "prompt": "我要在页面上加一个查询窗口（点按钮弹出来、里面放几个查询条件和一个表格），窗口该用哪种写法？打开和关闭怎么配？",
     "expected": "先分清两种写法再动手：① 常驻档 = createInstance 缺省（真）+ closeAction 'hide'，加载时框架已把 app.X 建成实例，打开只 app.X.show()、关闭 app.X.hide()，适合窗口内嵌 grid 做查询（窗口内 store 建议不要 autoLoad，改为每次打开再查）；② 每次重建档 = createInstance \"false\" + closeAction \"destroy\"，每次打开 new Ext.window.Window(app._X)——必须用下划线的模板键，因为 closeAction 为 destroy 时销毁会把 app.X 从页面作用域注销，再复用实例第二次打开就是空白窗。想做每次重建还必须把窗口挂在 module 直接子级才拿得到 app._X（挂 viewport 下没有这对孪生键）。落地：可先跑 schema window --skeleton 拿一份已预填 createInstance/closeAction 的骨架，再用结构级 patch 落控件、最后 check。别把实例当配置反复 new Ext.window.Window(app.X)。完整对照见 references/js-api.md"
+  },
+  {
+    "id": 14,
+    "prompt": "这个页面像是被别处调进来的片段，但不知道都有谁在用它、传了哪些参数。能查一下上游调用方吗？",
+    "expected": "用 xwl.py params <page> --upstream 核对上游调用方：在 --module-root 内**单根全扫**一遍，末尾新增**独立分组** `[外部可传入]`（本页被哪些上游调用、各调用方传了什么键），并给一行**载入侧汇总**（节点级「同根命中 / 本根未找到」＋出现级「动态写法 / 非 `m?xwl` 字面量」，**两种量纲分开标**）。要点：① **默认关 ⇒ 不开时**不出现这两段（`[外部可传入]` 分组与载入侧汇总行）、零成本；⚠️「逐字一致」**只对无 miss 的页面成立**（有 miss 且未给 `--strict` 时缺来源本就多一行留痕，见 `references/faq.md`）；开了才多扫一遍单根（≈5 秒量级）；② 只认 `params: {名: 值}` **字面量键**，`out: app.<容器>` 与运行时拼接的 url **只计数**、明写「未展开」；③ 该分组与汇总行**不并入 provided、不改退出码**（params 缺来源默认仍 rc=1）；④ 找不到模块根时不出现分组、只打一行 [note] 且 rc 不变。多根三分类（同根命中 / 跨工程 / 全根不存在）口径见 references/measured-data.md"
   }
 ]

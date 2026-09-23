@@ -1077,6 +1077,168 @@ def _check_subcommands(tmp, node, failures, write) -> None:
         print("[ok]  schema --skeleton：只含该控件允许的键，events 键按该控件实际事件决定")
 
 
+def _check_new_guards(tmp, node, failures, write) -> None:
+    """新近落地、**尚无守卫**的三个行为点：`--strict` / `--upstream` 汇总行量纲分离 / `folders` 结论行。
+
+    三条都是**秒级小夹具**（临时目录里现造，绝不扫工程）。
+    """
+
+    def _dump(obj, path):
+        os.makedirs(os.path.dirname(path), exist_ok=True)
+        with open(path, "w", encoding="utf-8", newline="") as f:
+            f.write(xwl.dumps_designer(obj, 1, CRLF))
+
+    def _store(iid, url):
+        return {"configs": {"itemId": iid, "url": url}, "type": "store",
+                "expanded": False, "children": []}
+
+    # ---- ① `--strict` 选项存在，且不改退出码 ----
+    # 起因：`--strict` 是新增选项（刻意与默认同效：缺源时都 rc=1），但**没有任何回归保护** ——
+    #   日后若把 `--strict` 从解析器里删掉、或让 `cmd_params` 因夹具缺 `strict` 字段而崩，
+    #   现有断言一条都看不见。故钉三件：选项在 `params --help` 文本里、不给 `--strict` 缺源仍 rc=1、
+    #   给了也 rc=1。夹具手搭 Namespace 时**故意不带 strict**（顺带验 `getattr(...,False)` 兜底不炸）。
+    strict_fail: list[str] = []
+    try:
+        _hp = xwl.build_parser()
+        _sub = next((a for a in _hp._actions if getattr(a, "choices", None)), None)
+        _params_help = _sub.choices["params"].format_help() if _sub is not None else ""
+    except Exception as exc:  # noqa: BLE001 —— 取不到帮助文本本身就该红，别静默放过
+        _params_help = ""
+        strict_fail.append("① 取 `params --help` 失败: %s: %s" % (type(exc).__name__, exc))
+    if "--strict" not in _params_help:
+        strict_fail.append("① `params --help` 里没有 `--strict`")
+    _r1 = os.path.join(tmp, "pm_strict")
+    _dump({"title": "sql侧", "children": [
+        {"configs": {"itemId": "dp", "sql": "select 1 from dual where a={?nosuchparam?}"},
+         "type": "dataprovider", "expanded": False, "children": []}]},
+        os.path.join(_r1, "sub", "sel.xwl"))
+    _p1 = os.path.join(_r1, "px.xwl")
+    _dump({"title": "缺源页", "children": [
+        {"configs": {"itemId": "viewport"}, "type": "viewport", "expanded": False,
+         "children": [_store("st1", "m?xwl=sub/sel")]}]}, _p1)
+    _kw1 = dict(file=_p1, module_root=_r1, controls=None, list_fields=False, upstream=False)
+    try:
+        _rc_old, _out_old = _run(xwl.cmd_params, **_kw1)          # 故意不给 strict 字段
+    except Exception as exc:  # noqa: BLE001
+        _rc_old = None
+        strict_fail.append("① 夹具缺 `strict` 字段时 `cmd_params` 抛异常（`getattr` 兜底失效）: "
+                           "%s: %s" % (type(exc).__name__, exc))
+    try:
+        _rc_new, _out_new = _run(xwl.cmd_params, **_kw1, strict=True)
+    except Exception as exc:  # noqa: BLE001
+        _rc_new = None
+        strict_fail.append("① `strict=True` 时 `cmd_params` 抛异常: %s: %s"
+                           % (type(exc).__name__, exc))
+    if _rc_old != 1:
+        strict_fail.append("① 默认（不给 `--strict`）缺源应 rc=1，实得 rc=%s\n%s"
+                           % (_rc_old, _out_old))
+    if _rc_new != 1:
+        strict_fail.append("① 给 `--strict` 缺源应 rc=1（本实现与默认同效），实得 rc=%s\n%s"
+                           % (_rc_new, _out_new))
+    if strict_fail:
+        failures.extend(strict_fail)
+    else:
+        print("[ok]  ① `--strict`：出现在 `params --help`；缺源时默认与 `--strict` 都 rc=1（同效）")
+
+    # ---- ② `--upstream` 汇总行把「节点级」与「出现级」两套量纲**各自标注、不混算** ----
+    # 起因：`--upstream` 的末尾汇总行把**节点级**（`store.url` 能否在本根解析到文件）与
+    #   **出现级**（全文 `url:` 的文字形态）两套**不同量纲**的数并排打印。这两组极易被后人
+    #   改成"混算"、或当成同一口径引用（`references/measured-data.md` §11.3/§11.4 专门写了
+    #   「不可混引」）。故钉：打开时两段各自标注、节点级三分类之和 = 本页带 url 的 store 数；
+    #   且**不开 `--upstream` 时该汇总行不得出现**（= SKILL §六「不开时输出与冻结基线逐字一致」的必要条件）。
+    up_fail: list[str] = []
+    _r2 = os.path.join(tmp, "pm_upstream")
+    _dump({"title": "target", "children": []},
+          os.path.join(_r2, "demo", "xxxSql", "demoSql.xwl"))
+    _js = ("app.grid1.store.load({ params: { kw: app.kw.getValue() } }); "
+           "Wb.request({ url: 'local.html' }); Wb.request({ url: u });")
+    _p2 = os.path.join(_r2, "h8.xwl")
+    _dump({"title": "upstream页", "children": [
+        {"configs": {"itemId": "viewport"}, "type": "viewport", "expanded": False, "children": [
+            _store("s1", "m?xwl=demo/xxxSql/demoSql"),   # 同根命中
+            _store("s2", "m?xwl=demo/none/none"),        # 本根未找到
+            {"configs": {"itemId": "grid1"}, "type": "grid", "expanded": False,
+             "events": {"click": _js},
+             "children": [{"configs": {"itemId": "kw"}, "type": "text",
+                           "expanded": False, "children": []}]},
+        ]}]}, _p2)
+    _kw2 = dict(file=_p2, module_root=_r2, controls=None, list_fields=False)
+    _rc_on, _out_on = _run(xwl.cmd_params, **_kw2, upstream=True)
+    _rc_off, _out_off = _run(xwl.cmd_params, **_kw2, upstream=False)
+    _sumline = next((l for l in _out_on.splitlines() if "载入侧未纳入核对" in l), "")
+    if not _sumline:
+        up_fail.append("② 开 `--upstream` 时没有「载入侧未纳入核对」汇总行（本页带 store.url）")
+    else:
+        _mm = re.search(
+            r"同根命中 (\d+) 处 / 本根未找到 (\d+) 处 / 非 m\?xwl 的 url (\d+) 处"
+            r".*；出现级.*动态写法 (\d+) 处 / 非 m\?xwl 字面量 (\d+) 处", _sumline)
+        if not _mm:
+            up_fail.append("② 汇总行格式不符（节点级/出现级两段没各自标注、或数字缺失）:\n%s"
+                           % _sumline.strip())
+        else:
+            _hit, _miss2, _other, _dyn, _lit = (int(x) for x in _mm.groups())
+            if (_hit, _miss2, _other) != (1, 1, 0):
+                up_fail.append("② 节点级三分类应为 (同根命中 1 / 本根未找到 1 / 非 m?xwl 0)，"
+                               "实得 %s" % ((_hit, _miss2, _other),))
+            if _hit + _miss2 + _other != 2:
+                up_fail.append("② 节点级三分类之和 ≠ 本页 store.url 数（2）—— 划分不完整: %s"
+                               % ((_hit, _miss2, _other),))
+            if (_dyn, _lit) != (1, 1):
+                up_fail.append("② 出现级应为 (动态写法 1 / 非 m?xwl 字面量 1)，实得 %s"
+                               % ((_dyn, _lit),))
+            if "动态写法" in _sumline.split("出现级")[0]:
+                up_fail.append("② 出现级数字混进了节点级段（两套量纲未分离）")
+    if "载入侧未纳入核对" in _out_off:
+        up_fail.append("② 不开 `--upstream` 时仍打印了汇总行（破坏「与基线的必要条件」）")
+    if up_fail:
+        failures.extend(up_fail)
+    else:
+        print("[ok]  ② `--upstream` 汇总行量纲分离：节点级三分类之和 = 本页 store.url 数、"
+              "出现级两数独立成组；不开 `--upstream` 时该行不出现")
+
+    # ---- ③ `folders` 结论行只报「index 悬空项 / `folder.json` 损坏」 ----
+    # 起因：结论行是"给用户据此行动"的那一行。「未登记」实测约一成、且多为被引用的片段页
+    #   （本就不该进导航树）⇒ 若把「未登记」放进结论行会**恒亮**、淹没真问题。故把「未登记」
+    #   移出结论行、只留「index 悬空项」与「`folder.json` 损坏」两个真问题。这条一旦回退
+    #   （未登记又回结论行），用户就再收不到"该行动"的信号；而「`folder.json` 损坏」是真损坏
+    #   （不是口径问题），若被顺带从结论行删掉也没有任何断言会挡 —— 现有断言看不见。
+    fl_fail: list[str] = []
+    _r3 = os.path.join(tmp, "pm_folders")
+    _dd = os.path.join(_r3, "d_dangling")    # ① 有悬空 index 项
+    _du = os.path.join(_r3, "d_unreg")       # ② 有未登记文件
+    _db = os.path.join(_r3, "d_bad")         # ③ 有损坏 folder.json
+    for _d, _idx in ((_dd, ["x.xwl", "gone.xwl"]), (_du, [])):
+        os.makedirs(_d, exist_ok=True)
+        with open(os.path.join(_d, "folder.json"), "w", encoding="utf-8", newline="") as _f:
+            _f.write(json.dumps({"hidden": False, "index": _idx, "title": "t", "iconCls": ""},
+                                ensure_ascii=False, separators=(",", ":")))
+    os.makedirs(_db, exist_ok=True)
+    with open(os.path.join(_db, "folder.json"), "w", encoding="utf-8", newline="") as _f:
+        _f.write("{ 坏掉的 json")
+    for _d, _nm in ((_dd, "x.xwl"), (_du, "y.xwl"), (_db, "z.xwl")):
+        with open(os.path.join(_d, _nm), "w", encoding="utf-8", newline="") as _f:
+            _f.write('{"hidden":false,"children":[],"roles":{},"title":"t","iconCls":""}')
+    _rc_f, _out_f = _run(xwl.cmd_folders, path=_r3, register=None, dry_run=False)
+    _concl = next((l for l in _out_f.splitlines()
+                   if l.strip().startswith("目录 ") and "index 悬空项" in l), "")
+    if not _concl:
+        fl_fail.append("③ 找不到 `folders` 结论行（`目录 N 个 | index 悬空项 …`）:\n%s" % _out_f)
+    else:
+        if "index 悬空项" not in _concl:
+            fl_fail.append("③ 结论行缺「index 悬空项」字样")
+        if "folder.json 损坏" not in _concl:
+            fl_fail.append("③ 结论行缺「folder.json 损坏」（真损坏，必须留在结论行）")
+        if "未登记" in _concl:
+            fl_fail.append("③ 结论行又出现了「未登记」（应只进明细、不上结论行）")
+    if "未登记" not in _out_f:
+        fl_fail.append("③ 夹具没造出「未登记」—— 「结论行不含它」这条就名不副实")
+    if fl_fail:
+        failures.extend(fl_fail)
+    else:
+        print("[ok]  ③ `folders` 结论行：含「index 悬空项」「folder.json 损坏」、"
+              "不含「未登记」（未登记只在明细）")
+
+
 def _check_docs(tmp, node, failures, write) -> None:
     """文档一致性守卫（跨文件）：重复表格 / 引用可解析 / 格式 / 自称数字 / 索引与节号（第 17~18 组）"""
 
@@ -1665,7 +1827,7 @@ def _check_docs(tmp, node, failures, write) -> None:
     #     起因：通道 B 把细节搬进 `--help` 后它会一路变长 —— 不钉住就会淹没「必读面」，读者找不到关键项。
     _help_caps = {
         None: 36,        # 顶层 `xwl.py --help`（实测 26）
-        "check": 16, "edit": 22, "patch": 41, "params": 18, "paths": 12,
+        "check": 16, "edit": 22, "patch": 41, "params": 23, "paths": 12,
         "new": 28, "folders": 15, "itemids": 27, "sqlrefs": 12, "diffguard": 14,
         "schema": 26, "dump": 12, "expand": 25, "sql": 12, "events": 13,
     }
@@ -3698,6 +3860,7 @@ def _blocks() -> list[tuple[str, object]]:
         ("itemids", _check_itemids),
         ("patch_contract", _check_patch_contract),
         ("subcommands", _check_subcommands),
+        ("new_guards", _check_new_guards),
         ("docs", _check_docs),
         ("platform", _check_platform),
         ("write_failures", _check_write_failures),

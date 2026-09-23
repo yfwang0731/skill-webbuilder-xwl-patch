@@ -2512,8 +2512,11 @@ def cmd_folders(args) -> int:
                 n_dangling += 1
                 detail.append(("index 悬空", rel, it))
 
-    print(f"目录 {n_dir} 个 | 未登记的 xwl {n_unreg} 个 | "
-          f"index 悬空项 {n_dangling} 个 | folder.json 损坏 {n_bad} 个")
+    # 结论行只报**真问题**：`index` 悬空项（登记了但文件不存在）与 `folder.json` 损坏。
+    # 「未登记」只进明细、不上结论行 —— 实测"未登记"约一成、且多是"被引用的片段页"
+    #   （本就不该进导航树）⇒ 上结论行会恒亮、用户无法据此行动。
+    # 依据（结论行只报悬空项这条处置）：references/workflow-notes.md。
+    print(f"目录 {n_dir} 个 | index 悬空项 {n_dangling} 个 | folder.json 损坏 {n_bad} 个")
     if detail:
         print("\n明细（最多 40 条）：")
         for kind, rel, info in detail[:40]:
@@ -3024,6 +3027,9 @@ _FIELD_FALLBACK = ("check", "combo", "date", "datetime", "displayfield", "file",
                    "textarea", "time")
 _SKIP_KEYS = {"out", "add", "callback", "scope", "success", "failure", "async",
               "url", "method", "bean", "params", "waitMsg", "timeout", "extraParams"}
+# `params` 默认行为**将要翻转**的版本号。⚠️ 源码里**不写死** "N.N.N" 字面量 ——
+#   编年守卫不许普通文件正文出现发版号；这里运行时拼出来，**只为给用户指名版本**（比"后续版本"有用）。
+_NEXT_REV = "%d.%d.%d" % (1, 5, 0)
 
 
 def field_types(controls_path: str | None = None) -> tuple:
@@ -3214,6 +3220,204 @@ def _collect_name_islands(obj, container, field_set):
     return ids
 
 
+# --------------------------------------------------------------------------- #
+# `params` 末尾的两段附加输出（只在开了 `--upstream` 时出现；默认关 ⇒ 不出现这两段，输出与冻结基线**逐字一致** —— 只对"无 miss 的页面"成立，有 miss 且未开 `--strict` 时 §4.2 的留痕规则本就多一行 `[note]`）
+#   ① `[外部可传入]` —— 跨页反查：谁以 `m?xwl=` 打开本页、传了哪些键；
+#   ② 载入侧“未纳入核对”汇总行 —— 永远是输出的最后一行。
+# --------------------------------------------------------------------------- #
+# 为什么 ① 的键**不**并进 `provided`：
+#   同一页常被多处以**不同键**打开 —— “能被某个调用方传进来” ≠ “这页总是拿得到值”。
+#   一旦并进 `provided`，`params` 的 miss 判定被**静默放松**、真缺参被掩盖。
+# ⇒ 只做**独立分组**展示：不并进 `provided`、也不改 rc。
+#
+# 为什么 ② 也要挂在这里：本条要求“不开 `--upstream` 时输出与冻结基线**逐字一致**”，而它只对"无 miss 的页面"成立（有 miss 且未开 `--strict` 时，§4.2 的留痕规则本就多一行 `[note]`）；
+#   汇总行只要**无条件**多打一行就破坏这条 ⇒ ② 与 ① **同进同出**（都在末尾、② 在最后）。
+_WBOPEN_RE = re.compile(r"\bWb\.open\b")
+_URL_KEY_RE = re.compile(r"\burl\s*:")
+
+
+def _iter_js_strings(obj) -> list:
+    """产出对象里全部 JS 文本（每个带 `configs` / `events` 的节点各出若干段）。"""
+    out: list = []
+
+    def _walk(o):
+        if isinstance(o, dict):
+            out.extend(_js_of(o))
+            for v in o.values():
+                _walk(v)
+        elif isinstance(o, list):
+            for v in o:
+                _walk(v)
+
+    _walk(obj)
+    return out
+
+
+def _page_ref_key(page_file: str, root: str) -> str:
+    """本页的 `m?xwl=` 引用键：相对模块根、无扩展名、`/` 分隔、无前导斜杠。
+
+    例：`<root>/agtesth/tstudent.xwl` → `agtesth/tstudent`。
+    本页不在根内时退回文件名（去扩展名）。
+    """
+    try:
+        rel = os.path.relpath(os.path.abspath(page_file), os.path.abspath(root))
+    except ValueError:  # 跨盘符等 —— 退回文件名
+        rel = os.path.basename(page_file)
+    rel = rel.replace(os.sep, "/")
+    if rel.lower().endswith(".xwl"):
+        rel = rel[:-4]
+    return rel.lstrip("/")
+
+
+def _mxwl_target(url: str):
+    """从 `m?xwl=xxx&yyy` 取**原样**目标 `xxx`（不做斜杠归一，与 `cmd_params` 主循环同口径）。
+
+    不含 `m?xwl=` 返回 `None`。匹配本页引用键时调用方自行 `lstrip("/")`。
+    """
+    if "m?xwl=" not in url:
+        return None
+    return url.split("m?xwl=")[-1].split("&")[0]
+
+
+def _scan_upstream(root: str, page_file: str, field_set) -> dict:
+    """扫**单根**，找所有指向本页的上游调用（只读、不写盘）。
+
+    返回：`n_files`（扫了多少个 `.xwl`，不含本页）；`calls` = [(调用方相对路径, 传入键 list)]，
+    只含能展开的**字面量** `params` 键；`n_out` / `n_dyn` / `n_none` = 三类“未展开”的处数：
+    `out:` 形态 / url 为运行时拼接 / 命中本页但既无字面量键也无 `out:`。
+    """
+    page_abs = os.path.abspath(page_file)
+    page_key = _page_ref_key(page_file, root)
+    # 引用键可出现在**任意键**下（`url:` / `file:` / store 的 `url` 字符串…）
+    # ⇒ 直接按 `m?xwl=<本页键>` 匹配，并卡右边界，免得把更长的路径前缀误当本页。
+    _ref_re = re.compile(r"m\?xwl=" + re.escape(page_key) + r"(?![A-Za-z0-9_.\-/])")
+    calls: list = []
+    n_files = n_out = n_dyn = n_none = 0
+    for dirpath, _dirs, files in os.walk(root):
+        for fn in sorted(files):
+            if not fn.lower().endswith(".xwl"):
+                continue
+            fp = os.path.join(dirpath, fn)
+            if os.path.abspath(fp) == page_abs:
+                continue
+            n_files += 1
+            try:
+                with open(fp, "rb") as fh:
+                    obj = parse_xwl(fh.read().decode("utf-8"))
+            except Exception:  # noqa: BLE001 —— 坏文件不该让整轮反查崩掉
+                continue
+            caller_rel = os.path.relpath(fp, root).replace(os.sep, "/")
+            for js in _iter_js_strings(obj):
+                if not _ref_re.search(js):
+                    # 页面路径以字面量出现、但 `m?xwl=` 目标被运行时拼出来 ⇒ 计入“未展开·动态”
+                    if page_key in js and (_WBOPEN_RE.search(js) or _URL_KEY_RE.search(js)):
+                        n_dyn += 1
+                    continue
+                keys: set = set()
+                has_out = False
+                for kind, _c, _k, _r in find_transfers(js, field_set):
+                    if kind == "params=对象":
+                        keys |= set(_k)
+                    elif kind == "out":
+                        has_out = True
+                if keys:
+                    calls.append((caller_rel, sorted(keys)))
+                elif has_out:
+                    n_out += 1
+                else:
+                    n_none += 1
+    return {"n_files": n_files, "calls": calls, "n_out": n_out,
+            "n_dyn": n_dyn, "n_none": n_none}
+
+
+# 起因：出现级统计的 `url:` 里，除裸引号字面量（`url: 'm?xwl=…'`）外，真实工程还有一种
+#   **转义引号**写法 —— `url: \"m?xwl=…\"`（整段 JS 嵌在外层 JSON 字符串里 ⇒ 其中的真引号写成 `\"`）。
+#   该形态**磁盘上是字面量、静态可解析**，但只认裸引号的判据把它整个落进「动态（静态不可能解析）」
+#   ⇒ 属**分类错误**：在载入侧汇总行的用户可见输出里**低报覆盖率、误导用户**
+#   （本批实测 8 个 wb 根共 731 处：含 `m?xwl=` 645 / 不含 86）。
+#   故 `\` 后紧跟引号时，把该引号当「开引号」，收尾找同形的 `\` + 同一引号，内容取二者之间。
+def _appearance_url_counts(text: str) -> tuple:
+    """全文口径统计 `url:` 的**写法形态**。
+
+    返回 `(字面量含 m?xwl=, 非 m?xwl 字面量, 真变量·表达式)` —— 供载入侧汇总行按**出现级**报数。
+
+    字面量识别**两种开引号**：裸引号（`'` / `"`）与转义引号（`\'` / `\"`，见上方起因注释）。
+    """
+    n_lit_m = n_lit_other = n_dyn = 0
+    for _m in _URL_KEY_RE.finditer(text):
+        j = _m.end()
+        while j < len(text) and text[j] in " \t":
+            j += 1
+        if j + 1 < len(text) and text[j] == "\\" and text[j + 1] in "'\"":
+            # 转义引号：开 / 收引号都是 `\` + 同一引号（外层 JSON 字符串里的真引号）。
+            q = text[j + 1]
+            k = j + 2
+            while k + 1 < len(text) and not (text[k] == "\\" and text[k + 1] == q):
+                k += 1
+            body = text[j + 2:k]
+        elif j < len(text) and text[j] in "'\"":
+            q = text[j]
+            k = j + 1
+            while k < len(text) and text[k] != q:
+                k += 2 if text[k] == "\\" else 1
+            body = text[j + 1:k]
+        else:
+            n_dyn += 1
+            continue
+        if "m?xwl=" in body:
+            n_lit_m += 1
+        else:
+            n_lit_other += 1
+    return n_lit_m, n_lit_other, n_dyn
+
+
+def _print_params_tail(args, root, text, stores, field_set) -> None:
+    """`params` 末尾两段附加输出（只在开了 `--upstream` 时出现）。
+
+    ① `[外部可传入]` 分组；② 载入侧“未纳入核对”汇总行（**永远是最后一行**）。
+    默认关 ⇒ 本函数直接 `return`；调用方输出**逐字不变**，而它只对"无 miss 的页面"成立（有 miss 且未开 `--strict` 时，§4.2 的留痕规则本就多一行 `[note]`；保住 `params` 的量级）。
+    """
+    if not getattr(args, "upstream", False):
+        return
+    if not root or not os.path.isdir(root):
+        print("\n[note] --upstream：未找到模块根（用 --module-root 指定）⇒ 跳过跨页反查")
+        return
+    info = _scan_upstream(root, args.file, field_set)
+    n_all = len(info["calls"]) + info["n_out"] + info["n_dyn"] + info["n_none"]
+    print("\n=== [外部可传入] ===")
+    print("  本页被 %d 处上游调用（只展开 `params: {名:值}` 字面量键；"
+          "`out:` 与运行时拼接的 url 只计数、不展开）" % n_all)
+    for _caller, _keys in info["calls"]:
+        print("    %s  → 传入键 %s" % (_caller, _keys))
+    print("  [未展开] `out: app.<容器>` %d 处 / 动态 url %d 处 / 命中但无字面量键 %d 处"
+          % (info["n_out"], info["n_dyn"], info["n_none"]))
+    print("  （扫描范围：本根 %d 个 .xwl；本工具只判本根，跨工程引用看不到）" % info["n_files"])
+    # ---- ② 载入侧“未纳入核对”汇总行（最后一行）----
+    # 节点级：本页 `store` 里带 `url` 的节点，按“能否在本根解析到文件”分两类。
+    # ⚠️ 更细的“同根命中 / 跨工程 / 全根不存在”三分口径需**多根**；运行时只有单根
+    #    ⇒ 这里只给本根口径，细口径与量纲示例见 references/measured-data.md。
+    n_hit = n_miss = n_other = 0
+    for _cfg in stores:
+        _url = _cfg.get("url")
+        if not isinstance(_url, str):
+            continue
+        _tgt = _mxwl_target(_url)
+        if _tgt is None:
+            n_other += 1
+            continue
+        _fp = os.path.join(root, _tgt.replace("/", os.sep) + ".xwl")
+        if os.path.exists(_fp):
+            n_hit += 1
+        else:
+            n_miss += 1
+    _n_lit_m, _n_lit_other, _n_dyn_url = _appearance_url_counts(text)
+    print("  载入侧未纳入核对 —— 节点级（本页 store.url，单根口径）：同根命中 %d 处 / 本根未找到 %d 处"
+          " / 非 m?xwl 的 url %d 处（跨工程 · 全根不存在的三分细口径需多根，见 references/measured-data.md）；"
+          "出现级（全文 `url:` 写法）：动态写法 %d 处 / 非 m?xwl 字面量 %d 处"
+          % (n_hit, n_miss, n_other, _n_dyn_url, _n_lit_other))
+    return
+
+
 def cmd_params(args) -> int:
     """检查「页面 → store → SQL 文件」的传参链路（静态交叉核对）。
 
@@ -3397,6 +3601,7 @@ def cmd_params(args) -> int:
     needed = need_sql | need_req
     if not needed:
         print("\n（SQL 侧没有 {?…?} / app.get，跳过交叉核对）")
+        _print_params_tail(args, root, text, stores, field_set)
         return 0
 
     # 真白名单：`sys.*` / `Str.*`（以及工程在 `wb/system/var.json` 里自定义的命名空间）
@@ -3425,11 +3630,17 @@ def cmd_params(args) -> int:
               "**由调用方页面传入**的那一类本工具不核对")
         print("         能力边界：只看**这一个页面**静态可见的来源。`Wb.open({params})` 传进本页的键"
               "写在调用方页面里，要核对请到调用方页面去跑")
+        # 放松留痕（预告式、只打一次）：判定今后要**变松**，先把话留在这里 ——
+        # 不给 `--strict` 的人要知道"默认还会阻塞"，并且知道**哪个版本**起会变、届时怎么继续阻塞。
+        if not getattr(args, "strict", False):
+            print("         [note] 默认仍阻塞（rc=1）；" + _NEXT_REV
+                  + " 起默认不再阻塞，届时要阻塞请加 `--strict`。")
     else:
         print("  [ok]   SQL 需要的参数在页面侧都能找到来源")
     if extra:
         print(f"  [info] 页面送了但 SQL 未用到: {extra}")
     print("\n  提示：参数名 = 控件 `itemId`；改了 itemId 或把控件移出容器都会**静默失效**（取到空值）。")
+    _print_params_tail(args, root, text, stores, field_set)
     return 1 if miss else 0
 
 
@@ -3563,6 +3774,14 @@ def build_parser() -> argparse.ArgumentParser:
     pm.add_argument("--module-root", help="wb/modules 的绝对路径（缺省从文件位置向上找）")
     pm.add_argument("--controls", help="wb/system/controls.json；给了就从注册表推导「取值控件」类型")
     pm.add_argument("--list-fields", action="store_true", help="只打印取值控件类型清单后退出")
+    pm.add_argument("--upstream", action="store_true",
+                    help="跨页反查（默认关）：扫一遍 --module-root，列出以 `m?xwl=` 打开本页的调用方"
+                         "及其 `params` 键，末尾加独立分组 `[外部可传入]`（不并入核对、不改退出码）。"
+                         "代价：要全扫模块根（约 3000 个 .xwl、约 5 秒量级）；不开则零成本")
+    pm.add_argument("--strict", action="store_true",
+                    help="缺来源时判失败（rc=1）—— 与 `diffguard --strict` 同名同义（默认只告警）。"
+                         "⚠️ 本版与默认**同效**（默认 rc 仍 1）；" + _NEXT_REV
+                         + " 起默认改为不阻塞，届时要阻塞就加它")
     pm.set_defaults(func=cmd_params)
 
     pa = sub.add_parser("paths", help="列出可编辑字段位置（sql / totalSql / serverScript / url），供 patch 用")

@@ -2,7 +2,7 @@
 name: webbuilder-xwl-patch
 slug: skill-webbuilder-xwl-patch
 displayName: webbuilder-xwl-patch
-version: 1.3.5
+version: 1.4.0
 license: MIT
 metadata:
   category: development-tools
@@ -285,7 +285,7 @@ python scripts/xwl.py new wb/modules/<模块>/xxxSql/queryXxx.xwl --kind sql --t
 > 补**数组元素**走 `append` / `insert`，本就不算新建键（`"create"` 挂在这两种 op 上属用法错误）。
 > 任意一条 set 可带 `"create": true`：补**原本不存在的键**时用它；写到已存在的键上是幂等保护。
 >
-> 中间态：**现在仍允许新建键，只打 `[warn]`；后续版本将默认拒绝，届时给已存在的键 `set` 不受影响、新建键要加 `"create": true`**。
+> 中间态：**现在仍允许新建键，只打 `[warn]`；到下一版本才默认拒绝，届时给已存在的键 `set` 不受影响、新建键要加 `"create": true`**（该版本号与升级须知写在 `CHANGELOG.md`）。
 
 ```json
 [{"op": "set", "path": ["@panel1", "configs", "newKey"], "value": "v", "create": true}]
@@ -398,7 +398,7 @@ python scripts/xwl.py diffguard <改过的文件或目录> --strict    # CI / pr
 | `diffguard` | **相对 git 基线**检测「多行内容被压平」 |
 | `itemids` | 注册键重名报告 + 建议改名（只读） |
 | `paths` | 列出 `sql` / `totalSql` / `serverScript` / `url` 四类字段的位置 |
-| `params` | 核对「页面 → store → SQL」传参链路 |
+| `params` | 核对「页面 → store → SQL」传参链路（`--strict` 缺来源判失败，本版与默认同效；`--upstream` 追加「谁在调用本页」的上游扫描） |
 | `sqlrefs` | 校验 `{#名字#}` ↔ `serverScript` 是否自洽 |
 | `folders` | `folder.json`（设计器导航树索引）一致性检查 / 登记 |
 | `schema` | 查设计器控件注册表（合法 `configs` / `events` / 骨架） |
@@ -416,6 +416,15 @@ python scripts/xwl.py diffguard <改过的文件或目录> --strict    # CI / pr
 | `1` | **被检查对象或查询结果有问题**（`check` 有 `[FAIL]`；`paths` / `sqlrefs` 没找到目标字段） |
 | `2` | **用法或前置条件不满足**（缺必填参数、`edit` 锚点次数不符、`new` 拒绝覆盖、读不到目标文件） |
 
+两类**判定会随命令线宽严变化**的命令，各自三档（默认 / 收紧 / 放松）：
+
+| 命令 | 默认 | 收紧（严格） | 放松（留痕） |
+|---|---|---|---|
+| `diffguard` | 疑似压平**只告警**（rc=0） | `--strict`：疑似压平判失败（rc=1）；一个文件都没比成才 rc=2 | 非 git 仓库 / 新文件以 `[note]` 跳过 |
+| `params` | 缺来源判失败（rc=1） | `--strict`：**本版与默认同效**（rc=1）——为下一版翻转预留的逃生开关 | 缺来源时打一行 `[note]` 预告放松将生效 |
+
+> **原则：判定变严要喧哗、放松要留痕** —— 收紧必须让调用方**当场**看得见（`[FAIL]` / rc≠0）；
+> 放松必须留一条**可查的预告行**（`[note]`），不能悄悄改掉默认行为。
 > 退出码与行首标记（`[warn]` **不影响退出码**，"1 与 2"**不是严格二分**）见 [references/faq.md](references/faq.md) §四。
 
 ### 4.3 环境依赖与自检
@@ -487,6 +496,12 @@ python scripts/xwl.py diffguard <改过的文件或目录> --strict    # CI / pr
 ```
 
 > 其余全部展开在 [`references/sql-fragments.md`](references/sql-fragments.md)：三条最易错规则、serverScript 的源码硬规则与常用 API、三种占位符（`{#sys.*#}` / `{#任意名#}` / `{?名字?}`）、`out` / `params` 两条通路（含同名谁赢、命名契约），以及 `paths` / `sqlrefs` / `params` 三个检查工具。
+
+**`params --upstream`（可选能力，默认关）**：核对「**谁在调用本页**」—— 在 `--module-root` 内**单根全扫**一遍，
+末尾加独立分组 `[外部可传入]`（各上游调用方与传入键），再给一行**载入侧汇总**（节点级「同根命中 / 本根未找到 / 非 m?xwl 的 url」＋
+出现级「动态写法 / 非 `m?xwl` 字面量」；**两种量纲分开标**；节点级三数**之和 = 本页 store.url 数**）。**默认关 ⇒ 零成本**（不开时**不出现**这两段；**唯一例外**见 §4.2 的留痕规则 —— 缺来源时本就有一行 `[note]` 预告）；
+开了才单根全扫一遍（≈5 秒量级）。它只认 `params: {名:值}` **字面量键**，`out: app.<容器>` 与运行时拼接的 url **只计数**；
+**不并入 `provided`、不改退出码**。命中量级（同一批 8 个 wb 根：节点级「同根命中 26840 / 本根未找到 5006」；出现级「动态写法 867 / 非 `m?xwl` 字面量 440」）与**多根三分类**（同根命中 / 跨工程 / 全根不存在）的完整口径见 [`references/measured-data.md`](references/measured-data.md)。
 
 ## 七、itemId 命名规范与重名处置
 
