@@ -84,6 +84,7 @@ import subprocess
 import sys
 import tempfile
 import time
+import tokenize
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 _spec = importlib.util.spec_from_file_location("xwl", os.path.join(HERE, "xwl.py"))
@@ -323,7 +324,7 @@ def _check_basics(tmp, node, failures, write) -> None:
         else:
             failures.append(f"{name} 失败（产出前 200 字符={after[:200]!r}）")
 
-    # ---- 判据依据（K21）：`check` 与 `dump` 对非 UTF-8 必须报**同一段**可读文案 ----
+    # ---- 判据依据：`check` 与 `dump` 对非 UTF-8 必须报**同一段**可读文案 ----
     # 起因：`check` 曾直接甩 Python 的 codec 原文（既不说是编码问题、也不给修法），
     #   而 FAQ 与 `test-prompts.json` 引的正是"工具报「不是 UTF-8 文本」"这个问法 ⇒ 文档与实现对不上。
     _gbk = os.path.join(tmp, "k21-gbk.xwl")
@@ -344,10 +345,10 @@ def _check_basics(tmp, node, failures, write) -> None:
         failures.append("这些入口的非 UTF-8 文案不可读或不同源：%s（check=%r）"
                         % (_k14_bad, _k14["check"][:140]))
 
-    # ---- B1 命令级等价比对（K8 的**调用点**守卫 · **改为行为级**）----
+    # ---- 命令级等价比对（**调用点**守卫 · **改为行为级**）----
     # 为什么必须命令级：`equivalent` 的 helper 断言只证明函数本身对，证不了
     # expand/patch/new **真的调用它** —— 把三处调用点换成 `==` 时只有命令级断言能抓到。
-    # ⚠️ 旧做法用「含浮点 `1.0` 的样本 ⇒ rc=2」间接证明：K9 让整数值浮点往返等价（rc=0），
+    # ⚠️ 旧做法用「含浮点 `1.0` 的样本 ⇒ rc=2」间接证明：保真写出整数值浮点后往返等价（rc=0），
     #    该 round-trip 的判别力已归零（全样本 `equivalent` 与 `==` 同值）⇒ 改为**行为级**：
     #    进程内 monkeypatch `xwl.equivalent` 成探针，调三命令各一次，断言探针各被调用 ≥1 次。
     #    注入 = 把任一处 `equivalent(parse_xwl(out), obj)` 换成 `==` ⇒ 该命令探针 0 次 ⇒ 红。
@@ -390,12 +391,12 @@ def _check_basics(tmp, node, failures, write) -> None:
     finally:
         xwl.equivalent = _real_equiv          # type: ignore[assignment]
     if _k8_fail:
-        failures.extend("K8 调用点：" + m for m in _k8_fail)
+        failures.extend("调用点：" + m for m in _k8_fail)
     else:
-        print("[ok]  K8 调用点：expand/patch/new 三命令各调用 equivalent ≥1 次（行为级探针）")
+        print("[ok]  调用点：expand/patch/new 三命令各调用 equivalent ≥1 次（行为级探针）")
 
-    # ---- B2 `check` 对裸 NUL 的**集成面**守卫（K15 的调用点）----
-    # 起因：K15 现有断言只直接调 `bare_nul_in_strings`，删掉 `cmd_check` 里整段
+    # ---- `check` 对裸 NUL 的**集成面**守卫（调用点级）----
+    # 起因：既有断言只直接调 `bare_nul_in_strings`，删掉 `cmd_check` 里整段
     # 裸 NUL 逻辑仍全绿（实测）。命令级断言：裸 NUL 文件 `check` 必须输出「裸 NUL」且 rc=0。
     _b2 = os.path.join(tmp, "k15nul.xwl")
     with open(_b2, "wb") as _f:
@@ -409,9 +410,9 @@ def _check_basics(tmp, node, failures, write) -> None:
                         "（删掉 cmd_check 里那段裸 NUL 逻辑应让它红）"
                         % (_r2.returncode, "裸 NUL" in _o2))
     else:
-        print("[ok]  K15 集成面：裸 NUL 文件 check 输出「裸 NUL」且 rc=0（命令级）")
+        print("[ok]  集成面：裸 NUL 文件 check 输出「裸 NUL」且 rc=0（命令级）")
 
-    # ---- A1 断言：`itemids --name` 的 ops 草稿必须是合法 JSON ----
+    # ---- 断言：`itemids --name` 的 ops 草稿必须是合法 JSON ----
     # 落点错标的更正：`--suggest` 走的是"整表 json.dumps"，一直合法；
     # 真正坏的是 `--name`（`format_itemid_candidates` 用 `%r`）⇒ 断言必须打在 `--name` 上。
     _a1 = os.path.join(tmp, "a1dup.xwl")
@@ -435,9 +436,9 @@ def _check_basics(tmp, node, failures, write) -> None:
         failures.append("`itemids --name` 的 ops 草稿不是合法 JSON：%s"
                         "（把 format_itemid_candidates 的 json.dumps 换回 repr() 应让它红）" % (_ops[:1],))
     else:
-        print("[ok]  A1：`itemids --name` 的 ops 草稿可被 json.loads（%d 条）" % len(_ops))
+        print("[ok]  `itemids --name` 的 ops 草稿可被 json.loads（%d 条）" % len(_ops))
 
-    # ---- A2 断言：非有限值（NaN）必须判 `check` ④ 失败（rc=1）----
+    # ---- 断言：非有限值（NaN）必须判 `check` ④ 失败（rc=1）----
     _a2 = os.path.join(tmp, "a2nan.xwl")
     with open(_a2, "w", encoding="utf-8", newline="") as _f:
         _f.write('{"n": NaN}')
@@ -449,9 +450,9 @@ def _check_basics(tmp, node, failures, write) -> None:
         failures.append("含 NaN 的样本 check 应为 rc=1 且报 ④，实得 rc=%d"
                         "（去掉 parse_constant 会让它 rc=0）" % _r4.returncode)
     else:
-        print("[ok]  A2：非有限值被判 check ④ 失败（rc=1）")
+        print("[ok]  非有限值被判 check ④ 失败（rc=1）")
 
-    # ---- A3 断言：含 -0.0 的样本 `expand` 必须 rc=0（往返一致）----
+    # ---- 断言：含 -0.0 的样本 `expand` 必须 rc=0（往返一致）----
     _a3 = os.path.join(tmp, "a3negzero.xwl")
     with open(_a3, "w", encoding="utf-8", newline="") as _f:
         _f.write('{"n": -0.0}')
@@ -462,9 +463,9 @@ def _check_basics(tmp, node, failures, write) -> None:
         failures.append("含 -0.0 的样本 expand 应 rc=0（往返一致），实得 %d"
                         "（把 _number 改回折叠 `-0`/写 `0` 应让它红）" % _r5.returncode)
     else:
-        print("[ok]  A3：含 -0.0 的样本 expand rc=0（往返判定一致）")
+        print("[ok]  含 -0.0 的样本 expand rc=0（往返判定一致）")
 
-    # ---- A4 断言：写盘中途失败 => 目标**不被截断**、无临时残留 ----
+    # ---- 断言：写盘中途失败 => 目标**不被截断**、无临时残留 ----
     _a4 = os.path.join(tmp, "a4atomic.xwl")
     with open(_a4, "w", encoding="utf-8", newline="") as _f:
         _f.write('{"title":"ORIGINAL-KEEP-ME"}')
@@ -490,7 +491,7 @@ def _check_basics(tmp, node, failures, write) -> None:
                         "（换回 open(path,\"w\") 直写会让目标被截断 ⇒ 红）"
                         % (_a4_body[:40], _a4_tmp, _a4_raised))
     else:
-        print("[ok]  A4：写盘中途失败后目标未被截断、无临时残留")
+        print("[ok]  写盘中途失败后目标未被截断、无临时残留")
 
 
 def _check_params_paths(tmp, node, failures, write) -> None:
@@ -539,7 +540,7 @@ def _check_params_paths(tmp, node, failures, write) -> None:
             [t[1] for t in xwl.find_transfers("g.load({ out: [app.a, app.b] });", FIELD)] == [["a", "b"]],
         "剔注释不粘连代码":
             xwl.strip_js_comments("var a = 1; // c\nvar b = 2;") == "var a = 1; \nvar b = 2;",
-        # ---- 以下 4 条是「**判据依据**」断言（K21）：守的是"判据本身对不对"，不是"行为有没有变" ----
+        # ---- 以下 4 条是「**判据依据**」断言：守的是"判据本身对不对"，不是"行为有没有变" ----
         # 起因：本仓每版都有自检，但自检长期只覆盖"行为一致性" ⇒ 一个**从第一版就存在**的判据错误
         # （`field_types` 只取注册表）能活到 1.3.x 才被撞出来。这几条断言的就是那类错误。
         "field_types = 注册表 ∪ 内置兜底（不是二选一）":
@@ -568,7 +569,7 @@ def _check_params_paths(tmp, node, failures, write) -> None:
         else:
             failures.append(f"{name} 失败")
 
-    # ---- 判据依据（K21）续：`sys.` 前缀的来源（K3）与两个入口的寻址同源（F1） ----
+    # ---- 判据依据续：`sys.` 前缀的来源与两个入口的寻址同源 ----
     # 起因：`sys.` 曾硬编码（工程自定义命名空间不认）；`paths` 曾按"能嵌套的整棵树"遍历，
     #   会给出 `patch` 的 `@itemId` 解不开的路径 —— 两个入口必须用**同一套**寻址语义。
     _xwlsrc = open(os.path.join(HERE, "xwl.py"), encoding="utf-8").read()
@@ -599,7 +600,7 @@ def _check_params_paths(tmp, node, failures, write) -> None:
             "_iter_controls(" in _cp_body and "_iter_controls(" in _fa_body,
         # ⚠️ 内联对象**必须带 `type`**：`_iter_controls` 只 yield 有字符串 `type` 的节点，
         #    不带 `type` 的 fixture 抓不到"没跳过 configs"这个注入（实测过 —— 那种是**假绿**）。
-        "F1：configs 里的内联同名对象不算控件（@itemId 不会误指）":
+        "configs 里的内联同名对象不算控件（@itemId 不会误指）":
             len(xwl._find_all_by_itemid(
                 {"children": [{"configs": {"itemId": "dup",
                                            "vals": [{"type": "text",
@@ -665,7 +666,7 @@ def _check_itemids(tmp, node, failures, write) -> None:
     # ---- 11b. 注册键重名分级（按 normalName||itemId 分组、**只两级**）----
     #   column 重名（未被引用）          → benign（取数走 grid.getSelection(0).data.*）
     #   button 重名 + 被 JS 引用         → error（app.btn 取值不确定）
-    #   text   重名但各有唯一 normalName  → **不成组**（注册键 A1 / A2 互不相同 ⇒ 天然豁免）
+    #   text   重名但各有唯一 normalName  → **不成组**（注册键互不相同 ⇒ 天然豁免）
     #   panel  重名但未被引用            → benign（warn 级已取消）
     idt_tree = {"children": [
         {"type": "viewport", "configs": {"itemId": "vp1"}, "children": [
@@ -690,8 +691,8 @@ def _check_itemids(tmp, node, failures, write) -> None:
     if bad:
         failures.append("注册键分级不符（期望 vs 实得）: %s" % bad)
     elif "same" in lv:
-        # "same" ×2 各有唯一 normalName（A1/A2）⇒ 注册键互不相同 ⇒ 不该成组
-        failures.append("各有唯一 normalName 的同名节点仍被判成组（注册键 A1/A2 应互不相同）: %s" % lv)
+        # "same" ×2 各有唯一 normalName⇒ 注册键互不相同 ⇒ 不该成组
+        failures.append("各有唯一 normalName 的同名节点仍被判成组（注册键应互不相同）: %s" % lv)
     elif any(g["level"] == "warn" for g in rep["groups"]):
         failures.append("出现 warn 级组（**只两级**：error / benign）")
     else:
@@ -1261,53 +1262,53 @@ def _check_docs(tmp, node, failures, write) -> None:
          "### 2.6 压平检测"),
         ("2.6 diffguard 因果", "SKILL.md", "references/workflow-notes.md", ["定义级", "粗筛"],
          "### 2.6 压平检测"),
-        # ---- 本批（第一步）：P1+P2 下沉批的外移点 ----
-        # 承载词取施工单 §2.1「必须存活」清单：把 SKILL 里的叙述搬进 references 后，
+        # ---- 结构下沉（第一步）：下面这些是正文从 SKILL.md 搬进 references/ 后的外移点 ----
+        # 承载词取「必须存活」清单：把 SKILL 里的叙述搬进 references 后，
         # 主文档留了指针（第一项断言）+ 目标文件里这些词必须还在（第二项断言）。
         # 迁到 `--help`（通道 B）的那几处，其承载词同样在目标 references 里留一份兜底
         # （`17g` 只加载 markdown，读不到 `scripts/*.py` 的 `--help`/注释）。
-        ("P1 2.3 静默语义损坏", "SKILL.md", "references/anti-patterns.md",
+        ("2.3 静默语义损坏", "SKILL.md", "references/anti-patterns.md",
          ["静默", "绝不能", "相对基线"], "### 2.3 多行源为什么绝不能压成一行"),
-        ("P1 2.4 规模占比", "SKILL.md", "references/measured-data.md",
+        ("2.4 规模占比", "SKILL.md", "references/measured-data.md",
          ["≈ 三成", "别把 diff 当", "本次改动"], "### 2.4 换行与展开"),
-        ("P1 2.4 --eol 回退", "SKILL.md", "references/faq.md",
+        ("2.4 --eol 回退", "SKILL.md", "references/faq.md",
          ["不静默", "回退 LF", "三命令共用"], "### 2.4 换行与展开"),
-        ("P1 2.5 字面反斜杠 n", "SKILL.md", "references/measured-data.md",
+        ("2.5 字面反斜杠 n", "SKILL.md", "references/measured-data.md",
          ["语义无损", "逐字节相同", "给谁看"], "### 2.5 值里的"),
-        ("P1 三第0步 folder", "SKILL.md", "references/faq.md",
+        ("三第0步 folder", "SKILL.md", "references/faq.md",
          ["不登记就看不到", "只认文件路径", "不替你创建"], "### 第 0 步 · 新建文件"),
-        ("P1 三第3步 三点#3", "SKILL.md", "references/measured-data.md",
+        ("三第3步 三点#3", "SKILL.md", "references/measured-data.md",
          ["顺带规整", "语义等价", "diff 只含", "重定向"], "### 第 3 步 · 编辑"),
-        ("P1 三第4步 两坑", "SKILL.md", "references/faq.md",
+        ("三第4步 两坑", "SKILL.md", "references/faq.md",
          ["别写成", "不是替换成换行符"], "### 第 4 步 · 格式校验"),
-        ("P1 四 4.2 退出码", "SKILL.md", "references/faq.md",
+        ("四 4.2 退出码", "SKILL.md", "references/faq.md",
          ["不影响退出码", "严格二分", "行首标记", "报告类"], "### 4.2 退出码与输出约定"),
-        ("P1 五 5.2 url 口径", "SKILL.md", "references/sql-fragments.md",
+        ("五 5.2 url 口径", "SKILL.md", "references/sql-fragments.md",
          ["不解析", "只判本 wb 根", "单 webapp", "url:"], "### 5.2 url 的三种写法"),
-        ("P1 七 7.2 normalName", "SKILL.md", "references/measured-data.md",
+        ("七 7.2 normalName", "SKILL.md", "references/measured-data.md",
          ["不是所有控件都接受", "非法配置", "会跳过并回报"], "### 7.2 三类控件"),
-        ("P1 七 7.3 重名建议", "SKILL.md", "references/measured-data.md",
+        ("七 7.3 重名建议", "SKILL.md", "references/measured-data.md",
          ["不猜顺序", "能用 normalName 就用", "必须同步改 JS", "tbarGrid"], "### 7.3 遇到重名"),
-        ("P2 1.2 控件骨架", "SKILL.md", "references/controls.md",
+        ("1.2 控件骨架", "SKILL.md", "references/controls.md",
          ["必须唯一", "会与设计器产物不一致"], "### 1.2 控件节点的标准形态"),
-        ("P2 三第3步 ops 示例", "SKILL.md", "references/sql-fragments.md",
+        ("三第3步 ops 示例", "SKILL.md", "references/sql-fragments.md",
          ["insert", "append", "delete", "按顺序执行"], "## 六、SQL 片段"),
-        ("P2 三第3步 @itemId", "SKILL.md", "references/sql-fragments.md",
+        ("三第3步 @itemId", "SKILL.md", "references/sql-fragments.md",
          ["@名字#N", "串联", "不猜顺序"], "## 六、SQL 片段"),
-        ("P2 三第3步 改前核对", "SKILL.md", "references/anti-patterns.md",
+        ("三第3步 改前核对", "SKILL.md", "references/anti-patterns.md",
          ["configs` 一层", "照抄"], "## 八、常见问题"),
-        ("P2 五 5.4 四条易踩", "SKILL.md", "references/js-api.md",
+        ("五 5.4 四条易踩", "SKILL.md", "references/js-api.md",
          ["能力边界不是错误", "不用写", "错误对象"], "### 5.4 四条最容易踩的"),
-        ("P2 五 5.1 引用读法", "SKILL.md", "references/sql-fragments.md",
+        ("五 5.1 引用读法", "SKILL.md", "references/sql-fragments.md",
          ["补上 `.xwl`", "被引用的片段是", "从文件找引用方"], "### 5.1 怎么读一个"),
-        ("P2 七 7.3 命令示例", "SKILL.md", "references/measured-data.md",
+        ("七 7.3 命令示例", "SKILL.md", "references/measured-data.md",
          ["--dups-only", "--name", "--suggest"], "### 7.3 遇到重名"),
-        # ---- PRE1 下沉批（核心 8 块）新增的外移点 ----
+        # ---- 核心 8 块结构下沉时新增的外移点 ----
         # 2.1：5 条硬规则搬进 faq §一（第 4 步的 ①–⑤ 清单是就地承载体）；
         # 4.3：环境依赖搬进 README（SKILL 适用范围表的环境行是就地承载体）。
-        ("PRE1 2.1 硬规则", "SKILL.md", "references/faq.md",
+        ("2.1 硬规则", "SKILL.md", "references/faq.md",
          ["无 BOM", "换行一致", "末行结构"], "### 2.1 硬规则（多行源的磁盘形态）"),
-        ("PRE1 4.3 环境依赖", "SKILL.md", "README.md",
+        ("4.3 环境依赖", "SKILL.md", "README.md",
          ["Python 3.9+", "NODE_BIN"], "### 4.3 环境依赖与自检"),
     ]
     # 断言①-机理（为什么把「全文 contains」收成「锚点小节区间 contains」）：`_dst` **恒**出现在
@@ -1981,7 +1982,7 @@ def _check_docs(tmp, node, failures, write) -> None:
     #     **零覆盖**（绿但空）⇒ 本臂补上"围栏块"这一面。
     #   误报控制：围栏示例可能是**示意**（占位符 `<path>` / `…` / `%s` / `%d`）⇒ 含这类占位符的行
     #     **跳过**（不判），避免把"示例"当成"承诺文案"。实测：3 条围栏输出行，1 条含占位符被跳过、
-    #     2 条被检查且全在实现里 ⇒ 全绿（这档 = 加白名单，见本批 eng-139 报告）。
+    #     2 条被检查且全在实现里 ⇒ 全绿（这档 = 加白名单）。
     #   ⚠️ 边界：本臂用**前缀匹配**（`_nf[:16]`），**验不了运行期拼接**出来的文案 —— 拼接结果在源码里
     #     没有字面前缀，所以这类**不是漏扫、是扫了会错**（故排除）。
     _fence_ph = re.compile(r"[<>]|…|%[sd]|\.\.\.")
@@ -2170,6 +2171,83 @@ def _check_docs(tmp, node, failures, write) -> None:
         doc_fail.append("measured-data.md 内「NNNNN 个 xwl」有多个取值 %s 却未在**同处**声明口径差异"
                         "（加「主口径 / 不是同一口径」等说明，别让读者当成同一统计）"
                         % "/".join(sorted(_md_vals)))
+
+    # 17r 分发面自包含：`git ls-files` 的 22 个分发文件里不得出现「指向 skill 包外」的引用。
+    #     判据 = 包外文档名（四种，见下方 _b17r_docs 元组）
+    #          + 外部计划文档的条目代号（字母+数字 / 字母-小写字母 / SITE+数字）+ §N-M 形式的节号指针。
+    #          + 前置批次号（PRE 加数字）与过程角色编号（eng-/qa-/pm-/arch-/reg-/tl- 加数字）。
+    #     `.py` 只在**字符串字面量之外**判（词法掩码），免得把夹具/文案里的代号当残留。
+    #     `CHANGELOG.md` 是历史记录，豁免；代号用前后界定符锚定，避开 `0xD800` / `BLE001` / `LF-only`。
+    #     ⚠️ 起因：本条守卫的**说明注释**不许出现被禁字面量 —— 否则守卫会把自己判红（已踩过一次）。
+    _b17r_docs = ("《验收基线》", "《落地清单》", "施工索引", "施工单")
+    _b17r_code = re.compile(
+        r"(?<![A-Za-z0-9_])[A-L](?:\d{1,2}|-[a-z])(?![A-Za-z0-9_])"
+        r"|(?<![A-Za-z0-9_])SITE\d(?![A-Za-z0-9_])")
+    _b17r_sec = re.compile(r"§\d{1,3}-\d{1,2}")
+    _b17r_proc = re.compile(r"\bPRE\d+\b|\b(?:eng|qa|pm|arch|reg|tl)-\d{1,3}\b")
+
+    def _b17r_mask_strings(_text):
+        """把 .py 里字符串字面量的内容抹成空格（保留行列结构），供 17r 判据使用。"""
+        try:
+            _toks = list(tokenize.generate_tokens(io.StringIO(_text).readline))
+        except (tokenize.TokenError, IndentationError, SyntaxError):
+            return None
+        _starts, _acc = [], 0
+        for _ln in _text.split("\n"):
+            _starts.append(_acc)
+            _acc += len(_ln) + 1
+        _buf = list(_text)
+        for _tk in _toks:
+            _nm = tokenize.tok_name.get(_tk.type, "")
+            if _nm == "STRING" or _nm.startswith("FSTRING"):
+                _a = _starts[_tk.start[0] - 1] + _tk.start[1]
+                _b = _starts[_tk.end[0] - 1] + _tk.end[1]
+                for _k in range(_a, min(_b, len(_buf))):
+                    if _buf[_k] != "\n":
+                        _buf[_k] = " "
+        return "".join(_buf)
+
+    try:
+        _b17r_files = subprocess.check_output(["git", "-C", root, "ls-files"], text=True).splitlines()
+    except Exception:  # noqa: BLE001
+        _b17r_files = None
+    if _b17r_files is None:
+        print("[note] 17r 分发面自包含：取不到 `git ls-files` 清单 ⇒ 本次**没扫**（不算通过也不算失败）")
+    else:
+        _b17r_fail = []
+        for _rel17 in _b17r_files:
+            if not _rel17 or _rel17 == "CHANGELOG.md":
+                continue
+            _fp17 = os.path.join(root, _rel17.replace("/", os.sep))
+            if not os.path.exists(_fp17):
+                continue
+            try:
+                with open(_fp17, "r", encoding="utf-8", newline="") as _fh17:
+                    _raw17 = _fh17.read()
+            except Exception as _exc17:  # noqa: BLE001
+                _b17r_fail.append("17r 分发面自包含：读不出 %s（%s）—— 报错，不算「没命中」" % (_rel17, _exc17))
+                continue
+            if _rel17.endswith(".py"):
+                _judge17 = _b17r_mask_strings(_raw17)
+                if _judge17 is None:
+                    _b17r_fail.append("17r 分发面自包含：%s 词法解析失败 ⇒ 不敢判（保守报错）" % _rel17)
+                    continue
+            else:
+                _judge17 = _raw17
+            for _i17, _l17 in enumerate(_judge17.split("\n"), 1):
+                _hit17 = ([_m.group(0) for _m in _b17r_code.finditer(_l17)]
+                          + [_m.group(0) for _m in _b17r_sec.finditer(_l17)]
+                          + [_m.group(0) for _m in _b17r_proc.finditer(_l17)]
+                          + [_w for _w in _b17r_docs if _w in _l17])
+                if _hit17:
+                    _b17r_fail.append("17r 分发面自包含：%s:%d 出现包外引用 %s —— 原文：%s"
+                                      % (_rel17, _i17, "/".join(sorted(set(_hit17))), _l17.strip()[:80]))
+        if _b17r_fail:
+            doc_fail.extend(_b17r_fail[:12])
+        else:
+            print("[ok]  17r 分发面自包含：22 个分发文件里无包外引用"
+                  "（无《验收基线》/《落地清单》/施工索引/施工单、无施工单条目代号、无 §N-M 形式的节号指针、无前置批次号/过程角色编号；"
+                  "`.py` 只判字符串字面量之外；CHANGELOG 豁免）")
 
     if doc_fail:
         failures.extend(doc_fail[:12])
@@ -2858,7 +2936,7 @@ def _check_diffguard(tmp, node, failures, write) -> None:
                       "自报（用 os.path.relpath 反推会在短名/盘符不同源时静默跳过）"
                       % (_label, _alt))
 
-    # ⑦ **K21「判据依据」断言（K13 的必配自检）**：造一个「内容与基线相邻两行的拼接相同，
+    # ⑦ **「判据依据」断言（拆行守卫的必配自检）**：造一个「内容与基线相邻两行的拼接相同，
     #    但**续行符与行数都没减少**」的样本 ⇒ 必须**不报压平**，只给一句 [note] 说明判为"内容移动"。
     #    守的是判据本身：缺了前置必要条件，`}` / `');'` 这类**极短行**的"内容恰好等于相邻两行拼接"
     #    会在**真实历史版本**上误报，而三个计数一个都没变（`行数 4470 → 4470` 在数学上就排除了压平）。
@@ -2885,7 +2963,7 @@ def _check_diffguard(tmp, node, failures, write) -> None:
 
 
 def _check_patch_contract(tmp, node, failures, write) -> None:
-    """`patch` 的 ops 契约（§5-1 … §5-13）：`create` 开关、`A-c` 越界、`A2`/`K17`/`L1` 输出。
+    """`patch` 的 ops 契约：`create` 开关、数组下标越界、新建键/单行源/未备份三类输出。
 
     全部是**行为断言**（不是 help 文案断言）：把对应行为改回去，本组立刻红。
     """
@@ -2922,12 +3000,12 @@ def _check_patch_contract(tmp, node, failures, write) -> None:
             print("[ok]  §%s %s" % (num, msg))
 
     # ⚠️ 让 "dp" 组**被引用**（error 级）：未被引用的重名是 benign，
-    #    而 `recommend_fixes` 只处理 error/warn 组 ⇒ 否则 --suggest 恒空（§5-8/§5-9 假绿）。
+    #    而 `recommend_fixes` 只处理 error/warn 组 ⇒ 否则 --suggest 恒空（假绿）。
     dup_children = [{"type": "panel", "configs": {"itemId": "dp"}, "children": []},
                     {"type": "panel", "configs": {"itemId": "dp"}, "children": [],
                      "events": {"click": "app.dp.hide();"}}]
 
-    # ---- §5-1 默认放行新建键 + `[warn]` 预告 + rc 不变 ----
+    # ---- 默认放行新建键 + `[warn]` 预告 + rc 不变 ----
     t1 = {"title": "t", "children": []}
     w1: list = []
     xwl.apply_ops(t1, [{"op": "set", "path": ["newTopKey"], "value": "v"}], created=[], warned=w1)
@@ -2946,7 +3024,7 @@ def _check_patch_contract(tmp, node, failures, write) -> None:
         f1.append("真跑没把新键写进文件")
     _ok("5-1", f1, "默认放行新建键、warned 收集、真跑 rc=0 且打 [warn] 预告")
 
-    # ---- §5-2 `create:true` 放行且无 `[warn]` ----
+    # ---- `create:true` 放行且无 `[warn]` ----
     t2 = {"title": "t", "children": []}
     w2, c2 = [], []
     xwl.apply_ops(t2, [{"op": "set", "path": ["k2"], "value": "v", "create": True}],
@@ -2966,7 +3044,7 @@ def _check_patch_contract(tmp, node, failures, write) -> None:
         f2.append("带 create 却打了新建键预告")
     _ok("5-2", f2, "create:true 放行、created 收集、warned 为空、stdout 不含 [warn] 预告")
 
-    # ---- §5-3 已存在键 + `create:true` ⇒ 不报错、不 `[warn]`（幂等保护）----
+    # ---- 已存在键 + `create:true` ⇒ 不报错、不 `[warn]`（幂等保护）----
     t3 = {"title": "t", "children": []}
     w3: list = []
     xwl.apply_ops(t3, [{"op": "set", "path": ["title"], "value": "t2", "create": True}],
@@ -2985,7 +3063,7 @@ def _check_patch_contract(tmp, node, failures, write) -> None:
         f3.append("已存在键 + create 打了新建键预告")
     _ok("5-3", f3, "已存在键 + create:true ⇒ 不报错、不 [warn]、rc=0（幂等保护）")
 
-    # ---- §5-4 非 `set` op 带 `create` ⇒ rc=2 ----
+    # ---- 非 `set` op 带 `create` ⇒ rc=2 ----
     f4 = []
     for k4, op4 in (
             ("insert", {"op": "insert", "path": ["children"], "value": {"type": "panel"}, "create": True}),
@@ -3005,7 +3083,7 @@ def _check_patch_contract(tmp, node, failures, write) -> None:
         f4.append("非 set 带 create 时 cmd_patch rc=%d（应 2）" % rc4)
     _ok("5-4", f4, "insert/append/delete 带 create ⇒ ValueError + cmd_patch rc=2")
 
-    # ---- §5-5 `insert` 下标越界（正、负各一）⇒ rc=2 ----
+    # ---- `insert` 下标越界（正、负各一）⇒ rc=2 ----
     f5 = []
     for idx5 in (4, -1):
         try:
@@ -3020,7 +3098,7 @@ def _check_patch_contract(tmp, node, failures, write) -> None:
                 f5.append("insert index=%d 报错缺长度/区间：%s" % (idx5, s5))
     _ok("5-5", f5, "insert 下标越界（+4 / -1）⇒ ValueError 含数组长度与合法区间")
 
-    # ---- §5-6 `delete` 越界 ⇒ rc=2；`delete` 缺失键 ⇒ rc=2，且不冒裸异常类型名 ----
+    # ---- `delete` 越界 ⇒ rc=2；`delete` 缺失键 ⇒ rc=2，且不冒裸异常类型名 ----
     f6 = []
     try:
         xwl.apply_ops({"children": [1, 2, 3]}, [{"op": "delete", "path": ["children"], "index": 99}])
@@ -3051,7 +3129,7 @@ def _check_patch_contract(tmp, node, failures, write) -> None:
         f6.append("delete 缺失键冒了 traceback")
     _ok("5-6", f6, "delete 越界 / 缺失键 ⇒ rc=2，报错不冒裸异常类型名、无 traceback")
 
-    # ---- §5-7 `--dry-run` 的 `[new-key]` 与 `[warn]` 分列，且不写盘 ----
+    # ---- `--dry-run` 的 `[new-key]` 与 `[warn]` 分列，且不写盘 ----
     p7 = write("pc_5_7.xwl", _page())
     m7 = _md5(p7)
     rc7, o7 = _patch(p7, "pc_5_7_ops.json",
@@ -3070,7 +3148,7 @@ def _check_patch_contract(tmp, node, failures, write) -> None:
         f7.append("--dry-run 竟然写了盘")
     _ok("5-7", f7, "--dry-run 下 [new-key]（只列带 create）与 [warn]（只列不带 create）分列且不写盘")
 
-    # ---- §5-8 `itemids --suggest` 产出逐条带 create:true，且能原样跑通 patch ----
+    # ---- `itemids --suggest` 产出逐条带 create:true，且能原样跑通 patch ----
     p8 = write("pc_5_8.xwl", _page(children=dup_children))
     rc8, o8 = _run(xwl.cmd_itemids, file=p8, name=None, dups_only=False, suggest=True,
                    fix="auto", controls=None, json=False)
@@ -3096,7 +3174,7 @@ def _check_patch_contract(tmp, node, failures, write) -> None:
                           % (rc8b, o8b))
     _ok("5-8", f8, "itemids --suggest 产出逐条带 create:true 且能原样跑通 patch（rc=0）")
 
-    # ---- §5-9 `itemids --name --json` 产出也带 `create:true` ----
+    # ---- `itemids --name --json` 产出也带 `create:true` ----
     rc9, o9 = _run(xwl.cmd_itemids, file=p8, name="dp", dups_only=False, suggest=False,
                    fix="auto", controls=None, json=True)
     f9 = []
@@ -3113,7 +3191,7 @@ def _check_patch_contract(tmp, node, failures, write) -> None:
                 f9.append("--name --json 候选未带 create:true：%r" % j9)
     _ok("5-9", f9, "itemids --name --json 每条候选带 create:true")
 
-    # ---- §5-10 既有调用不回归（`apply_ops(tree, ops)` 签名兼容 + 已存在键不误报）----
+    # ---- 既有调用不回归（`apply_ops(tree, ops)` 签名兼容 + 已存在键不误报）----
     t10 = {"children": [{"configs": {"itemId": "s", "url": "a"}}]}
     w10: list = []
     xwl.apply_ops(t10, [{"op": "set", "path": ["children", 0, "configs", "url"], "value": "z"}],
@@ -3126,7 +3204,7 @@ def _check_patch_contract(tmp, node, failures, write) -> None:
     _ok("5-10", f10, "既有 apply_ops(tree, ops) 调用不回归（签名兼容 + 已存在键不误报）；"
                      "本文件 586/599/607/620 与 970-987 由前置用例一并覆盖")
 
-    # ---- §5-11 `L1`：真跑且无 --dry-run / --backup ⇒ 恰打一行「没备份」[warn]，rc 不变 ----
+    # ---- 真跑且无 --dry-run / --backup ⇒ 恰打一行「没备份」[warn]，rc 不变 ----
     p11 = write("pc_5_11.xwl", _page())
     rc11, o11 = _patch(p11, "pc_5_11_ops.json", [{"op": "set", "path": ["title"], "value": "t2"}])
     l1 = [ln for ln in o11.splitlines() if "未使用 --backup" in ln]
@@ -3143,9 +3221,9 @@ def _check_patch_contract(tmp, node, failures, write) -> None:
         f11.append("带 --backup 却打了「没备份」[warn]")
     if "未使用 --backup" in oc:
         f11.append("--dry-run 却打了「没备份」[warn]")
-    _ok("5-11", f11, "L1：真跑且无 --dry-run/--backup ⇒ 恰一行「没备份」[warn]，rc 不变")
+    _ok("5-11", f11, "真跑且无 --dry-run/--backup ⇒ 恰一行「没备份」[warn]，rc 不变")
 
-    # ---- §5-12 `K17`：--dry-run 对单行源打一行摘要；多行源仍逐行 diff ----
+    # ---- --dry-run 对单行源打一行摘要；多行源仍逐行 diff ----
     single = ('{"hidden":false,"children":[],"roles":{},"title":"t",'
               '"iconCls":"","inframe":"","pageLink":""}')
     p12s = write("pc_5_12_single.xwl", single)
@@ -3163,9 +3241,9 @@ def _check_patch_contract(tmp, node, failures, write) -> None:
         f12.append("单行源 diff 段落行数 = %d（应 1 = 一行摘要）" % n12s)
     if n12m <= 1:
         f12.append("多行源 diff 段落行数 = %d（应 >1 = 逐行 diff）" % n12m)
-    _ok("5-12", f12, "K17：单行源打一行摘要、多行源仍逐行 diff（判据 = diff 段落行数）")
+    _ok("5-12", f12, "单行源打一行摘要、多行源仍逐行 diff（判据 = diff 段落行数）")
 
-    # ---- §5-13 `set` 末段数组下标越界 ⇒ rc=2（`A-c` 补齐）----
+    # ---- `set` 末段数组下标越界 ⇒ rc=2 ----
     f13 = []
     try:
         xwl.apply_ops({"children": [1, 2, 3]}, [{"op": "set", "path": ["children", 99], "value": 0}])
@@ -3184,21 +3262,21 @@ def _check_patch_contract(tmp, node, failures, write) -> None:
     if rc13 != 2:
         f13.append("cmd_patch rc=%d（应 2）" % rc13)
     if "合法区间" not in o13:
-        f13.append("cmd_patch 报错未走 A-d 模板（缺合法区间）:\n%s" % o13)
-    _ok("5-13", f13, "set 末段数组下标越界 ⇒ ValueError + rc=2，走 A-d 模板（非裸 IndexError）")
+        f13.append("cmd_patch 报错未走 **统一模板**（缺合法区间）:\n%s" % o13)
+    _ok("5-13", f13, "set 末段数组下标越界 ⇒ ValueError + rc=2，走 **统一模板**（非裸 IndexError）")
 
     if pc_fail:
         failures.extend(pc_fail)
 
 
 def _check_bc_contract(tmp, node, failures, write) -> None:
-    """B/C 组「注册键口径 + 换行判据 + K9 + H6 + H11」的**行为断言**（第 27 组）。
+    """B/C 组「注册键口径 + 换行判据 + 整数值浮点保真 + 排版提示具体化 + 注册表来源同句」的**行为断言**（第 27 组）。
 
-    对应施工单 §5-1 … §5-13 与 **§5-15**（逐条行为断言）。**§5-14**（改写 11b）已落在 `_check_itemids`；
-    **§5-16**（K8 行为级调用点守卫）已随 `equivalent` 探针落在本文件上方 —— 两者都不在此重复。
+    逐条行为断言见各节注释；改写相关的已落在 `_check_itemids`；
+    行为级调用点守卫已随 `equivalent` 探针落在本文件上方 —— 两者都不在此重复。
     全部是行为断言：把新行为改回旧行为即红。
     """
-    print("[27] 注册键口径 / 换行判据 / K9 / H6 / H11（行为断言）")
+    print("[27] 注册键口径 / 换行判据 / 整数值浮点 / 排版提示 / 注册表来源（行为断言）")
     bc: list[str] = []
 
     def _ok(label, fails):
@@ -3224,7 +3302,7 @@ def _check_bc_contract(tmp, node, failures, write) -> None:
                 return ln.strip()
         return None
 
-    # ---- §5-1 三类碰撞各一成组（按注册键）----
+    # ---- 三类碰撞各一成组（按注册键）----
     tree1 = {"children": [
         {"type": "panel", "configs": {"itemId": "A"}, "children": []},
         {"type": "panel", "configs": {"itemId": "A"}, "children": []},
@@ -3238,7 +3316,7 @@ def _check_bc_contract(tmp, node, failures, write) -> None:
     f1 = (["三类碰撞未按注册键各成一组，缺 %s（实得 %s）" % (miss1, sorted(keys1))] if miss1 else [])
     _ok("三类碰撞各一成组（同 itemId / normalName 撞 itemId / 两个 normalName 重复）", f1)
 
-    # ---- §5-2 被引用 → error；未被引用 → benign（只两级）----
+    # ---- 被引用 → error；未被引用 → benign（只两级）----
     tree2 = {"children": [
         {"type": "button", "configs": {"itemId": "refd"}, "children": [],
          "events": {"click": "app.refd.setDisabled(true);"}},
@@ -3257,7 +3335,7 @@ def _check_bc_contract(tmp, node, failures, write) -> None:
         f2.append("仍出现 warn 级组（只两级：被引用 error / 未被引用 benign）")
     _ok("被引用 → error / 未被引用 → benign（只两级，全文无 warn 级组）", f2)
 
-    # ---- §5-3 仅 normalName 的节点参与分组 + 空串 normalName 视同缺失（B2）----
+    # ---- 仅 normalName 的节点参与分组 + 空串 normalName 视同缺失 ----
     tree3 = {"children": [
         {"type": "panel", "configs": {"normalName": "only"}, "children": []},
         {"type": "panel", "configs": {"itemId": "only"}, "children": []},
@@ -3272,7 +3350,7 @@ def _check_bc_contract(tmp, node, failures, write) -> None:
         f3.append("空串 normalName 未视同缺失（两个 itemId=z1 的节点未成组）")
     _ok("仅 normalName 的节点参与分组 + 空串 normalName 视同缺失", f3)
 
-    # ---- §5-4 app['名'] 被认成引用（B7）----
+    # ---- app['名'] 被认成引用 ----
     tree4 = {"children": [
         {"type": "panel", "configs": {"itemId": "p1"}, "children": [],
          "events": {"click": "app['p1'].refresh(); app[\"p1\"].focus(); app['a' + b].y();"}},
@@ -3285,7 +3363,7 @@ def _check_bc_contract(tmp, node, failures, write) -> None:
         f4.append("动态键 app['a' + b] 被误认成引用（应不认）")
     _ok("app['名'] / app[\"名\"] 被认成引用；动态键 app['a' + b] 不认", f4)
 
-    # ---- §5-5 三写盘命令对同一输入给出同一 eol（C2）----
+    # ---- 三写盘命令对同一输入给出同一 eol ----
     base_json = json.dumps(_page(), ensure_ascii=False, indent=1)   # LF 多行
     crlf_src = base_json.replace("\n", "\r\n")
     cr_src = base_json.replace("\n", "\r")
@@ -3324,7 +3402,7 @@ def _check_bc_contract(tmp, node, failures, write) -> None:
         f5.append("纯 CR 源上 expand/patch/edit 的产出未保留 CR：%s" % (st_cr,))
     _ok("三写盘命令对同一输入给出同一 eol（CRLF 源 ⇒ 纯 CRLF；纯 CR 源 ⇒ 仍含 CR）", f5)
 
-    # ---- §5-6 三类「不能加载」文案可区分且 rc 不变（C6）----
+    # ---- 三类「不能加载」文案可区分且 rc 不变 ----
     p_e = write("bc6_empty.xwl", "")
     p_t = write("bc6_tpl.xwl", '{"children": [#{x}]}')
     p_b = write("bc6_bad.xwl", '{"children": [')
@@ -3342,7 +3420,7 @@ def _check_bc_contract(tmp, node, failures, write) -> None:
         f6.append("真坏文件未给「加载器等价解析失败」文案")
     _ok("空文件 / 设计器模板 / 真坏：三条文案互不相同且 rc 均 = 1", f6)
 
-    # ---- §5-7 K9 正面：整数值浮点保真写出（rc=0 且往返等价）----
+    # ---- 正面：整数值浮点保真写出（rc=0 且往返等价）----
     f7 = []
     for lit in ("1.0", "0.0"):
         src = '{"a": %s, "children": []}' % lit
@@ -3368,17 +3446,17 @@ def _check_bc_contract(tmp, node, failures, write) -> None:
                     dry_run=False, backup=False, node=None, no_js=True)
     if rc7p != 0:
         f7.append("patch 含 {\"a\": 1.0} 源 ⇒ rc=%d（应 0：往返等价）" % rc7p)
-    _ok("K9 正面：{\"a\":1.0} / {\"a\":0.0} 保真写出且 expand/patch 往返等价（rc=0）", f7)
+    _ok("正面：{\"a\":1.0} / {\"a\":0.0} 保真写出且 expand/patch 往返等价（rc=0）", f7)
 
-    # ---- §5-8 K9 反面：1 与 1.0 仍不相等（守 K8）----
+    # ---- 反面：1 与 1.0 仍不相等（守值类型可区分）----
     f8 = []
     if xwl.equivalent({"a": 1}, {"a": 1.0}):
         f8.append("equivalent 把 1 与 1.0 判成相等（值类型漂移会重新静默通过）")
     if xwl.equivalent({"a": True}, {"a": 1}):
         f8.append("equivalent 把 true 与 1 判成相等")
-    _ok("K9 反面：equivalent 下 1 ≠ 1.0、true ≠ 1（值类型仍可区分）", f8)
+    _ok("反面：equivalent 下 1 ≠ 1.0、true ≠ 1（值类型仍可区分）", f8)
 
-    # ---- §5-9 纯 CR：check rc=0 且有 [warn]、非 FAIL（C1）----
+    # ---- 纯 CR：check rc=0 且有 [warn]、非 FAIL ----
     p_cr = write("bc9_cr.xwl", cr_src)
     rc9, out9 = _run_check([p_cr], node)
     f9 = []
@@ -3390,7 +3468,7 @@ def _check_bc_contract(tmp, node, failures, write) -> None:
         f9.append("纯 CR 源被误判成 ② 换行混用")
     _ok("纯 CR：check rc=0 且有 [warn]、不含该文件的 ② FAIL", f9)
 
-    # ---- §5-10 CR 占多数的混合源产出不得是 CR（C2 两层规则）----
+    # ---- CR 占多数的混合源产出不得是 CR（两层规则）----
     f10 = []
     if xwl.pick_eol_for_auto("a\rb\rc\rd\r\ne\n") != "crlf":
         f10.append("CR 占多数的混合源未按「只在 CRLF/LF 取多数」返回（得 %r）"
@@ -3405,7 +3483,7 @@ def _check_bc_contract(tmp, node, failures, write) -> None:
         f10.append("无换行源应回退 lf")
     _ok("pick_eol_for_auto：CR 占多数 ⇒ 取 CRLF/LF（绝不 cr）；等量取 CRLF；纯 CR 沿用 cr", f10)
 
-    # ---- §5-11 H11：itemids / params / check ⑦ 打印同一句注册表来源 ----
+    # ---- itemids / params / check ⑦ 打印同一句注册表来源 ----
     p11 = write("bc11.xwl", json.dumps(_page(), ensure_ascii=False, indent=1))
     _ri, out_i = _run(xwl.cmd_itemids, file=p11, controls=None, name=None, suggest=False,
                       fix="auto", json=False, dups_only=False)
@@ -3423,9 +3501,9 @@ def _check_bc_contract(tmp, node, failures, write) -> None:
         f11.append("三命令的注册表来源行不逐字一致：%r / %r / %r" % (li, lp, lc))
     if li and li != xwl.controls_source_line(None):
         f11.append("来源行与 controls_source_line(None) 不一致：%r" % li)
-    _ok("H11：itemids / params / check ⑦ 打印同一句注册表来源（含「未找到」分支）", f11)
+    _ok("itemids / params / check ⑦ 打印同一句注册表来源（含「未找到」分支）", f11)
 
-    # ---- §5-12 B4：--json 只增字段（name = 注册键）----
+    # ---- --json 只增字段（name = 注册键）----
     p12 = write("bc12.xwl", json.dumps(_page(children=[
         {"type": "button", "configs": {"itemId": "iA"}, "children": [],
          "events": {"click": "app.iA.setDisabled(true);"}},
@@ -3457,9 +3535,9 @@ def _check_bc_contract(tmp, node, failures, write) -> None:
             f12.append("--name --json 的 node 项缺 itemId 字段")
     except Exception as exc:  # noqa: BLE001
         f12.append("--name --json 输出不是 JSON：%s" % exc)
-    _ok("B4：--json 组项含 itemIds/registryName 且 name=注册键；--name --json 的 node 项含 itemId", f12)
+    _ok("--json 组项含 itemIds/registryName 且 name=注册键；--name --json 的 node 项含 itemId", f12)
 
-    # ---- §5-13 H6：patch / expand 的具体化提示（三类计数）----
+    # ---- patch / expand 的具体化提示（三类计数）----
     noncanon = json.dumps(_page(), ensure_ascii=False, indent=4)   # 缩进 4 ≠ 设计器 1 ⇒ 非原样
     pe13 = write("bc13_expand.xwl", noncanon)
     _re13, out_e13 = _run(xwl.cmd_expand, file=pe13, eol="auto", indent=1, safe=False,
@@ -3478,9 +3556,9 @@ def _check_bc_contract(tmp, node, failures, write) -> None:
             f13.append("%s 未给「缩进 N 处 / \\uXXXX 转义 N 处 / 数字形态 N 处」具体化提示" % who)
         elif int(m.group(1)) <= 0:
             f13.append("%s 的缩进计数为 0（非原样排版样本应 > 0）" % who)
-    _ok("H6：patch / expand 对非原样源给出三类改写计数（缩进 / \\uXXXX 转义 / 数字形态）", f13)
+    _ok("patch / expand 对非原样源给出三类改写计数（缩进 / \\uXXXX 转义 / 数字形态）", f13)
 
-    # ---- §5-15（施工单）F14 同源：params 侧与 itemids 侧对 app.<名> / app['名'] 的容器名认定逐名一致 ----
+    # ---- 同源：params 侧与 itemids 侧对 app.<名> / app['名'] 的容器名认定逐名一致 ----
     # 注入判据：把 `_app_refs_in` 改回只 `_APP_REF_BARE`（丢掉 app['名']）⇒ 本条**必须转红**。
     # 样本含三种写法：app['p1'] + app.p2 + app.get('p3')（都写成 transfer 形态，
     # 否则 `find_transfers` 只在 `out:` / `params=` 之后扫表达式，扫不到）。
@@ -3513,9 +3591,9 @@ def _check_bc_contract(tmp, node, failures, write) -> None:
         f15.append("params 侧与 itemids 侧对 app['名'] / app.<名> 的容器名不逐名一致："
                    "itemids=%s params=%s（差集 %s）"
                    % (sorted(ids15_shared), sorted(pm15), sorted(ids15_shared ^ pm15)))
-    _ok("F14：params 侧与 itemids 侧对 app['名'] / app.<名> 的容器名认定逐名一致", f15)
+    _ok("params 侧与 itemids 侧对 app['名'] / app.<名> 的容器名认定逐名一致", f15)
 
-    # ---- §5-17 SITE1 回归：只以 `app._X` 形式被引用的重名组也必须判 error（欠报修复）----
+    # ---- 回归：只以 `app._X` 形式被引用的重名组也必须判 error（欠报修复）----
     # 注入判据：把 `audit_itemids` 的 `referenced = (name in refs_all) or ("_" + name in refs_all)`
     #   改回 `referenced = name in refs_all` ⇒ 本条**必须转红**（该组退回 benign、check rc 变 0）。
     # 删掉本条 ⇒ `app._X` 这种引用写法导致的欠报会静默回归（⑦ 假绿）。
@@ -3531,9 +3609,9 @@ def _check_bc_contract(tmp, node, failures, write) -> None:
     if "⑦" not in out17 or "被事件 JS 引用" not in out17:
         f17.append("check 未打「⑦ … 被事件 JS 引用」：%s"
                    % " | ".join(ln.strip() for ln in out17.splitlines() if "⑦" in ln))
-    _ok("SITE1：只以 `app._w` 引用的重名组判 error（check FAIL / rc≠0）", f17)
+    _ok("只以 `app._w` 引用的重名组判 error（check FAIL / rc≠0）", f17)
 
-    # ---- §5-18 SITE2 回归：params 按**注册键**找容器（假「找不到容器」修复）----
+    # ---- 回归：params 按**注册键**找容器（假「找不到容器」修复）----
     # 注入判据：把 `cmd_params` 的 `locs = [(h[5], h[6]) for h in itemid_hits(obj, a, by="registry")]`
     #   改回 `locs = _find_all_by_itemid(obj, a)`（丢掉按注册键那一支）⇒ 本条**必须转红**。
     # 删掉本条 ⇒ 同页多 toolbar 共用 itemId、靠 normalName 区分时，params 会再假报「找不到容器」。
@@ -3555,7 +3633,7 @@ def _check_bc_contract(tmp, node, failures, write) -> None:
                    % " | ".join(ln.strip() for ln in out18.splitlines() if "找不到" in ln)[:200])
     if "app.tbrO" not in out18 or "容器内取值控件" not in out18:
         f18.append("params 未把 app.tbrO 当容器列出并给容器内取值控件")
-    _ok("SITE2：params 按**注册键**找容器（normalName=tbrO 的 toolbar 命中、无假「找不到容器」）", f18)
+    _ok("params 按**注册键**找容器（normalName=tbrO 的 toolbar 命中、无假「找不到容器」）", f18)
 
     if bc:
         failures.extend(bc)

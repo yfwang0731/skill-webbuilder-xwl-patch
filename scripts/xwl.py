@@ -347,7 +347,7 @@ def _quote(s: str) -> str:
 
 
 def _number(v) -> str:
-    """复刻 org.json 的 numberToString —— **但整数值浮点保真写出 `.0`**（K9）。
+    """复刻 org.json 的 numberToString —— **但整数值浮点保真写出 `.0`**。
 
     与老版 org.json 的唯一差异：它把 `1.0` 写成 `1`（走 longValue），那会让
     `equivalent(parse_xwl(dumps(obj)), obj)` 判**不一致**（写回后值类型从 float 漂成 int）。
@@ -361,11 +361,11 @@ def _number(v) -> str:
         return str(v)
     if isinstance(v, float) and v == 0 and str(v).startswith("-"):
         # 负零：**保留 `-0.0`**（不可折叠成 `-0`/`0`）。虽与下面的 float 分支同效，
-        # 但单列出来是为了钉住这条"不可折叠"的语义（与 K9 的 `0.0` 同型参照）。
+        # 但单列出来是为了钉住这条"不可折叠"的语义（与 `0.0` 保真写出的情形同型参照）。
         return "-0.0"
     if isinstance(v, float):
         # repr(float) 天然给出最短的、能唯一读回该值的十进制写法（`1.0` → `"1.0"`、
-        # `0.25` → `"0.25"`、`1e20` → `"1e+20"`）；**不再 rstrip 掉 `.0`** —— 那正是 K9 的病灶。
+        # `0.25` → `"0.25"`、`1e20` → `"1e+20"`）；**不再 rstrip 掉 `.0`** —— 那正是**整数值浮点丢掉 `.0`** 的病灶。
         return repr(v)
     return repr(v)
 
@@ -445,7 +445,7 @@ def _reline_string_token(tok: str, eol: str) -> str:
 def equivalent(a, b) -> bool:
     """**规范化文本**等价判据 —— 比 `==` 严，用来替掉三处写盘前的等价比对。
 
-    为什么不能用 `==`（K8）：Python 的 `==` 把 `1`/`1.0`/`True` 视为相等、把 `0`/`-0.0` 视为相等，
+    为什么不能用 `==`：Python 的 `==` 把 `1`/`1.0`/`True` 视为相等、把 `0`/`-0.0` 视为相等，
     并且**完全忽略 dict 的键序** ⇒ ① 值的**类型漂移**（float↔int、bool↔int）发现不了；
     ② **键序写错发现不了** —— 而"键序与设计器一致"正是本工具的核心卖点
     （`references/anti-patterns.md` 明写"键序写错，产出即与设计器不一致"）。
@@ -855,7 +855,7 @@ def cmd_check(args) -> int:
         if obj is not None and not no_itemid:
             ctl_c = discover_controls(path)
             rep = audit_itemids(obj, controls_path=ctl_c)
-            # H11：注册表来源 —— 与 `itemids` / `params` 逐字同一句（三处复用 controls_source_line）
+            # 注册表来源 —— 与 `itemids` / `params` 逐字同一句（三处复用 controls_source_line）
             print("  " + controls_source_line(ctl_c))
             for m in rep["errors"]:
                 errors.append(f"⑦ {m}")
@@ -1031,11 +1031,11 @@ def cmd_expand(args) -> int:
     print(f"原文件: {_byte_len(text)} B, CRLF={n_crlf}, 裸LF={bare_lf}, 裸CR={bare_cr}")
     print(f"规范化后: {_byte_len(out)} B, 换行={eol_name(eol)}"
           f"{', 安全模式(--safe)' if args.safe else ''}")
-    # C4：换行混用必须报（与 patch / edit 对齐）—— 重排会把整份统一成一种。
+    # 换行混用必须报（与 patch / edit 对齐）—— 重排会把整份统一成一种。
     if len(styles) > 1:
         print(f"[warn] 源文件换行混用（{n_crlf} 个 CRLF + {bare_lf} 个裸 LF + {bare_cr} 个裸 CR，"
               f"见 `check` 第 ② 项）：重排后整份统一为 {eol_name(eol)}，diff 会含换行差异")
-    # H6：把「非原样排版」具体化（只提示、不改行为）—— 三类改写各给一个整数处数。
+    # 把「非原样排版」具体化（只提示、不改行为）—— 三类改写各给一个整数处数。
     if out != text and ANY_EOL_RE.search(text):
         _ci, _cu, _cn = rewrite_counts(text, out)
         print("[note] 本次还会顺带改写：缩进 %d 处 / \\uXXXX 转义 %d 处 / 数字形态 %d 处 "
@@ -1090,7 +1090,7 @@ _IID_JS_IDENT_RE = re.compile(r"^[A-Za-z_$][\w$]*$")
 _IID_INDEX_RE = re.compile(r"^(?P<name>.+)#(?P<idx>\d+)$")
 _APP_REF_BARE = re.compile(r"\bapp\.([A-Za-z_$][\w$]*)")
 _APP_REF_GET = re.compile(r"""app\.get\(\s*['"]([^'"]+)['"]""")
-# `app['名']` / `app["名"]`（B7）—— **要求闭合 `]`**：键内不许出现引号/加号/模板串，
+# `app['名']` / `app["名"]` —— **要求闭合 `]`**：键内不许出现引号/加号/模板串，
 # 故 `app['a' + b]`（动态）、`app[`x`]`（模板）**都不认**（它们本就不是静态可判的引用）。
 _APP_REF_BRACKET = re.compile(r"""app\[\s*['"]([^'"]+)['"]\s*\]""")
 # `app.<名字>` 里属于方法/框架成员而非「控件名（注册键）」的名字 —— 统计引用时排除
@@ -1136,7 +1136,7 @@ def discover_controls(start_file: str) -> str | None:
 
 
 def controls_source_line(ctl: str | None) -> str:
-    """注册表来源提示 —— **`itemids` / `params` / `check ⑦` 三处复用同一句**（H11）。
+    """注册表来源提示 —— **`itemids` / `params` / `check ⑦` 三处复用同一句**。
 
     只改一处会让三个入口的措辞漂移（A 组同款陷阱），所以做成一个函数、逐字复用。
     未找到分支：`控件注册表: 未找到（normalName 白名单 = 注册表 ∪ 内置兜底）`。
@@ -1490,10 +1490,10 @@ def _fmt_keypath(path) -> str:
 
 
 def _is_new_object_key(parent, key) -> bool:
-    """末段是不是「一个尚不存在的对象键」（`A-a` 粒度）。
+    """末段是不是「一个尚不存在的对象键」（按**末段单键**粒度）。
 
     **仅当容器是 dict 且该键缺失**才算新建键；末段是数组下标（容器是 list）**不算** ——
-    那走 `A-c` 的越界判据（加数组元素用 append/insert，本就不是「新建键」）。
+    那走**末段数组下标越界**的判据（加数组元素用 append/insert，本就不是「新建键」）。
     """
     return isinstance(parent, dict) and key not in parent
 
@@ -1521,7 +1521,7 @@ def apply_ops(obj, ops, created=None, warned=None):
       · `warned` ：**不带** `create` 的新建键（本版仍放行，调用方据此打 `[warn]` 预告）。
     两者都是**向后兼容的可选关键字**，既有 `apply_ops(obj, ops)` 调用不受影响。
 
-    越界 / 缺失键等用法错误统一抛 `ValueError`，文案走 `A-d` 模板
+    越界 / 缺失键等用法错误统一抛 `ValueError`，文案走**统一模板**
     （`第 K 个 op（<kind>）：<现象> —— <可能原因>；用 paths / dump 核对 path`），**不冒裸异常类型名**。
     """
     for i, op in enumerate(ops, 1):
@@ -1603,7 +1603,7 @@ def audit_itemids(obj, js_refs=None, controls_path=None) -> dict:
     判据：
       ① 分组键 = **注册键** `normalName || itemId`（normalName 优先、空串视同缺失）——
          各自有唯一 normalName 的同名节点**天然分到不同组**（不再需要"豁免"）。
-      ② 节点集纳入「只有 normalName、没有 itemId」的节点（B2）。
+      ② 节点集纳入「只有 normalName、没有 itemId」的节点。
       ③ 组内 ≥2：该注册键**已被事件 JS 引用 → error**；未被引用 → **benign**（`warn` 级已取消）。
 
     返回 dict：nodes / js_refs / groups / errors / warns / n_benign
@@ -1615,7 +1615,7 @@ def audit_itemids(obj, js_refs=None, controls_path=None) -> dict:
     refs_all = js_refs_of(obj, filtered=False)
     nodes = [(n, t, cfg, p, anc) for n, t, cfg, p, anc, _c, _k in _iter_controls(obj)
              if registry_key(cfg) is not None]
-    # 去重集合 = 全文件所有 `itemId` ∪ 所有非空 `normalName`（B3：`taken` 换口径）
+    # 去重集合 = 全文件所有 `itemId` ∪ 所有非空 `normalName`（`taken` 换口径）
     taken_all: set = set()
     for _n, _t, _cfg, _p, _a in nodes:
         for _v in (_cfg.get("itemId"), _cfg.get("normalName")):
@@ -1679,7 +1679,7 @@ def audit_itemids(obj, js_refs=None, controls_path=None) -> dict:
                                "type_ok": t in nn_ty,
                                "path": p + ["configs", "normalName"]})
         # 修法 B：改 `itemId`（#1 保持原名，动 #2 起；须同步改 JS 里的引用）
-        # `taken` = 全文件所有 `itemId` ∪ 所有非空 `normalName` ∪ 本组已建议值（B3）
+        # `taken` = 全文件所有 `itemId` ∪ 所有非空 `normalName` ∪ 本组已建议值
         taken = set(taken_all)
         fix_id = []
         for i, (n, t, cfg, p, anc) in enumerate(items):
@@ -1919,7 +1919,7 @@ def cmd_patch(args) -> int:
     print(f"源文件: {_byte_len(text)} B | 换行={eol_name(eol)}{eol_note} | "
           f"是否设计器原样排版: {'是（重排后与原文逐字节一致，diff 只含本次改动）' if canonical else '否（重排会顺带规整格式）'}")
     if not canonical:
-        # H6：把「非原样排版」具体化 —— 三类改写各给一个整数处数（只提示、不改行为）。
+        # 把「非原样排版」具体化 —— 三类改写各给一个整数处数（只提示、不改行为）。
         _ci, _cu, _cn = rewrite_counts(text, _out0)
         print("[note] 本次还会顺带改写：缩进 %d 处 / \\uXXXX 转义 %d 处 / 数字形态 %d 处 "
               "—— 都无语义影响；建议先 --dry-run 看 diff" % (_ci, _cu, _cn))
@@ -1976,7 +1976,7 @@ def cmd_patch(args) -> int:
     if args.dry_run:
         import difflib
         if not text.count("\n"):
-            # K17：单行源整份就一行，逐行截断 diff 只会打出一行被截断 200 字符的长串（无信息量）
+            # 单行源整份就一行，逐行截断 diff 只会打出一行被截断 200 字符的长串（无信息量）
             # ⇒ 改打**一行摘要**，跳过逐行 diff（判据 = stdout 里 diff 段落行数）。
             print("  （单行源：整份重排为多行，diff = 整个文件）")
         else:
@@ -1992,7 +1992,7 @@ def cmd_patch(args) -> int:
                     print("  ...（略）")
                     break
         if created:
-            # A2：只列**带 create** 的新建键；不带 create 的那类走上面的 `[warn]` 预告（两条不混）。
+            # 只列**带 create** 的新建键；不带 create 的那类走上面的 `[warn]` 预告（两条不混）。
             print('[new-key] 本次将新建 %d 个键（带 "create": true）：%s'
                   % (len(created), ", ".join(created)))
         print("[dry-run] 未写入")
@@ -2003,7 +2003,7 @@ def cmd_patch(args) -> int:
         write_bytes(bak, read_bytes(args.file))
         print(f"备份 -> {bak}")
     else:
-        # L1：真跑到写盘却没让工具备份 ⇒ 只提醒一句（**只加输出，不改 rc、不改用法**）。
+        # 真跑到写盘却没让工具备份 ⇒ 只提醒一句（**只加输出，不改 rc、不改用法**）。
         print("[warn] 未使用 --backup：本次已直接写盘，出错请用 git checkout -- 回退（建议先 --dry-run 看 diff）")
     write_text(args.file, out)
     print(f"已写入: {args.file}")
@@ -3013,7 +3013,7 @@ _OUT_KEY_RE = re.compile(r"\bout\s*:")
 _PARAMS_KEY_RE = re.compile(r"\bparams\s*:")
 _GETVALUE_RE = re.compile(r"Wb\.getValue\s*\(")
 # ⚠️ app-ref 正则**不在本段另立副本** —— 直接用 `js_refs_of` 侧共享的
-#   `_APP_REF_BARE` / `_APP_REF_GET` / `_APP_REF_BRACKET`（F14 同源化）。
+#   `_APP_REF_BARE` / `_APP_REF_GET` / `_APP_REF_BRACKET`（同源化：三处复用同一批符号）。
 #   曾因这里各存一份，导致 `app['名']` 在 `params` 下认不出、与 `itemids` 判定漂移。
 _OBJ_KEY_RE = re.compile(r"([A-Za-z_$][\w$]*)\s*:")
 _REQ_URL_RE = re.compile(r"url\s*:\s*['\"]([^'\"]*m\?xwl=[^'\"]*)['\"]")
@@ -3161,7 +3161,7 @@ def obj_keys(inner: str) -> list[str]:
 def _app_refs_in(expr: str) -> list:
     """从一段 JS 表达式里取所有 `app.<名>` / `app['名']` 引用（**与 `js_refs_of` 同源**）。
 
-    F14：`params` 侧不再自带正则副本 —— 复用 `js_refs_of` 用的同一批符号，保证
+    `params` 侧不再自带正则副本 —— 复用 `js_refs_of` 用的同一批符号，保证
     「`params` 认定被引用的容器」与「`itemids` 认定被引用」对 `app['名']` 的判断一致。
     """
     return _APP_REF_BARE.findall(expr) + _APP_REF_BRACKET.findall(expr)
@@ -3263,7 +3263,7 @@ def cmd_params(args) -> int:
     print(f"页面: {args.file}")
     print(f"模块根: {root or '（未找到 modules 目录，请用 --module-root 指定）'}")
     print(f"取值控件类型（{len(field_set)} 种）: {', '.join(field_set)}")
-    # H11：注册表来源 —— 与 `itemids` / `check ⑦` 逐字同一句（三处复用 controls_source_line）
+    # 注册表来源 —— 与 `itemids` / `check ⑦` 逐字同一句（三处复用 controls_source_line）
     print(controls_source_line(getattr(args, "controls", None)))
 
     stores: list[dict] = []
@@ -3348,7 +3348,7 @@ def cmd_params(args) -> int:
             print(head + f"显式参数名 {keys}")
         print(f"      {'':16s} 原始: {raw[:150]}")
 
-    # ---- D-a′：把 **store 自身 `configs.params`** 的键并入 `provided` ----
+    # ---- 把 **store 自身 `configs.params`** 的键并入 `provided` ----
     # 嵌入点必须在传参点循环**之后**、`miss` **之前**：否则输出自相矛盾 ——
     # 上面那行写着"自身params配置(优先级最高)"，下面却说"未发现来源"。
     # 形态实测（全量 32519 个 store）：缺失 22755 / **对象字面量字符串** 9752 /
@@ -3367,7 +3367,7 @@ def cmd_params(args) -> int:
             ignored_store_params.append((cfg.get("itemId"), s))
     provided |= store_keys
 
-    # ---- D-c′：`needed` **按来源分桶** ----
+    # ---- `needed` **按来源分桶** ----
     # 两个来源若合并成一个 set，来源信息在合并那一刻就丢了，"单列展示"做不出来。
     # `need_req` = **请求级参数**：`serverScript` 的 `{?名?}` 与 `app.get(名)` ——
     # 框架 `Query.java` 一律 `WebUtil.fetchObject(request, paraName)`，值都从 request 取，
