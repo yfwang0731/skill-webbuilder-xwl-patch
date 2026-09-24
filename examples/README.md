@@ -89,7 +89,7 @@ p = pathlib.Path("page.xwl")
 p.write_text(re.sub(r"\\\r?\n", "", p.read_text(encoding="utf-8")), encoding="utf-8")
 EOF
 
-python <本 skill>/scripts/xwl.py check page.xwl          # ← 七项全绿：格式校验查不出来
+python <本 skill>/scripts/xwl.py check page.xwl          # ← 八项全绿：格式校验查不出来
 python <本 skill>/scripts/xwl.py diffguard page.xwl      # ← [warn] 疑似压平，并给出被合并的基线行号
 python <本 skill>/scripts/xwl.py diffguard page.xwl --strict   # ← rc=1，可接进 CI
 ```

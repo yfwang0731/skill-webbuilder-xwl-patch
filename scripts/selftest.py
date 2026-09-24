@@ -247,6 +247,68 @@ def _check_basics(tmp, node, failures, write) -> None:
     else:
         print("[ok]  反面：equivalent 仍严（1≠1.0 / true≠1 / 键序不同）")
 
+    # ---- 2c. 第 ⑧ 维「加载链完整性」：**只提示、不进 rc**（五条 fixture） ----
+    # 起因：⑧ 判据来自框架 `XwlBuffer` 的取键方式（`children` 取 getJSONArray、
+    #   `children[0].configs` 与 `roles` 取 getJSONObject —— 缺失/类型不符即抛）⇒ 文件能被 ④ 解析、
+    #   页面却在加载期打不开。官方定位「防手写 / 半成品」、实测数万样本 0 违规 ⇒ 必须**只 warn、不改 rc**。
+    #   不钉住就会被后来的改动"接进 rc"（工具比框架严、CI 恒红）或被整段删掉。
+    # 反例（注入即红）：把 ⑧ 的结果并进 `failed` ⇒ check 对下面样本 rc≠0 ⇒ 本条红。
+    chain_cases = [
+        ("children 非数组", '{"children":"x","roles":{}}', "children 不是数组"),
+        ("children 缺失", '{"roles":{}}', "children 缺失"),
+        ("children 空", '{"children":[],"roles":{}}', "children 为空数组"),
+        ("roles 缺失", '{"children":[{"configs":{}}]}', "roles 缺失"),
+        ("children[0].configs 缺失", '{"children":[{"type":"panel"}],"roles":{}}',
+         "children[0].configs 缺失"),
+    ]
+    for _ci, (_cname, _csrc, _ckw) in enumerate(chain_cases):
+        _cp = write("chain_%d.xwl" % _ci, _csrc)
+        _crc, _cout = _run_check([_cp], node)
+        _cwarn = [ln for ln in _cout.splitlines() if ln.strip().startswith("[warn] ⑧")]
+        if _crc != 0:
+            failures.append("⑧ 违规样本「%s」把 check 判成 rc=%d —— ⑧ 只该 warn、不进 rc:\n%s"
+                            % (_cname, _crc, _cout))
+        elif not any(_ckw in ln for ln in _cwarn):
+            failures.append("⑧ 违规样本「%s」未打 `[warn] ⑧ …%s…`:\n%s" % (_cname, _ckw, _cout))
+        else:
+            print("[ok]  ⑧ 违规样本「%s」：只 warn、rc=0" % _cname)
+
+    # ---- 2d. ⑧ 的三形态：无异常 / 有违规 / 因解析失败跳过（各出现一次） ----
+    # 起因：⑧ 是"恒留一行"，用户与文档都靠这三行确认它跑没跑；删掉任一形态的打印行，本条必须红。
+    _f_ok = write("chain_ok.xwl", '{"children":[{"configs":{}}],"roles":{}}')
+    _f_bad = write("chain_bad.xwl", '{"children":"x","roles":{}}')
+    _f_skip = write("chain_skip.xwl", '{"children": [')
+    _ro, _oo = _run_check([_f_ok], node)
+    _rb, _ob = _run_check([_f_bad], node)
+    _rs, _os2 = _run_check([_f_skip], node)
+    _want = {
+        "[note] ⑧ 加载链完整性：无异常": _oo,
+        "[warn] ⑧ 加载链完整性：": _ob,
+        "[note] ⑧ 加载链完整性：因解析失败跳过": _os2,
+    }
+    _missing = [k for k, v in _want.items() if k not in v]
+    if _missing or (_ro, _rb, _rs) != (0, 0, 1):
+        failures.append("⑧ 三形态不齐（缺 %s）或 rc 不对（%s/%s/%s）"
+                        % (_missing, _ro, _rb, _rs))
+    else:
+        print("[ok]  ⑧ 三形态各一：无异常 / 有违规 / 因解析失败跳过")
+
+    # ---- 2e. 「写盘后自检不纳入 ⑧」：patch 对 ⑧-违规样本仍 rc=0 且输出无 ⑧ ----
+    # 起因：⑧ 只该在 `check` 出现；若漏进 `_post_check`（`checks` 未去 8），写盘会多打一行 ⑧、
+    #   甚至被误接进 rc。注入面 = `_post_check` 的 `checks` 里带上 8 ⇒ 本条**期望红**。
+    _pc = write("chain_patch.xwl", '{"hidden":false,"children":"x","roles":{},"title":"t"}')
+    _pc_ops = os.path.join(tmp, "chain_ops.json")
+    with open(_pc_ops, "w", encoding="utf-8") as _fh:
+        json.dump([{"op": "set", "path": ["title"], "value": "t2"}], _fh)
+    _prc, _pout = _run(xwl.cmd_patch, file=_pc, ops=_pc_ops, indent=1, eol="auto",
+                       dry_run=False, backup=False, node=None, no_js=True)
+    if _prc != 0:
+        failures.append("patch 对 ⑧-违规样本 rc=%d（应 0：⑧ 不进写盘后自检）:\n%s" % (_prc, _pout))
+    elif "⑧" in _pout:
+        failures.append("patch 的写盘后自检里出现了 ⑧ 行（⑧ 应只在 check 出现）:\n%s" % _pout)
+    else:
+        print("[ok]  写盘后自检不纳入 ⑧：patch 对 ⑧-违规样本 rc=0 且无 ⑧ 行")
+
     # ---- 3. edit：锚点不唯一必须拒绝且不落盘 ----
     # 起因：锚点不唯一时若照改或静默跳过，都会改错对象却不报错 —— 文件已被写坏，用户却以为成功。
     p = write("edit.xwl", VALID)

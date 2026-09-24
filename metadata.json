@@ -3,12 +3,12 @@
   "name_en": "webbuilder-xwl-patch",
   "displayName": "webbuilder-xwl-patch",
   "author": "yfwang0731",
-  "version": "1.4.1",
+  "version": "1.4.2",
   "schema_version": "1.0",
   "description": "WebBuilder（wb）平台 .xwl 定义文件的处理与安全编辑：结构级 patch（只给值 / 子树，工具按设计器自己的算法重建整份文件）+ 格式校验 + 相对 git 基线的压平检测。",
   "core_capabilities": [
     "结构级 patch 编辑（不碰文本层，格式错误在构造上不会发生）",
-    "check 七项校验（BOM / 换行一致 / 续行空白 / 加载器等价解析 / 末行结构 / 事件 JS 语法 / 注册键重名分级）",
+    "check 八项校验（7 项判定：BOM / 换行一致 / 续行空白 / 加载器等价解析 / 末行结构 / 事件 JS 语法 / 注册键重名分级 ＋ 1 项只提示：加载链完整性）",
     "从零新建页面与 SQL 载体（内置设计器真实键序骨架）",
     "注册键重名分级报告（候选清单 + 建议改名）",
     "SQL 片段自洽核对与页面传参链路核对（sqlrefs / params）",
@@ -81,6 +81,7 @@
     "references/workflow-notes.md"
   ],
   "update_history": [
+    { "version": "1.4.2", "date": "2026-09-24", "summary": "判据修正／输出新增版（patch）：check 新增第 ⑧ 维「加载链完整性」（只提示、不进退出码）—— 判据对齐框架的取键方式（children 须存在＋数组＋非空、children[0].configs 与 roles 须存在＋对象；框架这几处缺失即抛 / 类型不符即抛）⇒ 这类文件能被 ④ 解析、页面却在加载期打不开，定位「防手写 / 半成品」；⑧ 违规只打 [warn] ⑧ 加载链完整性：…（逐条含键名与期望类型）、check 退出码仍 0（不阻塞、不让 CI / pre-commit 变红），恒留一行、三形态定死（无异常 / [warn] / 因解析失败跳过——其 rc=1 是 ④ 给的）；patch / edit / expand 写盘后的自动校验不纳入 ⑧（与 ⑥⑦ 同口径：写盘后只判 ①–⑥）；对外能力不变（子命令总数仍 15、无新参数、无新子命令）、①–⑤ 判定面未动、无变严项" },
     { "version": "1.4.1", "date": "2026-09-24", "summary": "判据修正版（patch）：读入面放宽 —— 所有读盘路径统一接受带尾随逗号的 .xwl（对齐框架加载器 org.json 的宽容面；parse_xwl 是所有读盘路径的唯一入口，故 check / patch / expand / edit / dump / params / sqlrefs 同源放宽；只放宽「读入」、不代表尾随逗号是合法 JSON，写盘会把它归一掉），并修 diffguard 精确命中在工作区该行带尾随空白时报出行号 0 的问题（改报真实物理行号）；对外能力不变（子命令总数仍 15、无新参数、无新子命令）、无变严项" },
     { "version": "1.4.0", "date": "2026-09-23", "summary": "params 新增两个参数：--upstream（默认关，在 --module-root 内单根全扫上游调用方与传入键，末尾新增独立分组 [外部可传入] 与一行载入侧汇总——节点级三分类「同根命中 / 本根未找到 / 非 m?xwl 的 url」＋出现级「动态写法 / 非 m?xwl 字面量」、两种量纲分开标、只认字面量键、out: app.<容器> 与运行时拼接 url 只计数、不并入 provided 不改退出码）与 --strict（本版与默认同效，为下一版默认退出码翻转预留）；params 缺来源时新增一行 [note] 留痕（有 miss 的页面输出比旧版多一行、无 miss 的页面逐字不变）；folders 结论行改报 index 悬空项（「未登记」移出结论行、只进明细）；子命令总数仍 15、无新子命令" },
     { "version": "1.3.5", "date": "2026-09-21", "summary": "重名口径改为按注册键（normalName 优先、回退 itemId）分组、分级只两级（被事件 JS 引用 error / 未被引用 benign，取消 warn 级）、节点集纳入只有 normalName 的节点、js_refs_of 增认 app['名']、params 侧 app-ref 提取与 js_refs_of 同源；check ② 改「风格集合」判据（混用 FAIL、纯 CR 降 warn）、patch/expand/edit 共用两层 eol 规则（新建 detect_eol / pick_eol_for_auto、含纯 CR 沿用）、非原样排版提示具体化三类改写计数、params 与 check ⑦ 也打印注册表来源；_number 保真写出整数值浮点（含 0.0）⇒ expand/patch 对整数值浮点样本由 rc=2 改为 rc=0；check ④ 把空文件 / 设计器模板 / 真坏三类文案分开" },

@@ -2,7 +2,7 @@
 name: webbuilder-xwl-patch
 slug: skill-webbuilder-xwl-patch
 displayName: webbuilder-xwl-patch
-version: 1.4.1
+version: 1.4.2
 license: MIT
 metadata:
   category: development-tools
@@ -349,8 +349,10 @@ python scripts/xwl.py edit <file.xwl> --old-file old.txt --new-file new.txt --ex
 
 ### 第 4 步 · 格式校验（**改完必跑**）
 
-七项 = **格式五项 ①–⑤**（无 BOM / 换行一致 / 无「反斜杠 + 空白」行 / **加载器等价解析** /
-末行结构）+ **⑥ 事件 JS 语法**（提取后交 `node` 校验）+ **⑦ 注册键重名分级**。逐项判据与报错处置见
+`check` 共 **八项** = **7 项判定 ＋ 1 项只提示**。7 项判定 = **格式五项 ①–⑤**（无 BOM / 换行一致 / 无「反斜杠 + 空白」行 /
+**加载器等价解析** / 末行结构）+ **⑥ 事件 JS 语法**（提取后交 `node` 校验）+ **⑦ 注册键重名分级**；
+**第 ⑧ 维「加载链完整性」只提示、不进 rc**（判据对齐框架取键方式：`children` 须是**非空数组**、
+`children[0].configs` 与 `roles` 须是**对象**，否则文件能被 ④ 解析、页面却在加载期抛）。逐项判据与报错处置见
 [`references/faq.md`](references/faq.md)；不通过时先用 `--backup` 的 `<file>.bak` 回退再排查。
 
 ```bash
@@ -365,11 +367,12 @@ python scripts/xwl.py check <file.xwl> --no-itemid          # 跳过注册键重
 - **⑦ 的 `[FAIL]` 与 ①–⑥ 性质不同** —— ①–⑤ 是**格式**（文件坏了）、⑥ 是**事件 JS 语法**，⑦ 是**命名质量**
   （文件能用但取值有风险）。所以 `patch` / `edit` / `expand` **写盘后的自动校验只判 ①–⑥**，
   否则会出现"写盘成功却返回非 0"。要看 ⑦ 请单独跑 `check`，或直接 `itemids`。
+- **第 ⑧ 维是"只提示"**：加载链完整性有问题（如 `children` 不是数组）时只打 `[warn] ⑧ 加载链完整性：…`，**不影响退出码**；正常打 `[note] ⑧ 加载链完整性：无异常`、④ 解析失败时打 `[note] ⑧ 加载链完整性：因解析失败跳过`（**它同样不进写盘后自检**）。
 > 自己写校验脚本的两坑（② **别写成"必须 CRLF"**、④ **不是替换成换行符**）见 [references/faq.md](references/faq.md) §一。
 
 ### 第 5 步 · 提交前扫一遍（`diffguard`。**只在 git 仓库里有意义**）
 
-第 4 步的七项**只能证明"文件自身格式没坏"**，证不了"没人把多行悄悄压平" —— 压平后文件是**自洽**的。
+第 4 步的八项**只能证明"文件自身格式没坏"**，证不了"没人把多行悄悄压平" —— 压平后文件是**自洽**的。
 提交前补这一刀：
 
 ```bash
@@ -394,7 +397,7 @@ python scripts/xwl.py diffguard <改过的文件或目录> --strict    # CI / pr
 | `patch` | **结构级编辑（默认方式）**：只给值 / 子树，按设计器算法重建整份文件 |
 | `edit` | 文本级安全替换（**例外**手段，改一小段文本且不希望整份重排时用） |
 | `expand` | 单行源 → 设计器同款多行 |
-| `check` | 七项校验：格式五项 + 事件 JS 语法 + **注册键**重名分级 |
+| `check` | 八项校验：格式五项 + 事件 JS 语法 + **注册键**重名分级 + 加载链完整性（只提示） |
 | `diffguard` | **相对 git 基线**检测「多行内容被压平」 |
 | `itemids` | 注册键重名报告 + 建议改名（只读） |
 | `paths` | 列出 `sql` / `totalSql` / `serverScript` / `url` 四类字段的位置 |

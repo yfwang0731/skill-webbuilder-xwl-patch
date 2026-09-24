@@ -5,7 +5,7 @@
 设计目标：把「安全编辑 + 格式校验」从"凭记忆手工做"固化成可复跑的命令。
 
 子命令（15 个）：
-  check   <file...>                              七项校验：格式五项 + 事件 JS 语法 + 注册键重名分级
+  check   <file...>                              八项校验：格式五项 + 事件 JS 语法 + 注册键重名分级 + 加载链完整性（只提示）
   new     <out.xwl> [--kind page|sql]            **从零生成** xwl（内置设计器骨架）
   patch   <file> --ops ops.json                  结构级编辑（改对象 → 按设计器规则重建）
   edit    <file> --old-file O --new-file N       文本级安全替换（锚点按目标换行归一、断言出现次数、拍平多行时警示）
@@ -801,12 +801,58 @@ def bare_nul_in_strings(text: str) -> int:
 _TEMPLATE_RE = re.compile(r"#\{")
 
 
+# 第 ⑧ 维「加载链完整性」的判据（**只提示、不进 rc**）。出处＝框架 `XwlBuffer` 的取键方式：
+#   `root.getJSONArray("children").getJSONObject(0).getJSONObject("configs")`、`root.getJSONObject("roles")`
+#   —— `getJSONArray` / `getJSONObject` **缺失即抛、类型不符即抛**（不是 `opt` 系），故判据是
+#   「存在 ＋ 类型（＋ `children` 非空）」。三条都在**加载期**抛 ⇒ 文件能被 ④ 解析、页面却打不开。
+#   ⚠️ 官方定位「防手写 / 半成品」（`new` 的产物一定完整）⇒ 只 `[warn]`、**不进 rc**（否则 CI 恒红）。
+def _load_chain_issues(obj) -> list:
+    """返回「加载链完整性」的问题清单（空 = 无异常）；`obj` 非对象时返回空。"""
+    issues: list = []
+    if not isinstance(obj, dict):
+        return issues
+    children = obj.get("children")
+    if "children" not in obj:
+        issues.append("children 缺失（框架按数组取，缺失即抛）")
+    elif not isinstance(children, list):
+        issues.append("children 不是数组（期望数组，实为 %s）" % type(children).__name__)
+    elif not children:
+        issues.append("children 为空数组（框架取 children[0]，下标 0 必须存在）")
+    else:
+        first = children[0]
+        if not isinstance(first, dict):
+            issues.append("children[0] 不是对象（框架取 children[0] 为对象，否则即抛）")
+        elif "configs" not in first:
+            issues.append("children[0].configs 缺失（框架按对象取，缺失即抛）")
+        elif not isinstance(first.get("configs"), dict):
+            issues.append("children[0].configs 不是对象（期望对象，实为 %s）"
+                          % type(first.get("configs")).__name__)
+    roles = obj.get("roles")
+    if "roles" not in obj:
+        issues.append("roles 缺失（框架按对象取，缺失即抛）")
+    elif not isinstance(roles, dict):
+        issues.append("roles 不是对象（期望对象，实为 %s）" % type(roles).__name__)
+    return issues
+
+
 def cmd_check(args) -> int:
     node = find_node(args.node)
     if node is None and not args.no_js:
         print("[warn] 未找到 node，事件 JS 语法校验被跳过（用 --node 指定，或 --no-js 静音）")
 
     failed = False
+    # 判定集合（**内部机制、不改 CLI 面貌**）：调用方显式给 `checks` 时优先；没给则由
+    # `--no-js` / `--no-itemid` 回退到「全量 1–8」。起因：第 ⑧ 维只该在 `check` 出现、
+    # **不进写盘后自检**（`_post_check` 传 1–6）—— 由调用方说"跑哪几项"，而非让 ⑧ 猜"是不是自检"。
+    # ⚠️ 必须 `getattr(..., None)`：本仓惯用「手工 Namespace」，`selftest` 的 `_run_check`
+    #    只带 `{files,node,no_js}`；直接取 `args.checks` 会让十余条 check 断言齐 `AttributeError`。
+    checks = getattr(args, "checks", None)
+    if checks is None:
+        checks = {1, 2, 3, 4, 5, 6, 7, 8}
+        if getattr(args, "no_js", False):
+            checks.discard(6)
+        if getattr(args, "no_itemid", False):
+            checks.discard(7)
     for path in args.files:
         print(f"=== check: {path}")
         errors: list[str] = []
@@ -886,7 +932,7 @@ def cmd_check(args) -> int:
 
         # ⑥ 事件 JS 语法
         events: list[tuple[str, str]] = []
-        if obj is not None and node and not args.no_js:
+        if obj is not None and node and not args.no_js and 6 in checks:
             events = collect_events(obj)
             results = node_check_many(node, [code for _name, code in events])
             for (name, _code), (ok, err) in zip(events, results):
@@ -899,7 +945,7 @@ def cmd_check(args) -> int:
         itemid_warns: list[str] = []
         itemid_note = ""
         no_itemid = bool(getattr(args, "no_itemid", False))
-        if obj is not None and not no_itemid:
+        if obj is not None and not no_itemid and 7 in checks:
             ctl_c = discover_controls(path)
             rep = audit_itemids(obj, controls_path=ctl_c)
             # 注册表来源 —— 与 `itemids` / `params` 逐字同一句（三处复用 controls_source_line）
@@ -920,7 +966,7 @@ def cmd_check(args) -> int:
             failed = True
         else:
             print("  [ok]   ① BOM  ② 换行一致  ③ 续行空白  ④ 解析  ⑤ 末行结构")
-            # ⑥⑦ 无论跑没跑都要留一行 —— 否则用户看到 6 行、文档写「七项」，
+            # ⑥⑦ 无论跑没跑都要留一行 —— 否则用户看到 6 行、文档写「八项」，
             # 而且 `--no-js` 与 `--no-js --no-itemid` 的输出会长得一模一样。
             if args.no_js:
                 print("  [note] ⑥ 事件 JS 语法校验：已按 `--no-js` 跳过")
@@ -951,6 +997,19 @@ def cmd_check(args) -> int:
             print(f"  [warn] {w}")
         for n in notes:
             print(f"  [note] {n}")
+        # ⑧ 加载链完整性（**只提示、不进 rc**）—— 三条判据见 `_load_chain_issues`。
+        #    ⚠️ 必须打在 `if errors … else …`（916–939）**之外**：④ 失败（`obj is None`）时
+        #       也要留一行"因解析失败跳过"，塞进 `else` 会让 FAIL 时 ⑧ 消失。
+        if 8 in checks:
+            if obj is None:
+                print("  [note] ⑧ 加载链完整性：因解析失败跳过")
+            else:
+                _chain = _load_chain_issues(obj)
+                if _chain:
+                    for _cw in _chain:
+                        print(f"  [warn] ⑧ 加载链完整性：{_cw}")
+                else:
+                    print("  [note] ⑧ 加载链完整性：无异常")
 
     print("=== 结果:", "FAIL" if failed else "ALL OK")
     return 1 if failed else 0
@@ -959,12 +1018,16 @@ def cmd_check(args) -> int:
 def _post_check(file: str, args) -> int:
     """写盘后的**格式**自检 —— 只回答「这次改动有没有破坏格式」。
 
-    注册键重名（第 ⑦ 项）是**文件既有的质量属性**，不是本次改动造成的：
-    若一并判定，会出现"写盘成功却返回非 0"的误导。所以这里显式跳过，只在末尾给一条指引。
+    **判定面 = ①–⑥**（BOM / 换行 / 续行空白 / 解析 / 末行 / 事件 JS）—— 越过 ①–⑥ 的都不进这里：
+    · 注册键重名（第 ⑦ 项）是**文件既有的质量属性**，不是本次改动造成的；
+    · 加载链完整性（第 ⑧ 项）是**只提示**项、本来就不进 rc。
+    若把 ⑦/⑧ 一并判定，会出现"写盘成功却返回非 0"的误导。故这里只传 ①–⑥（`checks`）。
     """
     print("--- 自动校验（本次改动是否破坏格式）---")
+    _no_js = getattr(args, "no_js", False)
     ns = argparse.Namespace(files=[file], node=getattr(args, "node", None),
-                            no_js=getattr(args, "no_js", False), no_itemid=True)
+                            no_js=_no_js, no_itemid=True,
+                            checks={1, 2, 3, 4, 5} | ({6} if not _no_js else set()))
     rc = cmd_check(ns)
     print("提示：注册键重名不在本步判定范围；要连它一起体检，跑 "
           "`xwl.py itemids %s`" % os.path.basename(file))
@@ -2586,7 +2649,7 @@ def cmd_folders(args) -> int:
 # diffguard（相对 git 基线，检测「多行内容被压平」这种静默语义损坏）
 # --------------------------------------------------------------------------- #
 # 为什么需要它：SKILL.md 2.3 承认——把「反斜杠 + 换行」直接删掉（"合并行"）之后，
-# 文件**依然是合法 JSON**、`check` 七项全绿、`node --check` 也可能返回 0，
+# 文件**依然是合法 JSON**、`check` 八项全绿、`node --check` 也可能返回 0，
 # 唯一的发现手段是人工 `git diff`。这是本工具唯一"没有自动化防线"的损坏类型。
 #
 # 判据为什么是**两个条件**而不是"续行符变少"：
@@ -3768,7 +3831,7 @@ def build_parser() -> argparse.ArgumentParser:
     )
     sub = p.add_subparsers(dest="cmd", required=True)
 
-    c = sub.add_parser("check", help="七项校验：格式五项 + 事件 JS 语法 + 注册键重名分级")
+    c = sub.add_parser("check", help="八项校验：格式五项 + 事件 JS 语法 + 注册键重名分级 + 加载链完整性（只提示）")
     c.add_argument("files", nargs="+", help="一个或多个 .xwl 文件")
     c.add_argument("--node", help="node 可执行文件路径")
     c.add_argument("--no-js", action="store_true", help="跳过事件 JS 语法校验")
