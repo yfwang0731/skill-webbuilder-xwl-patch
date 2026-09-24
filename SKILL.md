@@ -2,7 +2,7 @@
 name: webbuilder-xwl-patch
 slug: skill-webbuilder-xwl-patch
 displayName: webbuilder-xwl-patch
-version: 1.4.0
+version: 1.4.1
 license: MIT
 metadata:
   category: development-tools
@@ -255,7 +255,7 @@ python scripts/xwl.py new wb/modules/<模块>/xxxSql/queryXxx.xwl --kind sql --t
 ### 第 2 步 · 读懂加载机制
 
 `text` 在磁盘上是「反斜杠 + 真实换行」的多行字符串，加载时被还原为 `\n` 转义后按严格 JSON 解析。
-**据此得到一个关键推论**：只要能按加载器规则解析成功，就说明格式没问题 —— 这是**最强的校验手段**（见第 4 步 ④）。
+**据此得到一个关键推论**：只要能按加载器规则解析成功，就说明**框架能加载它** —— 这是**最强的校验手段**（见第 4 步 ④）。
 
 ### 第 3 步 · 编辑（**默认 `patch`；`edit` 仅例外**）
 
@@ -361,7 +361,7 @@ python scripts/xwl.py check <file.xwl> --no-itemid          # 跳过注册键重
 
 三点必须记住：
 
-- **④ 是最强的校验手段**：加载器等价解析通过 ⇔ 格式没问题。
+- **④ 是最强的校验手段**：**④ 通过 ⇒ 框架一定能加载它**（**反向不成立** —— 框架比 ④ 更宽，未对齐的宽容面见 `references/faq.md` §一）。它与严格 JSON 解析器**不是一回事** —— 加载器（org.json）**接受尾随逗号**（如 `{"a":1,}`）、`{` 之前的前导内容也直接丢弃。
 - **⑦ 的 `[FAIL]` 与 ①–⑥ 性质不同** —— ①–⑤ 是**格式**（文件坏了）、⑥ 是**事件 JS 语法**，⑦ 是**命名质量**
   （文件能用但取值有风险）。所以 `patch` / `edit` / `expand` **写盘后的自动校验只判 ①–⑥**，
   否则会出现"写盘成功却返回非 0"。要看 ⑦ 请单独跑 `check`，或直接 `itemids`。
@@ -558,8 +558,8 @@ python scripts/xwl.py diffguard <改过的文件或目录> --strict    # CI / pr
 
 ## 八、常见问题（FAQ）
 
-**18 条**高频问题在 [`references/faq.md`](references/faq.md)，**按四组归类**：
-① 格式与解析（`check` 报 FAIL 怎么排查、页面白屏 / 解析错误、文件不是 UTF-8、为什么严格 JSON 解析会误判）；
+**19 条**高频问题在 [`references/faq.md`](references/faq.md)，**按四组归类**：
+① 格式与解析（`check` 报 FAIL 怎么排查、页面白屏 / 解析错误、文件不是 UTF-8、为什么严格 JSON 解析会误判、**框架能打开但 ④ 报错**（加载器未对齐面））；
 ② 命名与引用（`app.X` 取不到值、改了 SQL 参数查询结果不对、参数明明由调用方页面传入却报"没发现来源"、**同一文件在不同目录下跑结论为何可能不同**）；
 ③ 能不能这么改（能不能压成一行、能不能文本替换批量改、怎么确认没改坏）；
 ④ 命令行为（设计器里看不到新文件、SQL 抽取报 `1064`、`node --check` 误报、`expand` 没变化、

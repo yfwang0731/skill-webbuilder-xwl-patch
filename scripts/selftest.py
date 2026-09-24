@@ -202,6 +202,51 @@ def _check_basics(tmp, node, failures, write) -> None:
         else:
             print(f"[ok]  破坏用例「{name}」已检出（关键词 {keyword}）")
 
+    # ---- 2b. ④ 的宽容面：接受尾随逗号、放行前导内容、字符串内逗号不动 ----
+    # 起因：加载器 org.json 接受「尾随逗号」（`{"a":1,}`），而工具按 `json.loads` 判会把**框架明明
+    #       能加载**的文件报 ④ FAIL ——「工具比框架还严」会破坏 ④ 的保真承诺，故逐面钉住宽容。
+    # 起因（反向）：框架解析前 `substring(indexOf('{'))` 丢掉 `{` 之前的内容 ⇒ 前导注释本就被
+    #       接受、**不得**判 FAIL；这条防的是「将来有人顺手把 ④ 加严」。
+    tc = write("tc.xwl", '{"a":1,}')
+    code, out = _run_check([tc], node)
+    if code != 0:
+        failures.append("④ 宽容面：对象尾随逗号 `{\"a\":1,}` 被判 FAIL（框架能加载）:\n%s" % out)
+    else:
+        print("[ok]  ④ 宽容面：尾随逗号（对象）放行")
+
+    if xwl._strip_trailing_commas("[1,2,]") != "[1,2]":
+        failures.append("④ 宽容面：数组尾随逗号 `[1,2,]` 未被归一")
+    else:
+        print("[ok]  ④ 宽容面：尾随逗号（数组）归一")
+
+    lead = write("lead.xwl", '// c\n{"a":1}')
+    code, out = _run_check([lead], node)
+    if code != 0:
+        failures.append(
+            "④ 宽容面：`{` 之前的前导内容被判 FAIL（框架 substring 会丢弃它）:\n%s" % out)
+    else:
+        print("[ok]  ④ 宽容面：`{` 之前的前导内容不判 FAIL（框架接受）")
+
+    # 字符串感知（安全边界）：字符串内的 `,}` 不得被删、外层尾随逗号要删、其值不变。
+    _src = '{"s":"a,}","b":2,}'
+    _strip = xwl._strip_trailing_commas(_src)
+    try:
+        _parsed = xwl.parse_xwl(_src)
+    except Exception as exc:  # noqa: BLE001
+        _parsed = "ERR:%s" % exc
+    if _strip != '{"s":"a,}","b":2}' or _parsed != {"s": "a,}", "b": 2}:
+        failures.append("④ 宽容面：字符串内的逗号被误删或外层尾随逗号未删（预处理器非字符串感知）: "
+                        "strip=%r parsed=%r" % (_strip, _parsed))
+    else:
+        print("[ok]  ④ 宽容面：字符串内的逗号不被误删（值不变）")
+
+    # 反面钉住：④ 放宽了「尾随逗号」，但 equivalent 仍须严（两者取向不许统一）。
+    if (xwl.equivalent({"a": 1}, {"a": 1.0}) or xwl.equivalent({"a": True}, {"a": 1})
+            or xwl.equivalent({"a": 1, "b": 2}, {"b": 2, "a": 1})):
+        failures.append("④ 放宽尾随逗号后 equivalent 被连带放宽（1≠1.0 / true≠1 / 键序不同仍须不等）")
+    else:
+        print("[ok]  反面：equivalent 仍严（1≠1.0 / true≠1 / 键序不同）")
+
     # ---- 3. edit：锚点不唯一必须拒绝且不落盘 ----
     # 起因：锚点不唯一时若照改或静默跳过，都会改错对象却不报错 —— 文件已被写坏，用户却以为成功。
     p = write("edit.xwl", VALID)
@@ -3077,6 +3122,31 @@ def _check_diffguard(tmp, node, failures, write) -> None:
         if rc != 1:
             dg.append("「%s」--strict 下应 rc=1，实得 %d" % (label, rc))
         _mk("dg.xwl", BASE)
+
+    # ④c **行号落点必须真实**（起因 diffguard 行号落 0）：精确判据报出的「工作区第 N 行」必须是**真实物理行号**、
+    #     不是取不到键时兜底的哨兵 0。夹具＝「基线两行续行 → 工作区把它们并成**一行且带尾随空白**」，
+    #     此时命中只能靠 rstrip 匹配（工作区那一行不在原始行表里），行号表若只按原始行建就会落 0。
+    #     修法（`_merged_line_hits`）：raw 命中查 raw 表、rstrip 命中查 rstrip 表 ⇒ 行号恒真实。
+    _mk("dg.xwl", BASE)
+    _a7a_base = "aa " + BS + "\r\n" + "bb"          # 基线：第 1 行续行、第 2 行普通
+    _mk("dg.xwl", _a7a_base)
+    _git(*GIT_ID, "commit", "-q", "-am", "a7a")
+    BASE = _a7a_base
+    _mk("dg.xwl", "aa bb ")                          # 工作区：并成一行，且该行带尾随空白
+    _a7a: list[str] = []
+    _rc, _out = _cli("diffguard", "dg.xwl")
+    if "被合并成" not in _out:
+        _a7a.append("合并行号：续行被并成一行（带尾随空白）时应精确命中合并位置，实得无「被合并成」行")
+    if "第 0 行" in _out:
+        _a7a.append("合并行号：合并后的工作区行号落到了哨兵 0 —— 行号表与命中判定用了两张不同的键"
+                    "（raw 建表、rstrip 查表），rstrip 命中时取不到行号")
+    elif "工作区第 1 行" not in _out:
+        _a7a.append("合并行号：合并后的工作区行号应为真实物理行 1，实得其它行号")
+    _mk("dg.xwl", BASE)
+    if _a7a:
+        dg.extend(_a7a)
+    else:
+        print("[ok]  合并行号：续行被并成一行（带尾随空白）时，报出的工作区行号为真实物理行 1（非哨兵 0）")
 
     # ⑤ 正常走一遍 patch 之后不得报（否则这个守卫会被日常改动淹没）
     _mk("dg.xwl", BASE)

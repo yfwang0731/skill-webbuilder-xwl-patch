@@ -284,18 +284,65 @@ def _reject_nonfinite(name: str):
     raise ValueError("非有限数值 `%s` 不是合法 xwl（org.json 会把它当字符串，且工具写不回）" % name)
 
 
+def _strip_trailing_commas(t: str) -> str:
+    """删掉**字符串之外**的「尾随逗号」（`,` 之后只剩空白、再遇 `}` 或 `]`）。
+
+    起因（为什么要对齐尾随逗号）：加载器是 org.json，它**接受** `{"a":1,}` 这种尾随逗号；
+    而 Python 的 `json.loads` 会报 `Illegal trailing comma` ⇒ 若直接拿后者下结论，
+    **框架明明能加载**的文件会被 ④ 判 FAIL。「工具比框架还严」会破坏 ④ 的保真承诺
+    （④ 通过 ⇒ 框架能加载它；反向不成立 —— 框架比 ④ 更宽），故在解析前先把这类逗号归一掉。
+
+    字符串感知（安全边界）：逐字符扫描，用**未转义**的 `"` 翻转「在字符串内」标志、用 `\\`
+    跟踪转义态，**只在字符串外**删逗号 ⇒ `{"s":"a,}"}` 里字符串内的 `,}` 原样保留、取值不变。
+
+    已知未对齐面（本轮**只做尾随逗号**）：org.json 还接受单引号键 / 未引号键 / 相邻的贪婪
+    `{...}{...}` / `\\x` 非标准转义 —— 这些都**不处理**，登记为候选、须单独立项。
+    """
+    out = []
+    in_str = False
+    esc = False
+    n = len(t)
+    for i, c in enumerate(t):
+        if in_str:
+            out.append(c)
+            if esc:
+                esc = False
+            elif c == "\\":
+                esc = True
+            elif c == '"':
+                in_str = False
+            continue
+        if c == '"':
+            in_str = True
+            out.append(c)
+            continue
+        if c == ",":
+            j = i + 1
+            while j < n and t[j] in " \t\r\n":
+                j += 1
+            if j < n and t[j] in "}]":
+                continue            # 尾随逗号 ⇒ 丢弃（其后只剩空白 + 闭括号）
+        out.append(c)
+    return "".join(out)
+
+
 def parse_xwl(text: str):
     """按加载器规则解析 xwl。
 
     注意 `strict=False`：加载器用的是 org.json，它**允许字符串里出现裸控制字符**
     （未转义的换行/Tab 也照收），而 Python 的 `json` 默认会报
     `Invalid control character`。不带这个参数会对合法文件误报。
+
+    另注意 `_strip_trailing_commas`：org.json 还**接受尾随逗号**（`{"a":1,}`），
+    解析前先按「字符串感知」规则归一掉它，使 ④ 与加载器的宽容面一致（详见该函数）。
     """
     t = loader_text(text)
     i = t.find("{")
     if i < 0:
         raise ValueError("文件里找不到 `{` —— 不是 xwl 内容（空文件或纯文本）")
-    return json.loads(t[i:], strict=False, parse_constant=_reject_nonfinite)
+    # ④ 对齐加载器宽容面：org.json 接受尾随逗号 ⇒ 解析前先归一（只删字符串外的尾随逗号）。
+    return json.loads(_strip_trailing_commas(t[i:]), strict=False,
+                      parse_constant=_reject_nonfinite)
 
 
 # --------------------------------------------------------------------------- #
@@ -2578,9 +2625,15 @@ def _merged_line_hits(head_text: str, wd_text: str) -> list:
         return []
     wset = set(wl)
     wset_r = {l.rstrip() for l in wl}
-    wpos = {}
+    # 起因（diffguard 行号落 0）：命中判定允许用 `acc.rstrip()` 去匹配（见下方 wset_r），但行号表只按**原始行**
+    # 建表（wpos）—— 当「工作区该行 = 拼接结果 + 尾随空白」时，acc 与 acc.rstrip() 都不是 wpos
+    # 的键，`wpos.get(acc, wpos.get(acc.rstrip(), 0))` 的 0 兜底就吐出 0 ⇒ 打印「工作区第 0 行」。
+    # 修法：两张表并存，按「哪张集合命中」取对应表（raw 命中 → wpos，rstrip 命中 → wpos_r），
+    # 行号恒为真实物理行，不再用 0 兜底。
+    wpos, wpos_r = {}, {}
     for k, l in enumerate(wl, 1):
         wpos.setdefault(l, k)
+        wpos_r.setdefault(l.rstrip(), k)
     max_w = max((len(l) for l in wl), default=0)
 
     hits = []
@@ -2595,8 +2648,9 @@ def _merged_line_hits(head_text: str, wd_text: str) -> list:
                 break                       # 工作区不可能有这么长的行
             key = acc if acc in wset else (acc.rstrip() if acc.rstrip() in wset_r else None)
             if key is not None:
-                hits.append((i + 1, j + 1, wpos.get(acc, wpos.get(acc.rstrip(), 0)),
-                             acc[:70]))
+                # 按「哪张集合命中」取对应表的行号（两张表的键空间与 wset / wset_r 一一对应）。
+                k = wpos[acc] if acc in wset else wpos_r[acc.rstrip()]
+                hits.append((i + 1, j + 1, k, acc[:70]))
                 break
             if not hl[j].endswith("\\"):
                 break                       # 组到头了（这一行没有续行符）
