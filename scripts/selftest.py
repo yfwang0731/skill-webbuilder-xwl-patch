@@ -1367,7 +1367,8 @@ def _check_docs(tmp, node, failures, write) -> None:
                 docs[nm] = fh.read().splitlines()
 
     # 17a emoji 不得进标题
-    # 起因：无（待补或删）
+    # 起因：**样式一致性** —— 标题一律纯文本（emoji 只进正文 blockquote）；**非正确性缺陷**。
+    #   本仓**无出处**：守卫清账裁定「保留、标无出处」；且已判**不做迁移** —— 保留机械守卫，既不并入行文句、也不删。
     for nm, ls in docs.items():
         for i, l in enumerate(ls, 1):
             if l.startswith("#") and any(ch in l for ch in ("⚠", "❗", "✅", "❌")):
@@ -1930,6 +1931,10 @@ def _check_docs(tmp, node, failures, write) -> None:
     #     终端更窄会多折行、更宽会少折行，不钉死就会随环境漂（假红/假绿都可能）。
     #     上限 = 实测 + 余量（顶层 +10 / 单子命令 +5）。余量依据：给「某个子命令再加 1 条选项
     #     说明」留空间而不误报；再涨就该把内容挪去 `epilog` 或 `references/`（见 workflow-notes §二）。
+    #     ⚠️ 两侧都判：`_got > _hcap` = 「超顶」（上限偏低）；`_hcap − _got > 设计余量` = 「上限过松」
+    #       （上限被单向放宽、白留空行也无人发觉 —— 常驻注入用例把某子命令上限调大后仍全绿＝活证）。
+    #       ⚠️ 只堵「过松」一侧：余量 **＜** 设计余量（＝「守卫偏严」）**不报**；本表 `patch` 余 1 /
+    #       `new` 余 4 / `expand` 余 4 都属这一侧，**有意保留、本版不动任何 cap**（归下一版按 `实测 + 5` 补满）。
     #     ⚠️ 新增子命令必须同步在此登记上限（下面 `_h_unreg` 会把漏登的红出来）。
     #     起因：通道 B 把细节搬进 `--help` 后它会一路变长 —— 不钉住就会淹没「必读面」，读者找不到关键项。
     _help_caps = {
@@ -1961,6 +1966,12 @@ def _check_docs(tmp, node, failures, write) -> None:
             elif _got > _hcap:
                 doc_fail.append("%s 已 %d 行，超过 %d 行上限（新增说明请走 `epilog` 或 `references/`）"
                                 % (_hn_lbl, _got, _hcap))
+            else:
+                _slack = 10 if _hn is None else 5
+                if _hcap - _got > _slack:
+                    doc_fail.append("%s：上限 %d 比实测 %d 多出 %d 行、超过设计余量 %d"
+                                    "（上限请按「实测 + %d」回填；新增说明请走 epilog 或 references/）"
+                                    % (_hn_lbl, _hcap, _got, _hcap - _got, _slack, _slack))
         _h_unreg = sorted(k for k in _help_n if k not in _help_caps)
         if _h_unreg:
             doc_fail.append("`--help` 行数守卫：这些子命令没登记上限（新增子命令要同步补）：%s" % _h_unreg)
@@ -2148,13 +2159,36 @@ def _check_docs(tmp, node, failures, write) -> None:
                                 % (_i, (_m.group(1) + _body)[:34]))
 
     # 17j-12 跨文件节号指针必须指向**真实存在**的小节（③ 引用漂移）。
-    #   起因：文档里「见某 references/*.md 的 §九 / §3.3 / 紧贴文件名的「小节名」」这类指针没人守 ——
-    #     目标文件里那个小节被改名 / 搬走 / 删掉，指针就成了**死指针**（指向空气）。
+    #   起因：文档里「见某 references/*.md 的 §九 / §3.3 / 紧贴文件名的「小节名」」这类指针，
+    #     有**两类一直没人守** —— `第N节`（**中文数字**）与紧贴文件名的「小节名」；而 `§N.M` 由
+    #     另一条引用守卫守、`§N`／`§中文数字` 由本函数另一条「节号」臂守（那两条都不跳围栏）。
+    #     没人守的那两类一旦目标小节被改名 / 搬走 / 删掉，指针就成了**死指针**（指向空气）。
     #   判据：只看**文件与小节标记落在同一格 / 同一句**的指针（同句 = 按 。；！？ 切、同格 = 按表格 | 切）；
     #     小节标记 = `§N` / `§N.M` / `§中文数字` / `第N节` / **紧贴文件名**的「小节名」。
     #     ⚠️ `第N章` **不算** —— 那是 SKILL 自身章号：首页「怎么用」索引表把「第五/六/八/九章」
     #       与同一行的 references 文件名并列，不加这条会把 SKILL 自己的章号误当成指针目标（实测误报 3–4 条）。
-    #   现状全绿（54 条指针全解析）⇒ 纯**防回归**。
+    #   围栏内也纳入（不再跳过代码围栏块）：代码围栏块里同样会写跨文件指针（示例命令、片段引用）。
+    #     ⚠️ 前提如实化（两树对照实测）：`§N.M` 由另一条引用守卫守、`§N`／`§中文数字` 由本函数「节号」臂守
+    #       （两条都与围栏无关）⇒ 本臂的**净增只有两处**：`第N节`（**只认中文数字**，阿拉伯写法不触发）
+    #       与紧贴文件名的「小节名」。实测（副本对照跑）围栏内指针误报面为 0 ⇒ 直接纳入、**不加任何豁免**。
+    #     ⚠️ 别照搬「围栏块输出文案符实」那条守卫的 `[:16]` 前缀法 —— 那条判「文案前缀在源码里存在」，
+    #       本守卫判「节号存在性」，不是同一个面。
+    #   现状全绿（**含围栏内指针在内**全部解析）⇒ 纯**防回归**。
+    #   ⚠️ 围栏四面分工（本节四条与「围栏」沾边，互不替代；改任一条先核此表）：
+    #     ① 格式面 —— 表列数／标题跳级／代码块**闭合**／行尾空白／末尾换行。
+    #        围栏**只豁免「标题跳级」**（`_fence % 2 == 0`）；**表列数与行尾空白没有围栏条件 ⇒ 围栏内照判**
+    #        （两树对照实测：围栏内注入列数不齐的表，两树都报「表格本行 3 格、表头 2 格」）；闭合按 ``` 计数判。
+    #     ② 承诺文案面（17j-6）—— 只扫 **SKILL.md 全行（含围栏内）**，判行内**反引号**里
+    #        `[note]/[warn]/[FAIL]/[ok]` 前缀是否在 xwl.py 里存在。
+    #     ③ 跨文件指针面（本臂 17j-12）—— 扫 **docs 全行（含围栏内）**（遍历时**跳过 CHANGELOG.md**），
+    #        判跨文件节号指针是否存在，**零豁免**。
+    #     ④ 围栏内输出文案面（17j-14）—— **仅围栏内**、仅**裸**以 `[note]/[warn]/[FAIL]/[ok]` 开头的行，
+    #        扫全 docs（不含 examples/README.md）。
+    #     ⟂ 互斥（两树对照实测）：② 要**反引号**包裹、④ 要**裸**行首标记 ⇒ **对「同一个标记的出现」互斥**，
+    #        而**不是"同一行至多一条"**：一行同时含裸 `[note]` 与反引号 `[ok]` 时**两臂都报**（实测 2 条）。
+    #     ⚠️ 双报的归属别挂错（两树对照实测）：**围栏外**的 `§N.M`／`§N` 死指针被本臂与另一条引用守卫
+    #        各报一行 = **既有**（基线树也报 2 条）；**围栏内**同款各报一行 = **本版新增**
+    #        （基线树只报 1 条〈另一条守卫〉，本版因取消跳围栏才变 2 条）。
     _pt_file = re.compile(r"([A-Za-z0-9][A-Za-z0-9-]*\.md)")
     _pt_num = re.compile(r"§\s*([0-9]+(?:\.[0-9]+)?)")
     _pt_cn = re.compile(r"§\s*([一二三四五六七八九十]+)")
@@ -2171,13 +2205,7 @@ def _check_docs(tmp, node, failures, write) -> None:
     for _nm, _ls in docs.items():
         if _nm == "CHANGELOG.md":
             continue
-        _fence = 0
         for _i, _l in enumerate(_ls, 1):
-            if _l.strip().startswith("```"):
-                _fence += 1
-                continue
-            if _fence % 2:
-                continue
             _segs = _l.split("|") if _l.strip().startswith("|") else re.split(r"[。；！？]", _l)
             for _seg in _segs:
                 _fils = [(_m.start(), _m.end(), _m.group(1))
@@ -2443,23 +2471,48 @@ def _check_docs(tmp, node, failures, write) -> None:
     #     只查「数字是否存在别处」时那条件天然为真、抓不到这种自相矛盾。
     #     判据：① 每个「NNNNN 个 xwl」都要有口径限定词；② 出现多个不同取值时，
     #           文件里必须有一句显式的口径差异声明（否则读者会当成同一个统计）。
+    #     ⚠️ ② 收紧：「存在性类」判据会被**一句错话**合规绕过 —— 只要文件里出现「不是同一口径」这种词，
+    #       哪怕它根本指错了对象也算声明（实测被一句错的说明绕过）。故差异声明**必须与采集日期
+    #       （`YYYY-MM-DD`）落在同一行**才算数：日期是唯一**形状可锚定**的锚（只核 `YYYY-MM-DD`
+    #       这个形状、**不核真伪**），光含口径词、不带日期的不算。
+    #       （⚠️ 不改成「日期 **或** 范围词」—— 范围词那一支与 ① 的逐行臂在同一轮迭代里，等于空转。）
     _qual = ("全文正则", "可解析", "全量", "全项目", "样本工程", "单工程", "抽样")
     _caveat = ("主口径", "不同口径", "口径不同", "不是同一口径", "两种口径")
+
+    def _q_scan(_lines):
+        """在给定行列表里查规模取值 / 逐行口径限定 / 带日期的差异声明。"""
+        _vals = {}
+        _caveat_dated = False
+        _bad = []
+        for _i2, _l2 in enumerate(_lines, 1):
+            for _m2 in re.finditer(r"(\d{4,})\s*个\s*xwl", _l2):
+                _vals.setdefault(_m2.group(1), []).append(_i2)
+                if any(_c in _l2 for _c in _caveat) and re.search(r"\d{4}-\d{2}-\d{2}", _l2):
+                    _caveat_dated = True
+                if not any(_q in _l2 for _q in _qual):
+                    _bad.append((_i2, _m2.group(0).strip()))
+        return _vals, _caveat_dated, _bad
+
     _md_lines = _txt.get("references/measured-data.md", "").splitlines()
-    _md_vals = {}
-    _caveat_on_line = False
-    for _i, _l in enumerate(_md_lines, 1):
-        for _m in re.finditer(r"(\d{4,})\s*个\s*xwl", _l):
-            _md_vals.setdefault(_m.group(1), []).append(_i)
-            if any(_c in _l for _c in _caveat):
-                _caveat_on_line = True
-            if not any(_q in _l for _q in _qual):
-                doc_fail.append("measured-data.md:%d 的规模数字「%s」没带口径限定词（取词：%s）"
-                                % (_i, _m.group(0).strip(), "/".join(_qual)))
-    if len(_md_vals) > 1 and not _caveat_on_line:
+    _md_vals, _caveat_dated, _q_bad = _q_scan(_md_lines)
+    for _i, _tok in _q_bad:
+        doc_fail.append("measured-data.md:%d 的规模数字「%s」没带口径限定词（取词：%s）"
+                        % (_i, _tok, "/".join(_qual)))
+    if len(_md_vals) > 1 and not _caveat_dated:
         doc_fail.append("measured-data.md 内「NNNNN 个 xwl」有多个取值 %s 却未在**同处**声明口径差异"
-                        "（加「主口径 / 不是同一口径」等说明，别让读者当成同一统计）"
-                        % "/".join(sorted(_md_vals)))
+                        "（差异声明须与采集日期 `YYYY-MM-DD` 同行 —— 加「不是同一口径」等说明并附日期，"
+                        "别让读者当成同一统计）" % "/".join(sorted(_md_vals)))
+    # 本臂自带 fixture（不依赖现网语料）：合成「两取值 + 无日期 caveat」样本 ⇒ 必须判红。
+    #   防将来编年被删后本臂静默失效。
+    #   ⚠️ 钉子（本夹具的判别力所在）：caveat 那句**落在规模数字行上**、**带范围词**、**但不带日期**
+    #     （「全项目 …… 不是同一口径」）。这样一旦差异声明判据被放宽成「日期 **或** 范围词」，
+    #     这一行会被误当"已声明" ⇒ 本夹具当场报红 —— 专门钉死"只认日期"这一支。
+    _q_probe = ["统计甲：1234 个 xwl（全量）。",
+                "统计乙：5678 个 xwl（全项目）—— 与统计甲不是同一口径。"]
+    _pv, _pc, _pb = _q_scan(_q_probe)
+    if not (len(_pv) > 1 and not _pc):
+        doc_fail.append("17q-自洽 反向 fixture 失效：合成「两取值 + 无日期口径声明」样本竟未判红"
+                        "（本臂可能已空转，请检查差异声明判据）")
 
     # 17r 分发面自包含：`git ls-files` 的 22 个分发文件里不得出现「指向 skill 包外」的引用。
     #     判据 = 包外文档名（四种，见下方 _b17r_docs 元组）
