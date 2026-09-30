@@ -44,3 +44,34 @@ jobs:
         run: |
           python scripts/xwl.py --help
           python scripts/xwl.py folders --help
+
+  # 非 git 布局（模拟平台把 skill 打成 zip、解包后没有 .git）：
+  #   默认必须**判红**（静默绿是病根）；显式 `--allow-nogit` 才降级为"打印没扫、rc 按其他项定"。
+  no-git-layout:
+    name: no-git layout（无 .git）
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+
+      - name: Remove .git（造非 git 布局）
+        run: rm -rf .git
+
+      - name: Default must fail（无 .git 默认判红）
+        run: |
+          if python scripts/selftest.py > /tmp/nogit_default.txt 2>&1; then
+            echo "::error::无 .git 时默认返回 0 —— 静默绿回归，应判红"
+            cat /tmp/nogit_default.txt
+            exit 1
+          fi
+          echo "OK：无 .git 默认判红（符合预期）"
+
+      - name: --allow-nogit degrades to note（降级路径须退出 0）
+        run: python scripts/selftest.py --allow-nogit

@@ -73,6 +73,7 @@
 from __future__ import annotations
 
 import argparse
+import collections
 import contextlib
 import hashlib
 import importlib.util
@@ -136,6 +137,37 @@ def _run(fn, **kw):
     with contextlib.redirect_stdout(buf):
         code = fn(type("NS", (), kw)())
     return code, buf.getvalue()
+
+
+def _run_cli(argv: list) -> tuple:
+    """把命令经**真实 CLI**（子进程跑 `xwl.py`）执行，返回 `(rc, stdout, stderr)`。
+
+    起因（按 `17s` 要求写清）：命令级断言若走 `_run(xwl.cmd_*)` **直调**，一旦被测行为
+    **坏到会抛异常**，异常会冲出 `_run` **把整块打崩** ⇒ 红行变成「块 … 子进程异常退出」，
+    那条**定向断言根本没跑到** —— 这叫 **"杀了 ≠ 守住了"**（`M35`：`events --outdir` 不再自建目录
+    时抛 `XwlWriteError`，整块崩，而"events rc 应 0"那条断言从未执行）。
+    改走**子进程真 CLI** 后：
+      · 拿的是**真实退出码**（含 `main()` 把 `XwlWriteError` → `rc=2` 的对外契约）；
+      · **异常被进程隔离** —— 工具崩了也只是 `rc≠0` ＋ 文本，**红行必落在那条定向断言上**。
+    ⚠️ **stdout / stderr 分开返回**（起因）：断言写的是"工具的**输出**里应有什么"；若把 stderr 并进去，
+    **错误流里恰好含期望串**就会**误判通过**（"错误流混入"）。故断言**只看 stdout**；要展示诊断时用
+    `_cli_text(out, err)` 明确标注 stderr（工具的错误提示多走 stdout，如 `main()` 的 `[FAIL] …`）。
+    ⇒ 凡"以 rc／输出判行为"的命令级断言一律走本函数；**不要**直调 `_run(xwl.cmd_*)`。
+    （⚠️ **不改 `_run` 本身**：`_check_write_failures` 等块**就是要看异常**，改它会破坏那些断言。）
+    """
+    try:
+        _pr = subprocess.run(
+            [sys.executable, "-B", os.path.join(HERE, "xwl.py"), *argv],
+            capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=120)
+        return _pr.returncode, (_pr.stdout or ""), (_pr.stderr or "")
+    except Exception as exc:      # noqa: BLE001 —— 连 CLI 都起不来也要落成断言，不许炸块
+        return None, "", "（CLI 起不来）%s: %s" % (type(exc).__name__, exc)
+
+
+def _cli_text(out: str, err: str) -> str:
+    """把 stdout 与「非空 stderr」拼成**断言文案**用文本（stderr 明确标注，免与 stdout 混淆）。"""
+    err = (err or "").strip()
+    return out + (("\n[stderr] " + err) if err else "")
 
 
 def _win_path(p: str, api: str):
@@ -607,8 +639,18 @@ def _check_basics(tmp, node, failures, write) -> None:
         print("[ok]  写盘中途失败后目标未被截断、无临时残留")
 
 
+# `field_types` 的**手写**内置兜底清单（本轮仪表审计整改 ⑤：破可判定的自证循环）。
+#   起因：若把期望写成 `set(xwl._FIELD_FALLBACK) | {...}` —— 期望**由被测常量自己拼出**，
+#   于是 `_FIELD_FALLBACK` 被清空 / 被砍短时，那个"子集"谓词**恒为真**（定点实测：清空、砍到只剩
+#   一项，谓词都返回 True）⇒ 兜底清单退化完全无感。改成**手写**期望后，兜底一旦清空/退化即判红。
+#   📌 与 `xwl.py` 的 `_FIELD_FALLBACK` 是**两份独立**清单：改任何一侧都要人工同步本表（这正是目的）。
+_FIELD_FALLBACK_EXPECT = ("check", "combo", "date", "datetime", "displayfield", "file",
+                          "hidden", "htmleditor", "number", "picker", "radio", "text",
+                          "textarea", "time")
+
+
 def _check_params_paths(tmp, node, failures, write) -> None:
-    """params 两条通路 + 注释剔除与多容器 out（第 8~9 组）"""
+    """params 两条通路 + 注释剔除与多容器 out（第 8~10 组）"""
 
     # ---- 8. params：两条通路的识别（out / params） ----
     FIELD = xwl.field_types(None)
@@ -656,8 +698,10 @@ def _check_params_paths(tmp, node, failures, write) -> None:
         # ---- 以下 4 条是「**判据依据**」断言：守的是"判据本身对不对"，不是"行为有没有变" ----
         # 起因：本仓每版都有自检，但自检长期只覆盖"行为一致性" ⇒ 一个**从第一版就存在**的判据错误
         # （`field_types` 只取注册表）能活到 1.3.x 才被撞出来。这几条断言的就是那类错误。
-        "field_types = 注册表 ∪ 内置兜底（不是二选一）":
-            (set(xwl._FIELD_FALLBACK) | {"onlyinreg"}) <= set(xwl.field_types(
+        # ⚠️ 期望用**手写**清单 `_FIELD_FALLBACK_EXPECT`（**不再**由 `xwl._FIELD_FALLBACK` 自己拼出）：
+        #   否则兜底清单被清空 / 砍短时谓词恒真、退化无感（定点实测）。
+        "field_types = 注册表 ∪ 内置兜底（兜底为**手写**期望，不是二选一、也不是自比）":
+            (set(_FIELD_FALLBACK_EXPECT) | {"onlyinreg"}) <= set(xwl.field_types(
                 write("k21-controls.json", json.dumps(
                     {"n": {"id": "onlyinreg", "general": {"type": "Ext.form.field.text"}}},
                     ensure_ascii=False)))),
@@ -727,7 +771,7 @@ def _check_params_paths(tmp, node, failures, write) -> None:
 
 
 def _check_itemids(tmp, node, failures, write) -> None:
-    """@itemId 寻址、重名分级、引用判定、防御性取值、章节顺序（第 11a~11k 组）"""
+    """@itemId 寻址、重名分级、引用判定、防御性取值（第 11~11j 组；`11k` 章节顺序已归位至文档守卫侧）"""
 
     # ---- 11. @itemId 寻址：唯一可定位、重名拒绝 ----
     dup_tree = {"children": [
@@ -971,25 +1015,6 @@ def _check_itemids(tmp, node, failures, write) -> None:
     except Exception as exc:  # noqa: BLE001
         failures.append("itemids --name --json 的输出不是 JSON: %s | %r" % (exc, out[:80]))
 
-    # ---- 11k. SKILL.md 章节顺序守卫（语义分组：认知→格式→操作→专题→经验→收尾）----
-    # 起因：压缩会搬动章节；顺序被打乱后“先建心智模型 → 再看格式规则 → 再看流程”的阅读路径就断了（内容没丢、但难读）。
-    skill_md = os.path.join(os.path.dirname(HERE), "SKILL.md")
-    if os.path.exists(skill_md):
-        with open(skill_md, "r", encoding="utf-8", newline="") as f:
-            titles = [l.rstrip("\r\n") for l in f if l.startswith("## ")]
-        want_order = ["一", "二", "三", "四", "五", "六", "七", "八", "九"]
-        got_order = [t[3] for t in titles if len(t) > 4 and t[3] in want_order]
-        want_keys = ["是什么", "格式硬规则", "处理流程", "工具", "引用方式", "SQL 片段",
-                     "itemId", "常见问题", "自检清单"]
-        if got_order == want_order and all(k in t for k, t in zip(want_keys, [x for x in titles if x.startswith("## ") and x[3] in want_order])):
-            print("[ok]  SKILL.md 章节顺序符合语义分组（认知→格式→操作→专题→经验→收尾）")
-        else:
-            failures.append("SKILL.md 章节顺序错位: %s" % [t[:22] for t in titles])
-        if any("单行源" in t for t in titles):
-            failures.append("「单行源 vs 多行源」应并入格式章，不该单列一章")
-    else:
-        print("[note] 未找到 SKILL.md，跳过章节顺序守卫")
-
 
 def _check_subcommands(tmp, node, failures, write) -> None:
     """子命令冒烟 paths/sqlrefs/params + new + folders + paths 原路径 + schema 骨架（第 12~16 组）"""
@@ -1037,6 +1062,54 @@ def _check_subcommands(tmp, node, failures, write) -> None:
         failures.extend(smoke_fail)
     else:
         print("[ok]  子命令冒烟：paths / sqlrefs / params / itemids 均可直接调用")
+
+    # ---- 12b. sql / events / dump 的**命令级**断言（原来 sql/events 无任何断言、dump 仅冒烟）----
+    # 起因（仪表审计实测三例"全绿但行为已坏"）：判据收紧 ⇒ `sql` 漏抽 `totalSql`（`[1/2]`→`[1/1]`）；
+    #   `events --outdir` 不再自建目录 ⇒ 导出到新目录直接 rc=2；`dump` 去掉美化缩进 ⇒ 多行变 1 行。
+    #   三者旧自检**零信号**（`sql`/`events` 完全无断言、`dump` 只查"输出含 itemId"）。
+    #   ⇒ 补命令级断言：`sql` 必须抽全（含键名含 `sql` 的 `totalSql`）、`events --outdir` 指向
+    #   **不存在的新目录**须自建并成功、`dump` 必须**多行**（保"按加载器规则美化输出"的用途）。
+    #   ⚠️ 三条一律经 `_run_cli(...)`（**子进程跑真 CLI**）取值 —— **不许**直调 `_run(xwl.cmd_*)`：
+    #     直调时被测行为一旦抛异常会**把整块打崩**（`M35` 实测：`events --outdir` 不自建目录 ⇒
+    #     `XwlWriteError` 冲出 `_run` ⇒ 红行成"块 … 子进程异常退出"、下面那条断言**根本没跑到**）。
+    #     经 CLI 则拿**真实退出码**、异常被进程隔离 ⇒ 红行**必落在定向断言上**（见 `_run_cli` docstring）。
+    ce_fail: list[str] = []
+    _ce_obj = {"title": "ce页", "children": [
+        {"configs": {"itemId": "dp", "sql": "select 1 from dual",
+                     "totalSql": "select count(1) from dual"},
+         "type": "dataprovider", "expanded": False, "children": []},
+        {"configs": {"itemId": "btn"}, "type": "button", "expanded": False, "children": [],
+         "events": {"click": "app.btn.setDisabled(true);"}},
+    ]}
+    _ce_page = os.path.join(tmp, "ce_page.xwl")
+    with open(_ce_page, "w", encoding="utf-8", newline="") as f:
+        f.write(xwl.dumps_designer(_ce_obj, 1, CRLF))
+    _rc_s, _out_s, _err_s = _run_cli(["sql", _ce_page])
+    if _rc_s != 0:
+        ce_fail.append("sql 对含 2 条 SQL 的页面 rc=%d（应 0）：\n%s" % (_rc_s, _cli_text(_out_s, _err_s)))
+    if "[1/2]" not in _out_s or "[2/2]" not in _out_s:
+        ce_fail.append("sql 未把两条 SQL 都抽出（应见 [1/2] 与 [2/2]）：\n%s" % _out_s)
+    if "totalSql" not in _out_s or "select count(1) from dual" not in _out_s:
+        ce_fail.append("sql 漏抽 totalSql（判据是「键名**含** sql」，不是「以 sql 开头」）：\n%s" % _out_s)
+    _ev_new = os.path.join(tmp, "ce_events_out")     # 故意指向**不存在**的新目录
+    _rc_e, _out_e, _err_e = _run_cli(["events", _ce_page, "--outdir", _ev_new])
+    if _rc_e != 0:
+        ce_fail.append("events --outdir 指向新目录 rc=%d（应 0：工具须自建目录）：\n%s"
+                       % (_rc_e, _cli_text(_out_e, _err_e)))
+    if not os.path.isdir(_ev_new):
+        ce_fail.append("events --outdir 未创建导出目录")
+    elif not [n for n in os.listdir(_ev_new) if n.endswith(".js")]:
+        ce_fail.append("events --outdir 目录里没有导出任何 .js")
+    _rc_d, _out_d, _err_d = _run_cli(["dump", _ce_page])
+    if _rc_d != 0:
+        ce_fail.append("dump rc=%d（应 0）" % _rc_d)
+    if len(_out_d.splitlines()) <= 1:
+        ce_fail.append("dump 输出只有 %d 行（应 >1：dump 的用途是**美化**输出）" % len(_out_d.splitlines()))
+    if ce_fail:
+        failures.extend(ce_fail)
+    else:
+        print("[ok]  sql / events / dump 命令级：sql 抽全 2 条（含 totalSql）、"
+              "events --outdir 自建新目录并落文件、dump 多行美化")
 
     # ---- 13. new：从零生成（内置骨架 / 设计器键序 / 拒绝覆盖 / 补齐缺键）----
     new_fail: list[str] = []
@@ -1131,8 +1204,10 @@ def _check_subcommands(tmp, node, failures, write) -> None:
         print("[ok]  folders：未登记/悬空检出、register 幂等且保键序保单行形态")
 
     # ---- 15. paths 的「原路径」必须带 configs 层，照抄就该改对地方 ----
+    # 经 `_run_cli`（子进程真 CLI）取值：同 12b 的起因 —— 直调时被测行为一旦抛异常会把整块打崩、
+    #   定向断言没跑到；经 CLI 则异常被进程隔离、红行必落在下面两条"原路径带 configs 层"断言上。
     p_fail: list[str] = []
-    code, out = _run(xwl.cmd_paths, file=a_sql)
+    _c15, out, _e15 = _run_cli(["paths", a_sql])
     if '["children", 0, "configs", "serverScript"]' not in out:
         p_fail.append("paths 的原路径没带 configs 层（照抄会把字段写到节点根上）:\n%s" % out)
     if '["children", 0, "children", 0, "configs", "sql"]' not in out:
@@ -1156,6 +1231,33 @@ def _check_subcommands(tmp, node, failures, write) -> None:
         failures.extend(p_fail)
     else:
         print("[ok]  paths 原路径带 configs 层，照抄即可改到正确位置")
+
+    # ---- 15b. paths 对「恰好两个同名 itemId」必须给 ⚠ 点名告警（不许直接推荐有歧义的 @ 路径）----
+    # 起因（仪表审计实测）：`paths` 的重名阈值被改成"重复 > 2 才告警"时，**恰好 2 个同名**的节点会被
+    #   直接推荐一个会产生歧义的 `@` 路径（用户照抄，到 `patch` 执行才报"不猜顺序"）—— 而旧自检的
+    #   夹具 `itemId` 全唯一、只做"输出含原路径"级冒烟 ⇒ 该回归**全绿**。故补"恰好两个同名"夹具。
+    dup_fail: list[str] = []
+    _dup_obj = {"title": "重名页", "children": [
+        {"configs": {"itemId": "d1", "url": "a.html"}, "type": "store",
+         "expanded": False, "children": []},
+        {"configs": {"itemId": "d1", "url": "b.html"}, "type": "store",
+         "expanded": False, "children": []},
+    ]}
+    _dup_page = os.path.join(tmp, "paths_dup.xwl")
+    with open(_dup_page, "w", encoding="utf-8", newline="") as f:
+        f.write(xwl.dumps_designer(_dup_obj, 1, CRLF))
+    _rc_pd, _out_pd, _err_pd = _run_cli(["paths", _dup_page])
+    if _rc_pd != 0:
+        dup_fail.append("paths 对重名页 rc=%d（应 0）：\n%s" % (_rc_pd, _cli_text(_out_pd, _err_pd)))
+    if "⚠ @写法" not in _out_pd or "出现 2 次" not in _out_pd:
+        dup_fail.append("paths 对「恰好 2 个同名 itemId」未给 ⚠ 点名告警：\n%s" % _out_pd)
+    if "推荐" in _out_pd:
+        dup_fail.append("paths 对重名 itemId 直接推荐了有歧义的 `@` 路径（应只给 ⚠ 点名提示）：\n%s"
+                        % _out_pd)
+    if dup_fail:
+        failures.extend(dup_fail)
+    else:
+        print("[ok]  paths 对「恰好 2 个同名 itemId」给 ⚠ 点名告警、不直接推荐有歧义的 @ 路径")
 
     # ---- 16. schema --skeleton 只输出该控件允许的键 ----
     reg = os.path.join(tmp, "mini_controls.json")
@@ -1224,16 +1326,23 @@ def _check_new_guards(tmp, node, failures, write) -> None:
         {"configs": {"itemId": "viewport"}, "type": "viewport", "expanded": False,
          "children": [_store("st1", "m?xwl=sub/sel")]}]}, _p1)
     _kw1 = dict(file=_p1, module_root=_r1, controls=None, list_fields=False, upstream=False)
+    # ⚠️ 这里**故意直调** `_run(xwl.cmd_params, **_kw1)`（**不走 `_run_cli`**）：本块要验的正是
+    #    「`cmd_params` 在**缺 `strict` 字段**时靠 `getattr` 兜底不炸」——CLI 的 argparse 恒会给
+    #    `strict` 赋默认值，走 CLI 就把这条兜底路径**测没了**（语义必须直调）。
+    #    既然直调，就要自己兜异常：`except` 里**必须同时**置 `_rc_old` 与 `_out_old`。
+    #    起因：`except` 分支若只置 `_rc_old = None`、不置 `_out_old`，异常一旦发生，下面
+    #    `% (_rc_old, _out_old)` 就抛 `UnboundLocalError: '_out_old'` —— 把"缺字段抛异常"的
+    #    **定向红行**盖成"块崩了"（实测成立）。`_out_new` 同理一并初始化。
     try:
         _rc_old, _out_old = _run(xwl.cmd_params, **_kw1)          # 故意不给 strict 字段
     except Exception as exc:  # noqa: BLE001
-        _rc_old = None
+        _rc_old, _out_old = None, ""
         strict_fail.append("① 夹具缺 `strict` 字段时 `cmd_params` 抛异常（`getattr` 兜底失效）: "
                            "%s: %s" % (type(exc).__name__, exc))
     try:
         _rc_new, _out_new = _run(xwl.cmd_params, **_kw1, strict=True)
     except Exception as exc:  # noqa: BLE001
-        _rc_new = None
+        _rc_new, _out_new = None, ""
         strict_fail.append("① `strict=True` 时 `cmd_params` 抛异常: %s: %s"
                            % (type(exc).__name__, exc))
     if _rc_old != 1:
@@ -1247,31 +1356,52 @@ def _check_new_guards(tmp, node, failures, write) -> None:
     else:
         print("[ok]  ① `--strict`：出现在 `params --help`；缺源时默认与 `--strict` 都 rc=1（同效）")
 
-    # ---- ② `--upstream` 汇总行把「节点级」与「出现级」两套量纲**各自标注、不混算** ----
+    # ---- ② `--upstream`：反查本体 + 「节点级 / 出现级」两套量纲各自标注、不混算 ----
     # 起因：`--upstream` 的末尾汇总行把**节点级**（`store.url` 能否在本根解析到文件）与
     #   **出现级**（全文 `url:` 的文字形态）两套**不同量纲**的数并排打印。这两组极易被后人
     #   改成"混算"、或当成同一口径引用（`references/measured-data.md` §11.3/§11.4 专门写了
-    #   「不可混引」）。故钉：打开时两段各自标注、节点级三分类之和 = 本页带 url 的 store 数；
-    #   且**不开 `--upstream` 时该汇总行不得出现**（= SKILL §六「不开时输出与冻结基线逐字一致」的必要条件）。
+    #   「不可混引」）。故钉：打开时两段各自标注、节点级三分类之和 = 本页带 url 的 store 数。
+    # ⚠️ **反查本体与计数的断言一直是缺的**（仪表审计实测）：夹具里**根本没有上游调用方**（`calls` 恒空）、
+    #   也没有**非 `m?xwl`** 的 `store.url` ⇒ 反查整体归零（`_page_ref_key` 不剥 `.xwl`）与
+    #   「非 m?xwl 的 url 漏计」两个真实回归在旧自检上**全绿**。故这里补两样：
+    #   ① 造**真实上游调用方**（另一页 `Wb.open({url:'m?xwl=<本页>', params:{…}})`）⇒ 断言能反查到；
+    #   ② 造**非 `m?xwl` 的 `store.url`** ⇒ 断言节点级三分类**之和 = 本页 store.url 数**。
+    # ⚠️ 「不开 `--upstream` 时该汇总行不得出现」是 SKILL 那句「不开时输出与冻结基线逐字一致」的
+    #   **必要条件** —— 注意该口径**只对「无 miss 页面」成立**（有 miss 且未开 `--strict` 时本就多一行 `[note]`）。
     up_fail: list[str] = []
     _r2 = os.path.join(tmp, "pm_upstream")
     _dump({"title": "target", "children": []},
           os.path.join(_r2, "demo", "xxxSql", "demoSql.xwl"))
+    # 真实上游调用方：另一页里 `Wb.open` 指向被测页 `h8`（引用键 = 相对模块根去扩展名 = `h8`）。
+    _dump({"title": "caller", "children": [
+        {"configs": {"itemId": "openBtn"}, "type": "button", "expanded": False,
+         "events": {"click": "Wb.open({url:'m?xwl=h8', params:{a:1, b:2}});"},
+         "children": []}]}, os.path.join(_r2, "demo", "caller.xwl"))
     _js = ("app.grid1.store.load({ params: { kw: app.kw.getValue() } }); "
            "Wb.request({ url: 'local.html' }); Wb.request({ url: u });")
     _p2 = os.path.join(_r2, "h8.xwl")
     _dump({"title": "upstream页", "children": [
         {"configs": {"itemId": "viewport"}, "type": "viewport", "expanded": False, "children": [
-            _store("s1", "m?xwl=demo/xxxSql/demoSql"),   # 同根命中
-            _store("s2", "m?xwl=demo/none/none"),        # 本根未找到
+            _store("s1", "m?xwl=demo/xxxSql/demoSql"),   # 节点级：同根命中
+            _store("s2", "m?xwl=demo/none/none"),        # 节点级：本根未找到
+            _store("s3", "local.html"),                  # 节点级：非 m?xwl 的 url
             {"configs": {"itemId": "grid1"}, "type": "grid", "expanded": False,
              "events": {"click": _js},
              "children": [{"configs": {"itemId": "kw"}, "type": "text",
                            "expanded": False, "children": []}]},
         ]}]}, _p2)
-    _kw2 = dict(file=_p2, module_root=_r2, controls=None, list_fields=False)
-    _rc_on, _out_on = _run(xwl.cmd_params, **_kw2, upstream=True)
-    _rc_off, _out_off = _run(xwl.cmd_params, **_kw2, upstream=False)
+    # 经 `_run_cli`（子进程真 CLI）取值：拿真实退出码、异常被隔离 —— 不许直调 `_run(xwl.cmd_*)`
+    # （同 12b 的起因：直调抛异常会把整块打崩、定向断言没跑到）。
+    _rc_on, _out_on, _err_on = _run_cli(["params", _p2, "--module-root", _r2, "--upstream"])
+    _rc_off, _out_off, _err_off = _run_cli(["params", _p2, "--module-root", _r2])
+    # ① 反查本体：必须反查到 demo/caller.xwl，并给出传入键。
+    if "本页被 1 处上游调用" not in _out_on:
+        up_fail.append("② `--upstream` 未反查到**真实上游调用方**（应「本页被 1 处上游调用」）：\n%s"
+                       % "\n".join(l for l in _out_on.splitlines()
+                                   if "外部可传入" in l or "上游调用" in l or "传入键" in l))
+    if not any("demo/caller.xwl" in l and "'a'" in l and "'b'" in l for l in _out_on.splitlines()):
+        up_fail.append("② `--upstream` 未列出上游调用方清单（应含 demo/caller.xwl 与传入键 a/b）：\n%s"
+                       % "\n".join(l for l in _out_on.splitlines() if "传入键" in l))
     _sumline = next((l for l in _out_on.splitlines() if "载入侧未纳入核对" in l), "")
     if not _sumline:
         up_fail.append("② 开 `--upstream` 时没有「载入侧未纳入核对」汇总行（本页带 store.url）")
@@ -1284,24 +1414,25 @@ def _check_new_guards(tmp, node, failures, write) -> None:
                            % _sumline.strip())
         else:
             _hit, _miss2, _other, _dyn, _lit = (int(x) for x in _mm.groups())
-            if (_hit, _miss2, _other) != (1, 1, 0):
-                up_fail.append("② 节点级三分类应为 (同根命中 1 / 本根未找到 1 / 非 m?xwl 0)，"
+            if (_hit, _miss2, _other) != (1, 1, 1):
+                up_fail.append("② 节点级三分类应为 (同根命中 1 / 本根未找到 1 / 非 m?xwl 1)，"
                                "实得 %s" % ((_hit, _miss2, _other),))
-            if _hit + _miss2 + _other != 2:
-                up_fail.append("② 节点级三分类之和 ≠ 本页 store.url 数（2）—— 划分不完整: %s"
-                               % ((_hit, _miss2, _other),))
+            if _hit + _miss2 + _other != 3:
+                up_fail.append("② 节点级三分类之和 ≠ 本页 store.url 数（3）—— 划分不完整"
+                               "（「非 m?xwl 的 url」漏计就会差一）: %s" % ((_hit, _miss2, _other),))
             if (_dyn, _lit) != (1, 1):
                 up_fail.append("② 出现级应为 (动态写法 1 / 非 m?xwl 字面量 1)，实得 %s"
                                % ((_dyn, _lit),))
             if "动态写法" in _sumline.split("出现级")[0]:
                 up_fail.append("② 出现级数字混进了节点级段（两套量纲未分离）")
     if "载入侧未纳入核对" in _out_off:
-        up_fail.append("② 不开 `--upstream` 时仍打印了汇总行（破坏「与基线的必要条件」）")
+        up_fail.append("② 不开 `--upstream` 时仍打印了汇总行（这是「不开时输出与冻结基线逐字一致」"
+                       "的必要条件；该口径只对**无 miss 页面**成立）")
     if up_fail:
         failures.extend(up_fail)
     else:
-        print("[ok]  ② `--upstream` 汇总行量纲分离：节点级三分类之和 = 本页 store.url 数、"
-              "出现级两数独立成组；不开 `--upstream` 时该行不出现")
+        print("[ok]  ② `--upstream`：能反查到真实上游调用方（demo/caller.xwl，传入键 a/b）；"
+              "汇总行量纲分离、节点级三分类之和 = 本页 store.url 数；不开 `--upstream` 时该行不出现")
 
     # ---- ③ `folders` 结论行只报「index 悬空项 / `folder.json` 损坏」 ----
     # 起因：结论行是"给用户据此行动"的那一行。「未登记」实测约一成、且多为被引用的片段页
@@ -1346,6 +1477,320 @@ def _check_new_guards(tmp, node, failures, write) -> None:
               "不含「未登记」（未登记只在明细）")
 
 
+# ---- 跨守卫分工表（**原寄居 `_check_docs` 函数体**；#15「减负」时移出，函数体只留指向本常量的指针）----
+#   位置口径：移出函数体是为了给 `_check_docs`（曾实测 1337 行）减负（阈值 `>1300 行` 触发，见 `plan/00 §五·11`）。
+#   选"模块级常量"而非"`references/workflow-notes.md`"：后者是**分发面文档**，改动会牵动 `17p`/`17r`/`17b` 等守卫，
+#   而本表是**实现内注**、不该进正文文档。
+# ⚠️ **围栏四面分工**（四条与「围栏」沾边的守卫，互不替代；改任一条先核此表）：
+_FENCE_FOUR_ARM_DIVISION = """\
+① 格式面 —— 表列数／标题跳级／代码块闭合／行尾空白／末尾换行。
+   围栏只豁免「标题跳级」（`_fence % 2 == 0`）；表列数与行尾空白没有围栏条件 ⇒ 围栏内照判
+   （两树对照实测：围栏内注入列数不齐的表，两树都报「表格本行 3 格、表头 2 格」）；闭合按 ``` 计数判。
+② 承诺文案面（17j-6）—— 只扫 SKILL.md 全行（含围栏内），判行内反引号里
+   `[note]/[warn]/[FAIL]/[ok]` 前缀是否在 xwl.py 里存在。
+③ 跨文件指针面（本臂 17j-12）—— 扫 docs 全行（含围栏内）（遍历时跳过 CHANGELOG.md），
+   判跨文件节号指针是否存在，零豁免。
+④ 围栏内输出文案面（17j-14）—— 仅围栏内、仅裸以 `[note]/[warn]/[FAIL]/[ok]` 开头的行，
+   扫全 docs（不含 CHANGELOG.md、不含 examples/README.md）。
+⟂ 互斥（两树对照实测）：② 要反引号包裹、④ 要裸行首标记 ⇒ 对「同一个标记的出现」互斥，
+   而不是"同一行至多一条"：一行同时含裸 `[note]` 与反引号 `[ok]` 时两臂都报（实测 2 条）。
+⚠️ 双报的归属别挂错（两树对照实测）：围栏外的 `§N.M`／`§N` 死指针被本臂与另一条引用守卫
+   各报一行 = 既有（基线树也报 2 条）；围栏内同款各报一行 = 本版新增
+   （基线树只报 1 条〈另一条守卫〉，本版因取消跳围栏才变 2 条）。
+"""
+
+
+# ---- `17g` 外移点表（**原寄居 `_check_docs` 函数体**；#15「有界下沉」时移出，函数体只留引用）----
+#   位置口径：移出函数体是为了给 `_check_docs` 减负（阈值 `>1300 行` 触发，见 `plan/00 §五·11`）。
+#   本表是**纯数据**、被 `_check_docs` 的 `17g` 循环按元组结构读取 ⇒ 搬到模块级**不改任何判据**。
+# ⑤ 元组末位 = 该外移点在 `SKILL.md` 里的**锚点**（所属小节的标题前缀，须实测唯一）：
+# 断言① 由「全文 contains」收紧为「**该小节区间内** contains」（机理与残留盲区见 `_check_docs` 的 for 循环）。
+_splits = [
+    ("第五章 5.4 四条通路", "SKILL.md", "references/js-api.md",
+     ["Wb.request", "Wb.open", "Wb.upload", "Wb.requestAg"],
+     "### 5.4 四条最容易踩的"),
+    ("第 4 步 逐项判据", "SKILL.md", "references/faq.md", ["无 BOM", "换行一致", "重名"],
+     "### 第 4 步 · 格式校验"),
+    ("4.2 退出码与输出约定", "SKILL.md", "references/faq.md", ["退出码"],
+     "### 4.2 退出码与输出约定"),
+    ("2.4 写回算法", "SKILL.md", "references/measured-data.md",
+     ["toString(1)", "syncSave", "updateModule"], "### 2.4 换行与展开"),
+    ("7.1 框架侧源码", "SKILL.md", "references/measured-data.md",
+     ["ComponentManager", "unregister"], "### 7.1 框架怎么把控件交给 JS"),
+    ("FAQ 全量问答", "SKILL.md", "references/faq.md", ["怎么排查"], "## 八、常见问题"),
+    ("改完自检清单", "SKILL.md", "references/checklist.md", ["- [ ]"],
+     "## 九、改完的自检清单"),
+    ("反模式清单", "SKILL.md", "references/anti-patterns.md", ["为什么诱人"],
+     "## 九、改完的自检清单"),
+    ("端到端实操", "SKILL.md", "references/walkthrough.md", ["第 1 步"],
+     "### 第 0 步 · 新建文件"),
+    ("2.6 diffguard 判据细节", "SKILL.md", "references/faq.md", ["粗筛", "定义级"],
+     "### 2.6 压平检测"),
+    ("2.6 diffguard 因果", "SKILL.md", "references/workflow-notes.md", ["定义级", "粗筛"],
+     "### 2.6 压平检测"),
+    # ---- 结构下沉（第一步）：下面这些是正文从 SKILL.md 搬进 references/ 后的外移点 ----
+    # 承载词取「必须存活」清单：把 SKILL 里的叙述搬进 references 后，
+    # 主文档留了指针（第一项断言）+ 目标文件里这些词必须还在（第二项断言）。
+    # 迁到 `--help`（通道 B）的那几处，其承载词同样在目标 references 里留一份兜底
+    # （`17g` 只加载 markdown，读不到 `scripts/*.py` 的 `--help`/注释）。
+    ("2.3 静默语义损坏", "SKILL.md", "references/anti-patterns.md",
+     ["静默", "绝不能", "相对基线"], "### 2.3 多行源为什么绝不能压成一行"),
+    ("2.4 规模占比", "SKILL.md", "references/measured-data.md",
+     ["≈ 三成", "别把 diff 当", "本次改动"], "### 2.4 换行与展开"),
+    ("2.4 --eol 回退", "SKILL.md", "references/faq.md",
+     ["不静默", "回退 LF", "三命令共用"], "### 2.4 换行与展开"),
+    ("2.5 字面反斜杠 n", "SKILL.md", "references/measured-data.md",
+     ["语义无损", "逐字节相同", "给谁看"], "### 2.5 值里的"),
+    ("三第0步 folder", "SKILL.md", "references/faq.md",
+     ["不登记就看不到", "只认文件路径", "不替你创建"], "### 第 0 步 · 新建文件"),
+    ("三第3步 三点#3", "SKILL.md", "references/measured-data.md",
+     ["顺带规整", "语义等价", "diff 只含", "重定向"], "### 第 3 步 · 编辑"),
+    ("三第4步 两坑", "SKILL.md", "references/faq.md",
+     ["别写成", "不是替换成换行符"], "### 第 4 步 · 格式校验"),
+    ("四 4.2 退出码", "SKILL.md", "references/faq.md",
+     ["不影响退出码", "严格二分", "行首标记", "报告类"], "### 4.2 退出码与输出约定"),
+    ("五 5.2 url 口径", "SKILL.md", "references/sql-fragments.md",
+     ["不解析", "只判本 wb 根", "单 webapp", "url:"], "### 5.2 url 的三种写法"),
+    ("七 7.2 normalName", "SKILL.md", "references/measured-data.md",
+     ["不是所有控件都接受", "非法配置", "会跳过并回报"], "### 7.2 三类控件"),
+    ("七 7.3 重名建议", "SKILL.md", "references/measured-data.md",
+     ["不猜顺序", "能用 normalName 就用", "必须同步改 JS", "tbarGrid"], "### 7.3 遇到重名"),
+    ("1.2 控件骨架", "SKILL.md", "references/controls.md",
+     ["必须唯一", "会与设计器产物不一致"], "### 1.2 控件节点的标准形态"),
+    ("三第3步 ops 示例", "SKILL.md", "references/sql-fragments.md",
+     ["insert", "append", "delete", "按顺序执行"], "## 六、SQL 片段"),
+    ("三第3步 @itemId", "SKILL.md", "references/sql-fragments.md",
+     ["@名字#N", "串联", "不猜顺序"], "## 六、SQL 片段"),
+    ("三第3步 改前核对", "SKILL.md", "references/anti-patterns.md",
+     ["configs` 一层", "照抄"], "## 八、常见问题"),
+    ("五 5.4 四条易踩", "SKILL.md", "references/js-api.md",
+     ["能力边界不是错误", "不用写", "错误对象"], "### 5.4 四条最容易踩的"),
+    ("五 5.1 引用读法", "SKILL.md", "references/sql-fragments.md",
+     ["补上 `.xwl`", "被引用的片段是", "从文件找引用方"], "### 5.1 怎么读一个"),
+    ("七 7.3 命令示例", "SKILL.md", "references/measured-data.md",
+     ["--dups-only", "--name", "--suggest"], "### 7.3 遇到重名"),
+    # ---- 核心 8 块结构下沉时新增的外移点 ----
+    # 2.1：5 条硬规则搬进 faq §一（第 4 步的 ①–⑤ 清单是就地承载体）；
+    # 4.3：环境依赖搬进 README（SKILL 适用范围表的环境行是就地承载体）。
+    ("2.1 硬规则", "SKILL.md", "references/faq.md",
+     ["无 BOM", "换行一致", "末行结构"], "### 2.1 硬规则（多行源的磁盘形态）"),
+    ("4.3 环境依赖", "SKILL.md", "README.md",
+     ["Python 3.9+", "NODE_BIN"], "### 4.3 环境依赖与自检"),
+]
+
+
+# ---- `17j-7` `--help` 行数上限表（**原寄居 `_check_docs` 函数体**；#15「有界下沉」时移出，函数体只留引用）----
+#   纯数据、被 `_check_docs` 的 `17j-7` 循环读取 ⇒ 搬到模块级不改任何上限值、不改判据。
+#   ⚠️ 新增子命令必须**同步在此登记**上限（`_check_docs` 的 `_h_unreg` 会把漏登的报红）。
+_help_caps = {
+    None: 36,        # 顶层 `xwl.py --help`（实测 26）
+    "check": 16, "edit": 22, "patch": 41, "params": 23, "paths": 12,
+    "new": 28, "folders": 15, "itemids": 27, "sqlrefs": 12, "diffguard": 14,
+    "schema": 26, "dump": 12, "expand": 25, "sql": 12, "events": 13,
+}
+
+
+# ---- `17l` 编年守卫的词表 / 正则 / 豁免集（**原寄居 `_check_docs` 函数体**；#15「有界下沉」时移出）----
+#   纯数据、被 `_check_docs` 的 `17l` 三条臂读取 ⇒ 搬到模块级不改任何判据。
+#   ⚠️ `_chron` 词表用**相邻字面量拼接**写（整词直写会让 `selftest.py` 自己被这三条臂判红）——
+#     移出后**保持拼接形态**（保持 `"曾" "经"` 两段字面量，不要合并成一整词）。
+_chron = ["曾" "经", "原" "先", "早" "先", "此" "前", "一" "度", "当" "年", "旧" "版",
+          "旧" "实现", "旧" "判据", "原" "判据", "上" "一轮", "上" "一版", "当" "时", "历史" "上",
+          "以" "前"]
+_date_verb = ("实测", "真机", "复现", "审查", "修正", "发布", "事故")
+_date_re = re.compile(r"\d{4}-\d{2}-\d{2}")
+_ver_re = re.compile(r"\d+\.\d+\.\d+")
+_chron_exempt = {"CHANGELOG.md", "metadata.json",
+                 "references/measured-data.md", "references/workflow-notes.md"}
+
+
+# ---- 文档守卫扫描面清单（**原寄居 `_check_docs` 函数体**；#15「有界下沉」时移出，函数体只留引用）----
+#   纯数据（12 份 md 的路径），被 `_check_docs` 读成 `docs` 字典 ⇒ 搬到模块级不改任何判据。
+doc_names = ["SKILL.md", "README.md", "CHANGELOG.md", "references/walkthrough.md",
+             "references/faq.md", "references/checklist.md", "references/anti-patterns.md",
+             "references/controls.md",
+             "references/sql-fragments.md", "references/measured-data.md",
+             "references/js-api.md", "references/workflow-notes.md",
+             ]
+
+
+# ---- 本轮仪表审计整改（本版段内）所需的模块级常量与助手 ----
+#   位置放在函数体外：这些常量/助手若写进 `_check_docs` 函数体，会把它推过 1300 行阈值。
+
+# 破计数遮蔽：`_check_docs` 里 `# 17<字母>` 命名守卫块的**基线标识清单**（块名，按文件出现序）。
+#   起因（按 `17s` 要求写清，且**有意的"丢守卫即红"**）：合并大绿行把 80+ 个判据落点压成 1 行 ⇒
+#     整块删掉一个文档守卫后，`[ok]` 计数与大绿行文案**都不变**、rc 仍 0
+#     （定点实测：删掉反模式入口那一整块后 `[ok]` 仍 134、末行仍 ALL OK、合并行照样宣称该守卫通过）。
+#   ⇒ 这里把"跑了哪些块"显式化并**内置基线**：判**块名多重集 == 基线多重集**（`[FAIL]`、rc=1）——
+#     **少一个块名**、或**多一个未登记的块名**，都要红。
+#   ⚠️ 计数法（只判"块数 < 基线"）仍有残余：**注释掉一个块、同时新增一个未登记块（净 0）**照样绿；
+#     集合判据把这一残余补上。
+#   ⚠️ 取"**块名**"（`# 17x` 里的编号，如 `17j-9`）而非整行文本 ⇒ 块头注释**措辞可改**、不必动基线；
+#     同名块（本文件 `17h` / `17i` 各两处）靠**多重性**区分 ⇒ 用 `Counter`（不是 `set`）。
+#   📌 **有意增删守卫块时如何更新基线**：改完块后跑下面这条量一次（只量不改），把结果抄回本清单：
+#      python -B -c "import re;print([re.match(r'^\s*# (17[^\s：:（(]*)',l).group(1) for l in open('scripts/selftest.py',encoding='utf-8') if re.match(r'^\s*# 17[a-z]',l)])"
+#      —— **仅在"块名确因有意增删而变"时改**；改完跑 `python -B scripts/selftest.py` 复核绿。
+#      ⚠️ **别**把判据放宽回"只判降"（那正是刚修掉的病根：净 0 换块会逃逸）。
+_DOC_GUARD_BLOCK_BASELINE = (
+    "17a", "17b", "17c", "17c-2", "17d", "17e", "17f", "17g", "17h", "17i",
+    "17h", "17i", "17k", "17j", "17j-2", "17j-3", "17j-4", "17j-7", "17j-8", "17j-9",
+    "17j-10", "17j-11", "17j-5", "17j-6", "17j-12", "17j-13", "17j-14", "17l", "17m", "17n",
+    "17o", "17p", "17q", "17q-自洽", "17r", "17s",
+)
+_DOC_GUARD_BLOCK_BASE = collections.Counter(_DOC_GUARD_BLOCK_BASELINE)
+
+
+def _doc_guard_block_ids():
+    """扫描本文件，返回全部 `# 17<字母>` 守卫块的**块名多重集**（`Counter`）；读不出 ⇒ `None`。"""
+    try:
+        with open(os.path.join(HERE, "selftest.py"), encoding="utf-8", newline="") as _f:
+            _lines = _f.read().splitlines()
+    except OSError:
+        return None
+    _c: collections.Counter = collections.Counter()
+    for _l in _lines:
+        _m = re.match(r"^\s*# (17[^\s：:（(]*)", _l)
+        if _m:
+            _c[_m.group(1)] += 1
+    return _c
+
+
+def _doc_guard_block_mismatch():
+    """判**块名多重集 == 基线多重集**：一致 ⇒ `None`；否则 ⇒ FAIL 文案（读不出文件也算不符）。
+
+    放在函数体外（写法见模块级 `_DOC_GUARD_BLOCK_BASELINE` 的注释）：这段若留在 `_check_docs`
+    函数体里会把它推近 1300 行阈值。
+    """
+    _ids = _doc_guard_block_ids()
+    if _ids is None:
+        return "文档守卫块清单跑不起来（读不出 selftest.py）—— 本项无法判定，判红"
+    _miss = sorted(k for k in _DOC_GUARD_BLOCK_BASE if _ids.get(k, 0) < _DOC_GUARD_BLOCK_BASE[k])
+    _extra = sorted(k for k in _ids if _ids[k] > _DOC_GUARD_BLOCK_BASE.get(k, 0))
+    if not (_miss or _extra):
+        return None
+    return ("文档守卫块清单与基线不符：缺 %s ／ 多（未登记）%s —— 有守卫被删 / 被注释，"
+            "或新增了未登记的块（丢块、以及**净 0 偷换块**都必须响）；"
+            "若确系**有意增删**块，请按 `_DOC_GUARD_BLOCK_BASELINE` 注释更新基线。"
+            % (_miss or "无", _extra or "无"))
+
+
+# 非 git 静默变绿的收窄：默认**判红**；确无 `.git`（zip 分发解包）时须**显式** `--allow-nogit` 才降级。
+#   起因（有意收窄一处"非 git 只标注"的口径）：原处置"取不到 `git ls-files` ⇒ 只打 `[note]`、不判红"
+#   在 zip 分发场景**可辩护**，但副作用是 —— **一个本就没跑的守卫族，全绿输出仍读得出"一切正常"**
+#   （标注淹没在长输出里）⇒ **静默绿是病根**。故默认判红，加了 `--allow-nogit` 才降级为
+#   "标注继续、rc 按其他项定"（此时**仍保留**非 git 三族未执行的那句汇总行标注）。
+ALLOW_NOGIT = False
+
+
+def _nogit_gate(arm: str, doc_fail: list, nogit_arms: list) -> None:
+    """`git ls-files` 门控守卫"取不到 git"时的统一处置（口径见上方 `ALLOW_NOGIT` 起因）。"""
+    if ALLOW_NOGIT:
+        nogit_arms.append(arm)
+        print("[note] %s：取不到 `git ls-files` 清单 ⇒ 本次**没扫**"
+              "（`--allow-nogit` 降级：不算通过也不算失败）" % arm)
+    else:
+        doc_fail.append(
+            "%s：取不到 `git ls-files` 清单 ⇒ 本次**没扫**（默认判红 —— 静默绿是病根）。"
+            "确无 `.git`（如 zip 分发解包后）需降级时，显式加 `--allow-nogit`。" % arm)
+
+
+def _git_scan_scope(root: str):
+    """`git ls-files` 门控守卫的扫描面：`ls-files` ∪ 磁盘新增（`--others --exclude-standard`）。
+
+    返回 `(scope, why)`：取不到 git ⇒ `(None, 原因)`。
+
+    起因（未跟踪文件对内容守卫隐形，定点实测）：只扫 `git ls-files` 时，**新增但未 `git add`** 的
+    文件对「编年三臂 / 旧措辞 / 分发面自包含」**完全隐形** —— 往 `references/` 放一份未 `git add`
+    的 md、内容含内容守卫该拦的字样，三族一条都不命中；`git add` 之后立刻新增 3 条 `[FAIL]`。
+    ⇒ 把扫描面扩成「已跟踪 ∪ 未跟踪（排除 `.gitignore` 忽略项）」：**未 `git add` 的新文件也要被看到**。
+    """
+    scope: list = []
+    _seen: set = set()
+    for _c in (["ls-files"], ["ls-files", "--others", "--exclude-standard"]):
+        try:
+            _pr = subprocess.run(["git", "-C", root, *_c], capture_output=True, text=True,
+                                 encoding="utf-8", errors="replace", env=dict(os.environ))
+        except (OSError, ValueError) as _exc:
+            return None, "%s: %s" % (type(_exc).__name__, _exc)
+        if _pr.returncode != 0:
+            return None, "`git %s` 返回 %d" % (" ".join(_c), _pr.returncode)
+        for _x in _pr.stdout.splitlines():
+            _x = _x.strip()
+            if _x and _x not in _seen:
+                _seen.add(_x)
+                scope.append(_x)
+    return scope, None
+
+
+def _real_out_corpus(tmp: str) -> str:
+    """**真跑**一批 `cmd_*`（含加载失败分支），把工具**实际打印过**的输出行收成语料。
+
+    供 `17j-6` / `17j-14` 做 oracle：这两条守卫的 oracle **取错了源** —— 把 `xwl.py` 的
+    **源码串（含注释）**当期望：
+    只要源码里**出现过**这段文字（**哪怕是注释、或一个永不执行的字符串常量**）就算"文案承诺成立"。
+    ⇒ 那是**可判定的自证循环**：工具把文案改坏、文档同步改，判据恒真；纯注释也能满足它。
+    改法：期望值必须是工具**真的打印出来**的前缀 —— 于是注释与死字符串再也满足不了。
+
+    ⚠️ 语料面**有意做窄**（只覆盖被这两条守卫引到的真实文案）；若将来文档开始承诺**新的**输出文案，
+    需在下面**补一次真实调用**把该文案跑出来，否则守卫会报红 —— 这正是要的：承诺必须能被真跑复现。
+    返回：逐行剔除空白后、以换行拼接的真实输出语料（调用方做子串匹配）。
+    """
+    _buf: list = []
+
+    def _cap(fn, **kw):
+        try:
+            _buf.append(_run(fn, **kw)[1])
+        except Exception:   # noqa: BLE001 —— 语料构造失败不该让守卫崩（缺语料 ⇒ 调用方判红）
+            pass
+
+    def _capchk(paths):
+        try:
+            _buf.append(_run_check(paths, None)[1])
+        except Exception:   # noqa: BLE001
+            pass
+
+    def _w(nm, text):
+        p = os.path.join(tmp, nm)
+        with open(p, "w", encoding="utf-8", newline="") as f:
+            f.write(text)
+        return p
+
+    # ⑧ 加载链完整性：无异常 / 有告警 / 因解析失败跳过（三态都来自 `check`）
+    _capchk([_w("corpus_ok.xwl", xwl.dumps_designer(
+        {"title": "c", "roles": {}, "children": [
+            {"configs": {"itemId": "v"}, "type": "viewport",
+             "expanded": False, "children": []}]}, 1, CRLF))])
+    _capchk([_w("corpus_chain.xwl", xwl.dumps_designer(
+        {"title": "c", "children": {}, "roles": {}}, 1, CRLF))])
+    _capchk([_w("corpus_badjson.xwl", "{ not json")])
+    # 非 UTF-8 文本 ⇒ 加载失败分支的 `[FAIL] 不是 UTF-8 文本（…）`
+    _nu = os.path.join(tmp, "corpus_notutf8.xwl")
+    with open(_nu, "wb") as f:
+        f.write(b"\xff\xfe\x00bad")
+    _capchk([_nu])
+    # `[ok] SQL 需要的参数在页面侧都能找到来源` ⇒ `params` 在「有需求且无 miss」时的输出：
+    #   造一个 SQL 载体（dataprovider 的 sql 含 `{?kw?}`）+ 一个引用它的页面（用 `out: app.tbar`
+    #   把容器内取值控件 `kw` 送出）⇒ 页面送出与 SQL 需要相等、无 miss。
+    _w("corpus_sqlcarrier.xwl", xwl.dumps_designer(
+        {"title": "carrier", "roles": {"default": 1}, "children": [
+            {"configs": {"itemId": "module",
+                         "serverScript": "var sql = '';\nrequest.setAttribute('sql', sql);"},
+             "type": "module", "expanded": True, "children": [
+                 {"configs": {"itemId": "dp", "sql": "select 1 from t where a={?kw?}"},
+                  "type": "dataprovider", "expanded": False, "children": []}]}]}, 1, CRLF))
+    _pp = _w("corpus_params.xwl", xwl.dumps_designer(
+        {"title": "p", "roles": {"default": 1}, "children": [
+            {"configs": {"itemId": "viewport"}, "type": "viewport", "expanded": False, "children": [
+                {"configs": {"itemId": "tbar"}, "type": "toolbar", "expanded": False, "children": [
+                    {"configs": {"itemId": "kw"}, "type": "text", "expanded": False, "children": []}]},
+                {"configs": {"itemId": "gs", "url": "m?xwl=corpus_sqlcarrier"},
+                 "type": "store", "expanded": False, "children": []},
+                {"configs": {"itemId": "btn"}, "type": "button", "expanded": False, "children": [],
+                 "events": {"click": "app.gs.load({ out: app.tbar });"}}]}]}, 1, CRLF))
+    _cap(xwl.cmd_params, file=_pp, module_root=tmp, controls=None, list_fields=False)
+    return "\n".join(re.sub(r"\s+", "", _ln) for _t in _buf for _ln in _t.splitlines())
+
+
 def _check_docs(tmp, node, failures, write) -> None:
     """文档一致性守卫（跨文件）：重复表格 / 引用可解析 / 格式 / 自称数字 / 索引与节号（第 17~18 组）"""
 
@@ -1353,12 +1798,7 @@ def _check_docs(tmp, node, failures, write) -> None:
     # 这几类缺陷人眼复核必漏（实测：一轮评审发现的 4 个缺陷里 3 个是"改了这处忘了那处"），所以机械扫。
     doc_fail: list[str] = []
     root = os.path.dirname(HERE)
-    doc_names = ["SKILL.md", "README.md", "CHANGELOG.md", "references/walkthrough.md",
-                 "references/faq.md", "references/checklist.md", "references/anti-patterns.md",
-                 "references/controls.md",
-                 "references/sql-fragments.md", "references/measured-data.md",
-                 "references/js-api.md", "references/workflow-notes.md",
-                 ]
+    # 扫描面清单已**移出函数体**（#15 有界下沉）⇒ 见模块级常量 `doc_names`（本文件 `_check_docs` 之前）。
     docs: dict = {}
     for nm in doc_names:
         fp = os.path.join(root, nm.replace("/", os.sep))
@@ -1523,80 +1963,10 @@ def _check_docs(tmp, node, failures, write) -> None:
     # 17g **外移点两侧都还在**：主文档留了指针 + 目标文件有承载内容。
     # 起因：把 §五 5.4 / §四 4.1 / §二 2.4 / §七 7.1 的正文搬进 references 后，
     # 任何一侧后来被删或改名，都会变成「主文档说去哪看、去了却没有」—— 这类失义机器可查。
-    # ⑤ 元组末位 = 该外移点在 `SKILL.md` 里的**锚点**（所属小节的标题前缀，须实测唯一）：
+    # ⑤ 元组末位 = 该外移点在 `SKILL.md` 里的**锚点**（所属小节的标题前缀，须实测唯一）；
     # 断言① 由「全文 contains」收紧为「**该小节区间内** contains」（机理与残留盲区见下方 for 循环）。
-    _splits = [
-        ("第五章 5.4 四条通路", "SKILL.md", "references/js-api.md",
-         ["Wb.request", "Wb.open", "Wb.upload", "Wb.requestAg"],
-         "### 5.4 四条最容易踩的"),
-        ("第 4 步 逐项判据", "SKILL.md", "references/faq.md", ["无 BOM", "换行一致", "重名"],
-         "### 第 4 步 · 格式校验"),
-        ("4.2 退出码与输出约定", "SKILL.md", "references/faq.md", ["退出码"],
-         "### 4.2 退出码与输出约定"),
-        ("2.4 写回算法", "SKILL.md", "references/measured-data.md",
-         ["toString(1)", "syncSave", "updateModule"], "### 2.4 换行与展开"),
-        ("7.1 框架侧源码", "SKILL.md", "references/measured-data.md",
-         ["ComponentManager", "unregister"], "### 7.1 框架怎么把控件交给 JS"),
-        ("FAQ 全量问答", "SKILL.md", "references/faq.md", ["怎么排查"], "## 八、常见问题"),
-        ("改完自检清单", "SKILL.md", "references/checklist.md", ["- [ ]"],
-         "## 九、改完的自检清单"),
-        ("反模式清单", "SKILL.md", "references/anti-patterns.md", ["为什么诱人"],
-         "## 九、改完的自检清单"),
-        ("端到端实操", "SKILL.md", "references/walkthrough.md", ["第 1 步"],
-         "### 第 0 步 · 新建文件"),
-        ("2.6 diffguard 判据细节", "SKILL.md", "references/faq.md", ["粗筛", "定义级"],
-         "### 2.6 压平检测"),
-        ("2.6 diffguard 因果", "SKILL.md", "references/workflow-notes.md", ["定义级", "粗筛"],
-         "### 2.6 压平检测"),
-        # ---- 结构下沉（第一步）：下面这些是正文从 SKILL.md 搬进 references/ 后的外移点 ----
-        # 承载词取「必须存活」清单：把 SKILL 里的叙述搬进 references 后，
-        # 主文档留了指针（第一项断言）+ 目标文件里这些词必须还在（第二项断言）。
-        # 迁到 `--help`（通道 B）的那几处，其承载词同样在目标 references 里留一份兜底
-        # （`17g` 只加载 markdown，读不到 `scripts/*.py` 的 `--help`/注释）。
-        ("2.3 静默语义损坏", "SKILL.md", "references/anti-patterns.md",
-         ["静默", "绝不能", "相对基线"], "### 2.3 多行源为什么绝不能压成一行"),
-        ("2.4 规模占比", "SKILL.md", "references/measured-data.md",
-         ["≈ 三成", "别把 diff 当", "本次改动"], "### 2.4 换行与展开"),
-        ("2.4 --eol 回退", "SKILL.md", "references/faq.md",
-         ["不静默", "回退 LF", "三命令共用"], "### 2.4 换行与展开"),
-        ("2.5 字面反斜杠 n", "SKILL.md", "references/measured-data.md",
-         ["语义无损", "逐字节相同", "给谁看"], "### 2.5 值里的"),
-        ("三第0步 folder", "SKILL.md", "references/faq.md",
-         ["不登记就看不到", "只认文件路径", "不替你创建"], "### 第 0 步 · 新建文件"),
-        ("三第3步 三点#3", "SKILL.md", "references/measured-data.md",
-         ["顺带规整", "语义等价", "diff 只含", "重定向"], "### 第 3 步 · 编辑"),
-        ("三第4步 两坑", "SKILL.md", "references/faq.md",
-         ["别写成", "不是替换成换行符"], "### 第 4 步 · 格式校验"),
-        ("四 4.2 退出码", "SKILL.md", "references/faq.md",
-         ["不影响退出码", "严格二分", "行首标记", "报告类"], "### 4.2 退出码与输出约定"),
-        ("五 5.2 url 口径", "SKILL.md", "references/sql-fragments.md",
-         ["不解析", "只判本 wb 根", "单 webapp", "url:"], "### 5.2 url 的三种写法"),
-        ("七 7.2 normalName", "SKILL.md", "references/measured-data.md",
-         ["不是所有控件都接受", "非法配置", "会跳过并回报"], "### 7.2 三类控件"),
-        ("七 7.3 重名建议", "SKILL.md", "references/measured-data.md",
-         ["不猜顺序", "能用 normalName 就用", "必须同步改 JS", "tbarGrid"], "### 7.3 遇到重名"),
-        ("1.2 控件骨架", "SKILL.md", "references/controls.md",
-         ["必须唯一", "会与设计器产物不一致"], "### 1.2 控件节点的标准形态"),
-        ("三第3步 ops 示例", "SKILL.md", "references/sql-fragments.md",
-         ["insert", "append", "delete", "按顺序执行"], "## 六、SQL 片段"),
-        ("三第3步 @itemId", "SKILL.md", "references/sql-fragments.md",
-         ["@名字#N", "串联", "不猜顺序"], "## 六、SQL 片段"),
-        ("三第3步 改前核对", "SKILL.md", "references/anti-patterns.md",
-         ["configs` 一层", "照抄"], "## 八、常见问题"),
-        ("五 5.4 四条易踩", "SKILL.md", "references/js-api.md",
-         ["能力边界不是错误", "不用写", "错误对象"], "### 5.4 四条最容易踩的"),
-        ("五 5.1 引用读法", "SKILL.md", "references/sql-fragments.md",
-         ["补上 `.xwl`", "被引用的片段是", "从文件找引用方"], "### 5.1 怎么读一个"),
-        ("七 7.3 命令示例", "SKILL.md", "references/measured-data.md",
-         ["--dups-only", "--name", "--suggest"], "### 7.3 遇到重名"),
-        # ---- 核心 8 块结构下沉时新增的外移点 ----
-        # 2.1：5 条硬规则搬进 faq §一（第 4 步的 ①–⑤ 清单是就地承载体）；
-        # 4.3：环境依赖搬进 README（SKILL 适用范围表的环境行是就地承载体）。
-        ("2.1 硬规则", "SKILL.md", "references/faq.md",
-         ["无 BOM", "换行一致", "末行结构"], "### 2.1 硬规则（多行源的磁盘形态）"),
-        ("4.3 环境依赖", "SKILL.md", "README.md",
-         ["Python 3.9+", "NODE_BIN"], "### 4.3 环境依赖与自检"),
-    ]
+    # ⚠️ 表体已**移出函数体**（#15 有界下沉）⇒ 见**模块级常量 `_splits`**（本文件 `_check_docs` 之前）。
+    #    本函数只按原元组结构**引用**它；判据、元组内容、顺序**逐字未变**。
     # 断言①-机理（为什么把「全文 contains」收成「锚点小节区间 contains」）：`_dst` **恒**出现在
     #   `SKILL.md` 开头「怎么用」那张参考材料索引表里 ⇒ 只看「全文 contains」时这条臂**恒真**
     #   （等于没有）；收成「锚点小节的区间内 contains」后，才真能发现"该外移点处的局部指针被删"。
@@ -1827,7 +2197,12 @@ def _check_docs(tmp, node, failures, write) -> None:
         if nm == "CHANGELOG.md":
             continue
         for i, l in enumerate(ls, 1):
-            for _m in re.finditer(r"§\s*([" + _cn2 + r"]+|\d+)(?!\s*\.\d)", l):
+            # ⚠️ 数字分支加**内层**负前瞻 `(?!\d*\s*\.\d)`：只写外层 `(?!\s*\.\d)` 时，`\d+` 会
+            #   在 `§12.3` 上贪吃 `12`、前瞻遇 `.3` 失败后**回退**成 `1`，把两位节号误判为 `§1`
+            #   （既有 bug、非本版引入）。内层用 `\d*` 吃住整串数字再判，回溯即被堵死 ⇒ `§12.3`
+            #   整体**不匹配**本臂（它归 `17j-12` 按标题文本判）。`§二.3` 类中文点号本就不该出现，
+            #   外层前瞻保留作兜底。**去重**：由此本臂不再与 `17j-12` 在同一 `§N.M` 上各报一行。
+            for _m in re.finditer(r"§\s*([" + _cn2 + r"]+|\d+(?!\d*\s*\.\d))(?!\s*\.\d)", l):
                 _near = list(_fn.finditer(l[: _m.start()]))
                 _tg = None
                 if _near:
@@ -1937,12 +2312,7 @@ def _check_docs(tmp, node, failures, write) -> None:
     #       `new` 余 4 / `expand` 余 4 都属这一侧，**有意保留、本版不动任何 cap**（归下一版按 `实测 + 5` 补满）。
     #     ⚠️ 新增子命令必须同步在此登记上限（下面 `_h_unreg` 会把漏登的红出来）。
     #     起因：通道 B 把细节搬进 `--help` 后它会一路变长 —— 不钉住就会淹没「必读面」，读者找不到关键项。
-    _help_caps = {
-        None: 36,        # 顶层 `xwl.py --help`（实测 26）
-        "check": 16, "edit": 22, "patch": 41, "params": 23, "paths": 12,
-        "new": 28, "folders": 15, "itemids": 27, "sqlrefs": 12, "diffguard": 14,
-        "schema": 26, "dump": 12, "expand": 25, "sql": 12, "events": 13,
-    }
+    #     ⚠️ 表体已**移出函数体**（#15 有界下沉）⇒ 见**模块级常量 `_help_caps`**（本文件 `_check_docs` 之前）。
     try:
         _hp_top = xwl.build_parser()
         _hp_sub = next((_a for _a in _hp_top._actions if getattr(_a, "choices", None)), None)
@@ -1998,26 +2368,25 @@ def _check_docs(tmp, node, failures, write) -> None:
     except (OSError, ValueError) as _exc:
         doc_fail.append("metadata.json 读不了（OS 行检查）：%s" % _exc)
 
+    # ⚠️ 非 git 停用面登记器：本函数里**依赖 `git ls-files`** 的守卫**恰为 3 个** —— `17j-9` ／
+    #   编年守卫（`17l`）／ `17r`；非 git（如平台把 skill 打成 zip 分发、解包后本无 `.git`）时三者
+    #   取不到清单。既要**避免 zip 用户被假报警**、又要**避免"静默绿"** ⇒ 现为**默认判红**
+    #   （`[FAIL]`、`rc=1`）；**仅**在**显式** `--allow-nogit` 的降级路径下，才把"没跑"的臂
+    #   **收集起来**、只打 `[note] …本次没扫`，并在末尾汇总行**显式标注**「本次 … 未执行：无 git」。
+    #   （`17p` 是**纯结构**守卫、不依赖 git，不计入本集合。）
+    _nogit_arms: list[str] = []
+
     # 17j-9 分发文件里不得再出现误导版措辞字面量（拼接见 _bad_lit；豁免 CHANGELOG.md）。
     #     起因（删了会怎样）：误导版把「工具 `@itemId` 寻址」错说成「运行时用 itemId 取名」——
     #     而运行时注册键其实是 `normalName || itemId`。本轮做过 4 处同源修正，但**始终无任何自动化守卫**
     #     （QA 注入实验：4 处全改回误导版、或只漏改 SKILL.md 一处，selftest 仍 rc=0 / [ok]=111 / [FAIL]=0）。
     #     删掉本断言 ⇒ 同类误写会静默回归，只能靠人工评审兜。
     #     ⚠️ 判据字面量用**相邻字面量拼接**写（本文件也在扫描面内）：整词直写会让本文件被自己判红。
-    #     作用域 = `git ls-files`（与"编年守卫""仓库卫生"同一事实源）；取不到 git ⇒ 记 `[note] 没扫`。
+    #     作用域 = `git ls-files` ∪ 磁盘新增未跟踪（见 `_git_scan_scope`）；取不到 git ⇒ 默认判红。
     _bad_lit = "app." "<itemId>"
-    _a9_scope = None
-    try:
-        _pr9 = subprocess.run(["git", "-C", root, "ls-files"], capture_output=True,
-                              text=True, encoding="utf-8", errors="replace",
-                              env=dict(os.environ))
-        if _pr9.returncode == 0:
-            _a9_scope = [x.strip() for x in _pr9.stdout.splitlines() if x.strip()]
-    except (OSError, ValueError):
-        _a9_scope = None
-    if not _a9_scope:
-        # 不是 git 仓库（如平台把 skill 打成 zip 分发）⇒ **跳过并明说**，不算通过也不算失败。
-        print("[note] 17j-9 旧措辞守卫：取不到 `git ls-files` 清单 ⇒ 本次**没扫**（不算通过也不算失败）")
+    _a9_scope, _ = _git_scan_scope(root)
+    if _a9_scope is None:
+        _nogit_gate("17j-9 旧措辞守卫", doc_fail, _nogit_arms)
     else:
         _a9_hits: list[str] = []
         for _rel in _a9_scope:
@@ -2137,13 +2506,16 @@ def _check_docs(tmp, node, failures, write) -> None:
                                 % (_nm, _i + 1, _l.strip()[:48]))
 
     # 17j-6 承诺的输出文案必须真的存在：SKILL.md 里用反引号引的、以行首标记开头的
-    #     **工具输出字面量**，其内容必须在 `xwl.py` 里找得到。
-    #     起因：SKILL.md 曾承诺「`edit` 写盘后给 `[note] 该文件是 LF 换行（…）`」，
+    #     **工具输出字面量**，其内容必须能在工具**真跑出来的输出**里找到。
+    #     起因：SKILL.md 承诺过「`edit` 写盘后给 `[note] 该文件是 LF 换行（…）`」，
     #     而代码对**无换行**文件走的是另一个分支（`[note] 该文件是单行形态（…）`）——
-    #     文档承诺了一个工具不会打印的提示。这类"文案承诺"只有对着实现查才看得出。
+    #     文档承诺了一个工具不会打印的提示。这类"文案承诺"只有对着**真实输出**查才看得出。
+    #     ⚠️ oracle 口径（本轮仪表审计整改）：**不再**拿 `xwl.py` 的源码串当期望 —— 源码串里
+    #     注释、或永不执行的字符串常量，都能满足"源码里出现过"，那是**可判定的自证循环**；
+    #     现在期望来自 `_real_out_corpus()` 的**真实输出**（见其 docstring 的语料面说明）。
     #     判据要窄：只看 `[note]/[warn]/[FAIL]/[ok]` 开头且正文 ≥8 字的；
     #     带省略号（`…`）的按省略号前的内容比对（作者是有意截断）。
-    _xwl_src = re.sub(r"\s+", "", open(os.path.join(HERE, "xwl.py"), encoding="utf-8").read())
+    _real_out = _real_out_corpus(tmp)
     for _i, _l in enumerate(_sk_txt.splitlines(), 1):
         for _m in re.finditer(r"`(\[(?:note|warn|FAIL|ok)\])((?:(?!`).)*)`", _l):
             _body = _m.group(2)
@@ -2154,8 +2526,9 @@ def _check_docs(tmp, node, failures, write) -> None:
             # 比对前缀取 16 字（而不是 8）—— 8 字太短，「设计器/仓库」这类**词序对调**
             # 发生在第 9 字之后，8 字比不出来（负向测试实测漏过）。
             _probe = _n[:16]
-            if _probe not in _xwl_src:
-                doc_fail.append("SKILL.md:%d 承诺的输出文案 `%s…` 在 xwl.py 里找不到"
+            if _probe not in _real_out:
+                doc_fail.append("SKILL.md:%d 承诺的输出文案 `%s…` 在工具的**真实输出**里找不到"
+                                "（若确为工具会打印的新文案，请在 `_real_out_corpus()` 里补一次真实调用）"
                                 % (_i, (_m.group(1) + _body)[:34]))
 
     # 17j-12 跨文件节号指针必须指向**真实存在**的小节（③ 引用漂移）。
@@ -2174,21 +2547,8 @@ def _check_docs(tmp, node, failures, write) -> None:
     #     ⚠️ 别照搬「围栏块输出文案符实」那条守卫的 `[:16]` 前缀法 —— 那条判「文案前缀在源码里存在」，
     #       本守卫判「节号存在性」，不是同一个面。
     #   现状全绿（**含围栏内指针在内**全部解析）⇒ 纯**防回归**。
-    #   ⚠️ 围栏四面分工（本节四条与「围栏」沾边，互不替代；改任一条先核此表）：
-    #     ① 格式面 —— 表列数／标题跳级／代码块**闭合**／行尾空白／末尾换行。
-    #        围栏**只豁免「标题跳级」**（`_fence % 2 == 0`）；**表列数与行尾空白没有围栏条件 ⇒ 围栏内照判**
-    #        （两树对照实测：围栏内注入列数不齐的表，两树都报「表格本行 3 格、表头 2 格」）；闭合按 ``` 计数判。
-    #     ② 承诺文案面（17j-6）—— 只扫 **SKILL.md 全行（含围栏内）**，判行内**反引号**里
-    #        `[note]/[warn]/[FAIL]/[ok]` 前缀是否在 xwl.py 里存在。
-    #     ③ 跨文件指针面（本臂 17j-12）—— 扫 **docs 全行（含围栏内）**（遍历时**跳过 CHANGELOG.md**），
-    #        判跨文件节号指针是否存在，**零豁免**。
-    #     ④ 围栏内输出文案面（17j-14）—— **仅围栏内**、仅**裸**以 `[note]/[warn]/[FAIL]/[ok]` 开头的行，
-    #        扫全 docs（不含 examples/README.md）。
-    #     ⟂ 互斥（两树对照实测）：② 要**反引号**包裹、④ 要**裸**行首标记 ⇒ **对「同一个标记的出现」互斥**，
-    #        而**不是"同一行至多一条"**：一行同时含裸 `[note]` 与反引号 `[ok]` 时**两臂都报**（实测 2 条）。
-    #     ⚠️ 双报的归属别挂错（两树对照实测）：**围栏外**的 `§N.M`／`§N` 死指针被本臂与另一条引用守卫
-    #        各报一行 = **既有**（基线树也报 2 条）；**围栏内**同款各报一行 = **本版新增**
-    #        （基线树只报 1 条〈另一条守卫〉，本版因取消跳围栏才变 2 条）。
+    #   ⚠️ **围栏四面分工表**（四条与「围栏」沾边的守卫，互不替代；改任一条先核那张表）
+    #     已**移出函数体**（#15 减负）⇒ 见模块级常量 `_FENCE_FOUR_ARM_DIVISION`（本文件 `_check_docs` 之前）。
     _pt_file = re.compile(r"([A-Za-z0-9][A-Za-z0-9-]*\.md)")
     _pt_num = re.compile(r"§\s*([0-9]+(?:\.[0-9]+)?)")
     _pt_cn = re.compile(r"§\s*([一二三四五六七八九十]+)")
@@ -2286,20 +2646,25 @@ def _check_docs(tmp, node, failures, write) -> None:
             doc_fail.append("17j-13 %s 目录条目顺序与正文小节顺序不一致" % _nm)
 
     # 17j-14 把 17j-6 扩到**围栏块**：围栏里以 `[note]/[warn]/[FAIL]/[ok]` 开头的**示例输出**，
-    #   其文案前缀也必须在 `xwl.py` 里找得到。
-    #   扫描面 = `docs` 的 **12 份** markdown 的围栏块（**不含 `examples/README.md`**）。
+    #   其文案前缀也必须在工具**真跑出来的输出**里找得到（oracle 同 17j-6：来自 `_real_out_corpus()`）。
+    #   扫描面 = `docs` 的围栏块（**含** 11 份正文 md，**不含 `CHANGELOG.md`** —— 它是历史记录，
+    #     按写入时的事实记，与全族其它臂的"历史豁免"口径一致；**也不含 `examples/README.md`**）。
+    #     ⚠️ **跳 `CHANGELOG.md`**：本臂若**无**该跳过 ⇒ CHANGELOG 的历史围栏输出会按**当前** `xwl.py`
+    #       校验（历史文案早于现实现的即被误判）。现围栏内标签行实测为 0 ⇒ 属**潜伏误报源**，非现网红。
     #     ⚠️ 不纳入 `examples/README.md` 是**有意**的：该文件里有**运行期 f-string 拼出来**的示意输出
-    #       （模板形如 `（{why}）—— {stat}`、在 `xwl.py` 一带），其**前缀在源码里根本不存在** ⇒
-    #       纳入会**误报**（QA 实测：那一行在 xwl.py 里找不到、而同文件别的 tag 行找得到）。
+    #       （模板形如 `（{why}）—— {stat}`、在 `xwl.py` 一带），其**前缀在真实输出里也拼不出来** ⇒
+    #       纳入会**误报**（QA 实测：那一行在真跑语料里找不到、而同文件别的 tag 行找得到）。
     #   起因：17j-6 只扫 SKILL 的**行内反引号**、且不扫 faq.md ⇒ 写在 ``` 块里的输出文案对它
     #     **零覆盖**（绿但空）⇒ 本臂补上"围栏块"这一面。
     #   误报控制：围栏示例可能是**示意**（占位符 `<path>` / `…` / `%s` / `%d`）⇒ 含这类占位符的行
     #     **跳过**（不判），避免把"示例"当成"承诺文案"。实测：3 条围栏输出行，1 条含占位符被跳过、
-    #     2 条被检查且全在实现里 ⇒ 全绿（这档 = 加白名单）。
-    #   ⚠️ 边界：本臂用**前缀匹配**（`_nf[:16]`），**验不了运行期拼接**出来的文案 —— 拼接结果在源码里
-    #     没有字面前缀，所以这类**不是漏扫、是扫了会错**（故排除）。
+    #     2 条被检查且都在真实输出里 ⇒ 全绿（这档 = 加白名单）。
+    #   ⚠️ 边界：本臂用**前缀匹配**（`_nf[:16]`），**验不了运行期拼接**出来的文案 —— 拼接结果在真跑
+    #     语料里没有字面前缀，所以这类**不是漏扫、是扫了会错**（故排除）。
     _fence_ph = re.compile(r"[<>]|…|%[sd]|\.\.\.")
     for _nm, _ls in docs.items():
+        if _nm == "CHANGELOG.md":       # 历史记录：按写入时的事实记，不按当前 xwl.py 校验
+            continue
         _fence = 0
         for _i, _l in enumerate(_ls, 1):
             if _l.strip().startswith("```"):
@@ -2317,38 +2682,24 @@ def _check_docs(tmp, node, failures, write) -> None:
             _nf = re.sub(r"\s+", "", _body2)
             if len(_nf) < 8:
                 continue
-            if _nf[:16] not in _xwl_src:
-                doc_fail.append("17j-14 %s:%d 围栏块输出文案 `%s…` 在 xwl.py 里找不到"
+            if _nf[:16] not in _real_out:
+                doc_fail.append("17j-14 %s:%d 围栏块输出文案 `%s…` 在工具的**真实输出**里找不到"
+                                "（若确为工具会打印的新文案，请在 `_real_out_corpus()` 里补一次真实调用）"
                                 % (_nm, _i, (_tag + _body2)[:34]))
 
     # 17l 编年纪律（三条臂）：非编年文件里不得出现"哪天 / 哪一版发生过什么"。
     #     分工与豁免面的完整说明在 `references/workflow-notes.md` 第一节 —— 改词表或豁免面前先读它。
     #     ⚠️ 词表用**相邻字面量拼接**写：守卫扫的是全部分发文件（**含本文件**），
     #        整词直写会让本文件被自己这三条臂判红。
-    #     ⚠️ 作用域 = `git ls-files`（与"仓库卫生"同一事实源）：不扫磁盘，避免把本地产物算进来。
-    #        取不到 git ⇒ **记一条失败**（"没扫"不等于"通过"）。
+    #     ⚠️ 作用域 = `git ls-files` ∪ 磁盘新增未跟踪（见 `_git_scan_scope`）—— **未 `git add` 的新文件
+    #        也要被看到**。取不到 git ⇒ **默认判红**（静默绿是病根）；确无 `.git` 时须显式 `--allow-nogit`
+    #        才降级为"标注继续"，那时其"未执行"由 `_check_docs` 汇总大绿行**显式标注**（见 `_nogit_arms`）。
     #     起因：正文只该留结论；「哪天在哪一版发生过什么」属编年，只许进 CHANGELOG 与依据层 —— 混进正文会让现行事实与历史不分。
-    _chron = ["曾" "经", "原" "先", "早" "先", "此" "前", "一" "度", "当" "年", "旧" "版",
-              "旧" "实现", "旧" "判据", "原" "判据", "上" "一轮", "上" "一版", "当" "时", "历史" "上",
-              "以" "前"]
-    _date_verb = ("实测", "真机", "复现", "审查", "修正", "发布", "事故")
-    _date_re = re.compile(r"\d{4}-\d{2}-\d{2}")
-    _ver_re = re.compile(r"\d+\.\d+\.\d+")
-    _chron_exempt = {"CHANGELOG.md", "metadata.json",
-                     "references/measured-data.md", "references/workflow-notes.md"}
-    _shipped = None
-    try:
-        _pr = subprocess.run(["git", "-C", root, "ls-files"], capture_output=True,
-                             text=True, encoding="utf-8", errors="replace",
-                             env=dict(os.environ))
-        if _pr.returncode == 0:
-            _shipped = [x.strip() for x in _pr.stdout.splitlines() if x.strip()]
-    except (OSError, ValueError):
-        _shipped = None
-    if not _shipped:
-        # 不是 git 仓库（如平台把 skill 打成 zip 分发）⇒ **跳过并明说**，不算通过也不算失败。
-        # 与"仓库卫生"那条守卫同一处置：宁可显式说"没扫"，也不要假装扫过或直接判失败。
-        print("[note] 编年守卫：取不到 `git ls-files` 清单 ⇒ 本次**没扫**（不算通过；在 git 仓库里跑才有这层）")
+    # ⚠️ 三张词表/正则（`_chron`／`_date_verb`＋`_date_re`／`_ver_re`）与豁免集 `_chron_exempt` 均已
+    #    **移出函数体**（#15 有界下沉）⇒ 见**模块级同名常量**（本文件 `_check_docs` 之前）；本函数只引用。
+    _shipped, _ = _git_scan_scope(root)
+    if _shipped is None:
+        _nogit_gate("编年守卫", doc_fail, _nogit_arms)
     else:
         for _rel in _shipped:
             if _rel in _chron_exempt:
@@ -2514,7 +2865,8 @@ def _check_docs(tmp, node, failures, write) -> None:
         doc_fail.append("17q-自洽 反向 fixture 失效：合成「两取值 + 无日期口径声明」样本竟未判红"
                         "（本臂可能已空转，请检查差异声明判据）")
 
-    # 17r 分发面自包含：`git ls-files` 的 22 个分发文件里不得出现「指向 skill 包外」的引用。
+    # 17r 分发面自包含：扫描面（`git ls-files` ∪ 磁盘新增未跟踪，见 `_git_scan_scope`）里不得出现
+    #     「指向 skill 包外」的引用。
     #     判据 = 包外文档名（四种，见下方 _b17r_docs 元组）
     #          + 外部计划文档的条目代号（字母+数字 / 字母-小写字母 / SITE+数字）+ §N-M 形式的节号指针。
     #          + 前置批次号（PRE 加数字）与过程角色编号（eng-/qa-/pm-/arch-/reg-/tl- 加数字）。
@@ -2549,12 +2901,9 @@ def _check_docs(tmp, node, failures, write) -> None:
                         _buf[_k] = " "
         return "".join(_buf)
 
-    try:
-        _b17r_files = subprocess.check_output(["git", "-C", root, "ls-files"], text=True).splitlines()
-    except Exception:  # noqa: BLE001
-        _b17r_files = None
+    _b17r_files, _ = _git_scan_scope(root)
     if _b17r_files is None:
-        print("[note] 17r 分发面自包含：取不到 `git ls-files` 清单 ⇒ 本次**没扫**（不算通过也不算失败）")
+        _nogit_gate("17r 分发面自包含", doc_fail, _nogit_arms)
     else:
         _b17r_fail = []
         for _rel17 in _b17r_files:
@@ -2587,9 +2936,31 @@ def _check_docs(tmp, node, failures, write) -> None:
         if _b17r_fail:
             doc_fail.extend(_b17r_fail[:12])
         else:
-            print("[ok]  17r 分发面自包含：22 个分发文件里无包外引用"
+            print("[ok]  17r 分发面自包含：%d 个分发文件里无包外引用"
                   "（无《验收基线》/《落地清单》/施工索引/施工单、无施工单条目代号、无 §N-M 形式的节号指针、无前置批次号/过程角色编号；"
-                  "`.py` 只判字符串字面量之外；CHANGELOG 豁免）")
+                  "`.py` 只判字符串字面量之外；CHANGELOG 豁免）" % len(_b17r_files))
+
+    # ---- 11k.（**归位**）SKILL.md 章节顺序守卫（语义分组：认知→格式→操作→专题→经验→收尾）----
+    #   ⚠️ 本块原**寄居**于 `_check_itemids`（itemids 块）——它判的是 **SKILL.md 的章节顺序**，
+    #     与 itemids 无关。`#10b③` 归位到**文档守卫侧**（本函数 `_check_docs`）；判据**不变**，
+    #     旧标识 `11k` 保留（不重编，免动全库引用）。归属变化：其 `[ok]`／失败行现随文档守卫块输出。
+    # 起因：压缩会搬动章节；顺序被打乱后“先建心智模型 → 再看格式规则 → 再看流程”的阅读路径就断了（内容没丢、但难读）。
+    skill_md = os.path.join(os.path.dirname(HERE), "SKILL.md")
+    if os.path.exists(skill_md):
+        with open(skill_md, "r", encoding="utf-8", newline="") as f:
+            titles = [l.rstrip("\r\n") for l in f if l.startswith("## ")]
+        want_order = ["一", "二", "三", "四", "五", "六", "七", "八", "九"]
+        got_order = [t[3] for t in titles if len(t) > 4 and t[3] in want_order]
+        want_keys = ["是什么", "格式硬规则", "处理流程", "工具", "引用方式", "SQL 片段",
+                     "itemId", "常见问题", "自检清单"]
+        if got_order == want_order and all(k in t for k, t in zip(want_keys, [x for x in titles if x.startswith("## ") and x[3] in want_order])):
+            print("[ok]  SKILL.md 章节顺序符合语义分组（认知→格式→操作→专题→经验→收尾）")
+        else:
+            failures.append("SKILL.md 章节顺序错位: %s" % [t[:22] for t in titles])
+        if any("单行源" in t for t in titles):
+            failures.append("「单行源 vs 多行源」应并入格式章，不该单列一章")
+    else:
+        print("[note] 未找到 SKILL.md，跳过章节顺序守卫")
 
     # 17s 守卫维护规则：本文件里每个守卫块（头 `# 17<字母>`）之后 15 行内必须有「起因」备注。
     #     起因：本仓出现过“说不清目的的守卫”（清账时多组无出处）⇒ 后人不敢删、也不敢改；钉住它，
@@ -2619,10 +2990,22 @@ def _check_docs(tmp, node, failures, write) -> None:
         print("[ok]  17s 守卫维护规则：每个 `# 17<字母>` 守卫块之后 15 行内都有「起因」备注"
               "（宽判据：16 行窗口内出现「起因」二字即过；盲区见注释）")
 
+    # ⚠️ 破计数遮蔽（本轮仪表审计整改）：判**块名多重集 == 基线多重集**（少 / 多未登记的 ⇒ 红）。
+    #   起因与"如何有意增删块时更新基线"见模块级 `_DOC_GUARD_BLOCK_BASELINE` 的注释。
+    _blk_bad = _doc_guard_block_mismatch()
+    if _blk_bad:
+        doc_fail.append(_blk_bad)
+
     if doc_fail:
         failures.extend(doc_fail[:12])
     else:
-        print("[ok]  文档守卫：emoji 未入标题 / 任意两文档间无重复表格 / 编号·章·步·节号引用可解析（含跨文件）/ "
+        # 非 git 时把"没跑的臂"**显式标在汇总大绿行上**（由上方三处分支收集的 `_nogit_arms`）。
+        #   ⚠️ 该句现在**只在 `--allow-nogit` 降级路径下**才可能非空 —— 默认非 git 已判红、走不进本分支。
+        _nogit_suffix = ("　（⚠️ **本次 %s 未执行：无 git** —— 臂依赖 `git ls-files`，"
+                         "`--allow-nogit` 已降级；不计入通过）" % " / ".join(_nogit_arms)
+                         ) if _nogit_arms else ""
+        print("[ok]  文档守卫：%d/%d 块通过（块名多重集 == 基线）—— emoji 未入标题 / 任意两文档间无重复表格 / "
+              "编号·章·步·节号引用可解析（含跨文件）/ "
               "链接存在 / 外移点两侧都在 / 格式五项（表格·跳级·代码块·行尾·末尾）/ 自称数字一致 / "
               "导航表与目录索引一致 / **「N 份参考材料」清单完整** / 无业务路径残留 / 反模式有入口 / "
               "**编年三臂（事件词·施工日期·发版号）** / **scripts 里的点名式引用可解析** / "
@@ -2630,7 +3013,9 @@ def _check_docs(tmp, node, failures, write) -> None:
               "**规模数字出自权威层** / **`--help` 行数上限（顶层 36 / 子命令实测+5）** / "
               "**支持矩阵 OS 行（SKILL 适用范围表 + metadata.json limitations）** / "
               "**跨文件节号指针可解析（17j-12）** / **目录顺序与实际小节一致（17j-13）** / "
-              "**围栏块输出文案符实（17j-14）**")
+              "**围栏块输出文案符实（17j-14）**"
+              % (sum(_DOC_GUARD_BLOCK_BASE.values()), len(_DOC_GUARD_BLOCK_BASELINE))
+              + _nogit_suffix)
 
     # ---- 18. SKILL.md 必须声明平台边界、调用入口与规模约束 ----
     # 起因：SkillHub TRACE 评测的 adaptability 维给了这两个子项低分 ——
@@ -3361,6 +3746,10 @@ def _check_patch_contract(tmp, node, failures, write) -> None:
     """`patch` 的 ops 契约：`create` 开关、数组下标越界、新建键/单行源/未备份三类输出。
 
     全部是**行为断言**（不是 help 文案断言）：把对应行为改回去，本组立刻红。
+
+    ⚠️ **块头/组号说明**（`#10b②`）：本块原**无**任何 `# ---- N.` 块头。旧编号序列里它夹在
+       `§11`（itemids）与 `§12`（subcommands）之间、**没有空槽整数** ⇒ 本块以**块名 `patch_contract`**
+       标识，**不新造序号**（硬凑 `§12` 等会与既有号撞号）。`17s` 只认 `# 17<字母>` 块头，不受影响。
     """
     pc_fail: list[str] = []
 
@@ -3664,9 +4053,16 @@ def _check_patch_contract(tmp, node, failures, write) -> None:
         failures.extend(pc_fail)
 
 
+# `itemids` / `params` / `check ⑦` 的「控件注册表:」来源行 —— **未找到**分支的**手写**逐字期望。
+#   起因（本轮仪表审计整改 ⑤：破可判定的自证循环）：若判据写成 `li != xwl.controls_source_line(None)`
+#   就是拿**产出该行的同一个函数**当期望 ⇒ 构造性恒真（三点打印点全部调用该 helper，`li` 必等于它），
+#   只能验到"三命令用了同一 helper"，**验不了来源行文案本身**。改成与**手写**文案比后，
+#   文案被改坏（而三命令仍逐字一致）也会判红。
+_REG_SRC_LINE_UNFOUND = "控件注册表: 未找到（normalName 白名单 = 注册表 ∪ 内置兜底）"
+
+
 def _check_bc_contract(tmp, node, failures, write) -> None:
     """B/C 组「注册键口径 + 换行判据 + 整数值浮点保真 + 排版提示具体化 + 注册表来源同句」的**行为断言**（第 27 组）。
-
     逐条行为断言见各节注释；改写相关的已落在 `_check_itemids`；
     行为级调用点守卫已随 `equivalent` 探针落在本文件上方 —— 两者都不在此重复。
     全部是行为断言：把新行为改回旧行为即红。
@@ -3882,7 +4278,10 @@ def _check_bc_contract(tmp, node, failures, write) -> None:
     p11 = write("bc11.xwl", json.dumps(_page(), ensure_ascii=False, indent=1))
     _ri, out_i = _run(xwl.cmd_itemids, file=p11, controls=None, name=None, suggest=False,
                       fix="auto", json=False, dups_only=False)
-    _rp, out_p = _run(xwl.cmd_params, file=p11, controls=None, list_fields=False, module_root=None)
+    # 经 `_run_cli`（子进程真 CLI）取值：同 12b/15 的起因 —— 直调时被测行为一旦抛异常会把整块
+    #   打崩、「注册表来源行」断言没跑到；经 CLI 则异常被隔离。`params` 不传 = 与
+    #   `cmd_params(file=p11, controls=None, list_fields=False, module_root=None)` 等价（argparse 默认值同）。
+    _rp, out_p, _ep = _run_cli(["params", p11])
     _rc11, out_c = _run_check([p11], node)
     li, lp, lc = _reg_line(out_i), _reg_line(out_p), _reg_line(out_c)
     f11 = []
@@ -3894,9 +4293,10 @@ def _check_bc_contract(tmp, node, failures, write) -> None:
         f11.append("check ⑦ 未打印「控件注册表:」来源行")
     if li and lp and lc and not (li == lp == lc):
         f11.append("三命令的注册表来源行不逐字一致：%r / %r / %r" % (li, lp, lc))
-    if li and li != xwl.controls_source_line(None):
-        f11.append("来源行与 controls_source_line(None) 不一致：%r" % li)
-    _ok("itemids / params / check ⑦ 打印同一句注册表来源（含「未找到」分支）", f11)
+    if li and li != _REG_SRC_LINE_UNFOUND:
+        f11.append("来源行与**手写**期望 %r 不一致：%r"
+                   % (_REG_SRC_LINE_UNFOUND, li))
+    _ok("itemids / params / check ⑦ 打印同一句注册表来源（含「未找到」分支；期望为**手写**文案）", f11)
 
     # ---- --json 只增字段（name = 注册键）----
     p12 = write("bc12.xwl", json.dumps(_page(children=[
@@ -4021,7 +4421,9 @@ def _check_bc_contract(tmp, node, failures, write) -> None:
         {"type": "button", "configs": {"itemId": "jsHost"}, "children": [],
          "events": {"click": "st.load({out: app.tbrO});"}},
     ]), ensure_ascii=False, indent=1))
-    _rc18, out18 = _run(xwl.cmd_params, file=p18, controls=None, list_fields=False, module_root=None)
+    # 经 `_run_cli`（子进程真 CLI）取值：同 12b/15 的起因（直调抛异常会打崩整块、定向断言没跑到）。
+    #   `params` 不传 = 与 `cmd_params(file=p18, controls=None, list_fields=False, module_root=None)` 等价。
+    _rc18, out18, _e18 = _run_cli(["params", p18])
     f18 = []
     if "找不到" in out18:
         f18.append("params 仍报「找不到 … 的容器」（应按注册键 tbrO 命中 normalName=tbrO 的 toolbar）：%s"
@@ -4103,10 +4505,11 @@ def _run_parallel(blocks, node, jobs: int) -> list[str]:
         while pending and len(active) < jobs:
             name, _fn = pending.pop(0)
             result = os.path.join(rdir, name + ".json")
-            proc = subprocess.Popen(
-                [sys.executable, "-B", os.path.abspath(__file__),
-                 "--only", name, "--result", result, "--node", node or ""],
-                env={**os.environ, "PYTHONIOENCODING": "utf-8"})
+            _cmd = [sys.executable, "-B", os.path.abspath(__file__),
+                    "--only", name, "--result", result, "--node", node or ""]
+            if ALLOW_NOGIT:   # 子进程各自解析开关 ⇒ 必须透传
+                _cmd.append("--allow-nogit")
+            proc = subprocess.Popen(_cmd, env={**os.environ, "PYTHONIOENCODING": "utf-8"})
             procs[name] = (proc, result)
             active.append(name)
         time.sleep(0.1)
@@ -4134,11 +4537,18 @@ def main(argv: list[str] | None = None) -> int:
                     help="并行跑的自检块数（默认 min(6, CPU 数)；1 = 串行，做对照用）")
     ap.add_argument("--fast", action="store_true",
                     help="本地快回路：跳过最贵的两块（diffguard / eol_and_guards）")
+    # 非 git 时**默认判红**（静默绿是病根，见模块级 `ALLOW_NOGIT` 的起因）；
+    # 确无 `.git`（如 zip 分发解包后）时用本开关**显式**降级为"标注继续、rc 按其他项定"。
+    ap.add_argument("--allow-nogit", action="store_true",
+                    help="允许在无 .git 时降级（不因 3 族 git 门控守卫没跑而判红；默认无此开关即判红）")
     # 以下三个是**内部**参数（仅供 `--jobs>1` 派生的子进程用），不写进 --help。
     ap.add_argument("--only", default=None, help=argparse.SUPPRESS)
     ap.add_argument("--result", default=None, help=argparse.SUPPRESS)
     ap.add_argument("--node", default=None, help=argparse.SUPPRESS)
     args = ap.parse_args(argv)
+
+    global ALLOW_NOGIT
+    ALLOW_NOGIT = bool(args.allow_nogit)
 
     xwl.ensure_utf8_stdio()     # 输出全是中文；Windows 控制台默认非 UTF-8 会直接 UnicodeEncodeError
     try:

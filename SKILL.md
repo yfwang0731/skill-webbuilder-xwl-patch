@@ -2,7 +2,7 @@
 name: webbuilder-xwl-patch
 slug: skill-webbuilder-xwl-patch
 displayName: webbuilder-xwl-patch
-version: 1.4.3
+version: 1.4.4
 license: MIT
 metadata:
   category: development-tools
@@ -416,7 +416,7 @@ python scripts/xwl.py diffguard <改过的文件或目录> --strict    # CI / pr
 | 退出码 | 含义 |
 |---|---|
 | `0` | 成功 |
-| `1` | **被检查对象或查询结果有问题**（`check` 有 `[FAIL]`；`paths` / `sqlrefs` 没找到目标字段） |
+| `1` | **被检查对象或查询结果有问题**（`check` 有 `[FAIL]`；`paths` / `sqlrefs` / `sql` / `events` 没找到目标字段 —— 即无可抽取内容、空结果判 `1`） |
 | `2` | **用法或前置条件不满足**（缺必填参数、`edit` 锚点次数不符、`new` 拒绝覆盖、读不到目标文件） |
 
 两类**判定会随命令线宽严变化**的命令，各自三档（默认 / 收紧 / 放松）：
@@ -504,7 +504,7 @@ python scripts/xwl.py diffguard <改过的文件或目录> --strict    # CI / pr
 末尾加独立分组 `[外部可传入]`（各上游调用方与传入键），再给一行**载入侧汇总**（节点级「同根命中 / 本根未找到 / 非 m?xwl 的 url」＋
 出现级「动态写法 / 非 `m?xwl` 字面量」；**两种量纲分开标**；节点级三数**之和 = 本页 store.url 数**）。**默认关 ⇒ 零成本**（不开时**不出现**这两段；**唯一例外**见 §4.2 的留痕规则 —— 缺来源时本就有一行 `[note]` 预告）；
 开了才单根全扫一遍（≈5 秒量级）。它只认 `params: {名:值}` **字面量键**，`out: app.<容器>` 与运行时拼接的 url **只计数**；
-**不并入 `provided`、不改退出码**。命中量级（同一批 8 个 wb 根：节点级「同根命中 26840 / 本根未找到 5006」；出现级「动态写法 867 / 非 `m?xwl` 字面量 440」）与**多根三分类**（同根命中 / 跨工程 / 全根不存在）的完整口径见 [`references/measured-data.md`](references/measured-data.md)。
+**不并入 `provided`、不改退出码**。命中量级的**完整口径**（节点级「同根命中／本根未找到」＋出现级「动态写法／非 `m?xwl` 字面量」，**两种量纲分开**）与**多根三分类**（同根命中 / 跨工程 / 全根不存在）见 [`references/measured-data.md`](references/measured-data.md) **§11.4（节点级多根三分类）与 §11.3（`url:` 三类形态）**。
 
 ## 七、itemId 命名规范与重名处置
 
