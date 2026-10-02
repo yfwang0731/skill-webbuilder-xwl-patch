@@ -1608,7 +1608,7 @@ def _is_new_object_key(parent, key) -> bool:
     return isinstance(parent, dict) and key not in parent
 
 
-def apply_ops(obj, ops, created=None, warned=None):
+def apply_ops(obj, ops, created=None, warned=None, allow_new_key=False):
     """按 ops 就地修改对象。
 
     path 是「键 / 数组下标」列表；**以 `@` 开头的段按 `configs.itemId` 寻址**
@@ -1625,10 +1625,16 @@ def apply_ops(obj, ops, created=None, warned=None):
     写值时用它显式放行；写到已存在的键上它是**幂等保护**（既不报错也不告警）。
     用在 `insert`/`append`/`delete` 上属**用法错误**，抛 `ValueError`（调用方据此返回 rc=2）。
 
+    ⚠️ **不带 `create` 的 `set` 新建键默认被拒绝**（抛 `ValueError`，文案直接教两条出路：
+    逐条给该 op 加 `"create": true`，或全局加 `--allow-new-key`）。
+
+    `allow_new_key` 是**全局逃生开关**（对应 CLI 的 `--allow-new-key`）：`True` ⇒ 放行不带
+    `create` 的新建键（恢复"全允许"）；默认 `False` ⇒ 拒绝。
+
     `created` / `warned` 是**可选的收集列表**（默认 `None` = 不收集）——调用方传列表即可拿到
     「本次新建了哪些键」（`<path>` 紧凑写法）：
       · `created`：带 `"create": true` 的新建键；
-      · `warned` ：**不带** `create` 的新建键（本版仍放行，调用方据此打 `[warn]` 预告）。
+      · `warned` ：**不带** `create`、但在 `allow_new_key=True` 下被放行的新建键。
     两者都是**向后兼容的可选关键字**，既有 `apply_ops(obj, ops)` 调用不受影响。
 
     越界 / 缺失键等用法错误统一抛 `ValueError`，文案走**统一模板**
@@ -1653,8 +1659,15 @@ def apply_ops(obj, ops, created=None, warned=None):
                 if want_create:
                     if created is not None:
                         created.append(where)
-                elif warned is not None:
-                    warned.append(where)
+                elif allow_new_key:
+                    if warned is not None:
+                        warned.append(where)
+                else:
+                    raise ValueError(
+                        "第 %d 个 op（set）：%s 是**新建键**，默认被拒绝 —— 两条出路："
+                        "① 给该 op 加 \"create\": true（逐条放行）；"
+                        "② 命令行加 --allow-new-key（全局放行）。"
+                        "（写到已存在的键上不受影响）" % (i, where))
             if isinstance(parent, list):
                 idx = int(key)
                 if not 0 <= idx < len(parent):
@@ -2056,7 +2069,8 @@ def cmd_patch(args) -> int:
 
     created, warned = [], []
     try:
-        apply_ops(obj, ops, created=created, warned=warned)
+        apply_ops(obj, ops, created=created, warned=warned,
+                  allow_new_key=getattr(args, "allow_new_key", False))
     except Exception as exc:  # noqa: BLE001
         msg = str(exc)
         if "\n" in msg:  # 重名报错带候选清单，原样打印
@@ -2067,10 +2081,9 @@ def cmd_patch(args) -> int:
         return 2
     print(f"[ok]   已应用 {len(ops)} 个 op")
     if warned:
-        # 中间态：新建键本版仍放行，只预告（默认拒绝在后续版本启用）—— 文案**不写版本号**。
-        print("[warn] 本次新建了 %d 个键（本版仍允许；默认拒绝将在后续版本启用）：%s"
+        # 全局逃生开关 `--allow-new-key` 放行了这批新建键（旧行为）；留一条痕，便于事后追。
+        print("[warn] --allow-new-key 已放行 %d 个新建键：%s"
               % (len(warned), ", ".join(warned)))
-        print('       届时给已存在的键 set 不受影响；新建键请加 "create": true')
 
     out = dumps_designer(obj, args.indent, eol)
     try:
@@ -3144,9 +3157,6 @@ _FIELD_FALLBACK = ("check", "combo", "date", "datetime", "displayfield", "file",
                    "textarea", "time")
 _SKIP_KEYS = {"out", "add", "callback", "scope", "success", "failure", "async",
               "url", "method", "bean", "params", "waitMsg", "timeout", "extraParams"}
-# `params` 默认行为**将要翻转**的版本号。⚠️ 源码里**不写死** "N.N.N" 字面量 ——
-#   编年守卫不许普通文件正文出现发版号；这里运行时拼出来，**只为给用户指名版本**（比"后续版本"有用）。
-_NEXT_REV = "%d.%d.%d" % (1, 5, 0)
 
 
 def field_types(controls_path: str | None = None) -> tuple:
@@ -3747,18 +3757,19 @@ def cmd_params(args) -> int:
               "**由调用方页面传入**的那一类本工具不核对")
         print("         能力边界：只看**这一个页面**静态可见的来源。`Wb.open({params})` 传进本页的键"
               "写在调用方页面里，要核对请到调用方页面去跑")
-        # 放松留痕（预告式、只打一次）：判定今后要**变松**，先把话留在这里 ——
-        # 不给 `--strict` 的人要知道"默认还会阻塞"，并且知道**哪个版本**起会变、届时怎么继续阻塞。
-        if not getattr(args, "strict", False):
-            print("         [note] 默认仍阻塞（rc=1）；" + _NEXT_REV
-                  + " 起默认不再阻塞，届时要阻塞请加 `--strict`。")
+        # 缺来源留痕（**终态口径**）：`params` 缺来源**默认只告警（rc=0）**；要阻塞须显式加 `--strict`（rc=1）。
+        # 下面两条 `[note]` 即终态文案，**不再有「预告式」说明**（旧的「今后会变松」那半句已作废）。
+        if getattr(args, "strict", False):
+            print("         [note] 已按 `--strict` 判失败（rc=1）—— 要不阻塞就不加它。")
+        else:
+            print("         [note] 默认只告警（rc=0）；要让它阻塞请加 `--strict`。")
     else:
         print("  [ok]   SQL 需要的参数在页面侧都能找到来源")
     if extra:
         print(f"  [info] 页面送了但 SQL 未用到: {extra}")
     print("\n  提示：参数名 = 控件 `itemId`；改了 itemId 或把控件移出容器都会**静默失效**（取到空值）。")
     _print_params_tail(args, root, text, stores, field_set)
-    return 1 if miss else 0
+    return 1 if (miss and getattr(args, "strict", False)) else 0
 
 
 # --------------------------------------------------------------------------- #
@@ -3868,7 +3879,7 @@ def build_parser() -> argparse.ArgumentParser:
                                "     \"value\": \"v\", \"create\": true}\n"
                                "  ]\n"
                                "ops 按顺序执行，path 按执行到那一步时的结构解释。\n"
-                               "任意一条 set 可带 \"create\": true：补**原本不存在的键**时用它；写到已存在的键上是幂等保护。\n"
+                               "set 到**原本不存在的键**默认被拒绝（rc=2）：要么给该 op 加 \"create\": true（这是逃生开关，逐条放行）、要么命令行加 --allow-new-key（全局放行）；写到已存在的键上不受影响。\n"
                                "\n"
                                "path 里的对象键优先用 @itemId（数组元素仍用下标），重名时不猜顺序：\n"
                                "  [\"@名字#N\"]              点名第 N 个（N 从 1 起）\n"
@@ -3882,6 +3893,8 @@ def build_parser() -> argparse.ArgumentParser:
                          "等量取 CRLF、CR 不投票；无换行回退 lf）；lf / crlf=指定")
     pt.add_argument("--dry-run", action="store_true", help="只显示将产生的 diff，不写入")
     pt.add_argument("--backup", action="store_true", help="写盘前先备份为 <file>.bak")
+    pt.add_argument("--allow-new-key", action="store_true",
+                    help="这是逃生开关：全局放行新建键，恢复旧行为（不给则新建键默认被拒绝、rc=2）")
     pt.add_argument("--node", help="node 可执行文件路径（缺省从 NODE_BIN 与 PATH 找）")
     pt.add_argument("--no-js", action="store_true", help="跳过写盘后的事件 JS 语法校验")
     pt.set_defaults(func=cmd_patch)
@@ -3896,9 +3909,8 @@ def build_parser() -> argparse.ArgumentParser:
                          "及其 `params` 键，末尾加独立分组 `[外部可传入]`（不并入核对、不改退出码）。"
                          "代价：要全扫模块根（约 3000 个 .xwl、约 5 秒量级）；不开则零成本")
     pm.add_argument("--strict", action="store_true",
-                    help="缺来源时判失败（rc=1）—— 与 `diffguard --strict` 同名同义（默认只告警）。"
-                         "⚠️ 本版与默认**同效**（默认 rc 仍 1）；" + _NEXT_REV
-                         + " 起默认改为不阻塞，届时要阻塞就加它")
+                    help="这是逃生开关：缺来源时判失败（rc=1）—— 与 `diffguard --strict` 同名同义"
+                         "（默认只告警、rc=0）")
     pm.set_defaults(func=cmd_params)
 
     pa = sub.add_parser("paths", help="列出可编辑字段位置（sql / totalSql / serverScript / url），供 patch 用")

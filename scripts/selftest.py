@@ -1301,11 +1301,12 @@ def _check_new_guards(tmp, node, failures, write) -> None:
         return {"configs": {"itemId": iid, "url": url}, "type": "store",
                 "expanded": False, "children": []}
 
-    # ---- ① `--strict` 选项存在，且不改退出码 ----
-    # 起因：`--strict` 是新增选项（刻意与默认同效：缺源时都 rc=1），但**没有任何回归保护** ——
-    #   日后若把 `--strict` 从解析器里删掉、或让 `cmd_params` 因夹具缺 `strict` 字段而崩，
-    #   现有断言一条都看不见。故钉三件：选项在 `params --help` 文本里、不给 `--strict` 缺源仍 rc=1、
-    #   给了也 rc=1。夹具手搭 Namespace 时**故意不带 strict**（顺带验 `getattr(...,False)` 兜底不炸）。
+    # ---- ① `--strict` 选项存在，缺源时默认只告警、`--strict` 才阻塞 ----
+    # 起因：`--strict` 是 params 缺源判定的逃生开关（默认 rc=0 只告警、给了才 rc=1），但**没有回归保护** ——
+    #   日后若把 `--strict` 从解析器里删掉、或让 `cmd_params` 因夹具缺 `strict` 字段而崩、
+    #   或把默认退出码弄反，现有断言一条都看不见。故钉三件：选项在 `params --help` 文本里、
+    #   不给 `--strict` 缺源 rc=0（只告警）、给了 rc=1。夹具手搭 Namespace 时**故意不带 strict**
+    #   （顺带验 `getattr(...,False)` 兜底不炸）。
     strict_fail: list[str] = []
     try:
         _hp = xwl.build_parser()
@@ -1345,16 +1346,16 @@ def _check_new_guards(tmp, node, failures, write) -> None:
         _rc_new, _out_new = None, ""
         strict_fail.append("① `strict=True` 时 `cmd_params` 抛异常: %s: %s"
                            % (type(exc).__name__, exc))
-    if _rc_old != 1:
-        strict_fail.append("① 默认（不给 `--strict`）缺源应 rc=1，实得 rc=%s\n%s"
+    if _rc_old != 0:
+        strict_fail.append("① 默认（不给 `--strict`）缺源应 rc=0（只告警），实得 rc=%s\n%s"
                            % (_rc_old, _out_old))
     if _rc_new != 1:
-        strict_fail.append("① 给 `--strict` 缺源应 rc=1（本实现与默认同效），实得 rc=%s\n%s"
+        strict_fail.append("① 给 `--strict` 缺源应 rc=1（逃生开关），实得 rc=%s\n%s"
                            % (_rc_new, _out_new))
     if strict_fail:
         failures.extend(strict_fail)
     else:
-        print("[ok]  ① `--strict`：出现在 `params --help`；缺源时默认与 `--strict` 都 rc=1（同效）")
+        print("[ok]  ① `--strict`：出现在 `params --help`；缺源默认 rc=0（只告警）、`--strict` 才 rc=1")
 
     # ---- ② `--upstream`：反查本体 + 「节点级 / 出现级」两套量纲各自标注、不混算 ----
     # 起因：`--upstream` 的末尾汇总行把**节点级**（`store.url` 能否在本根解析到文件）与
@@ -1584,9 +1585,9 @@ _splits = [
 #   ⚠️ 新增子命令必须**同步在此登记**上限（`_check_docs` 的 `_h_unreg` 会把漏登的报红）。
 _help_caps = {
     None: 36,        # 顶层 `xwl.py --help`（实测 26）
-    "check": 16, "edit": 22, "patch": 41, "params": 23, "paths": 12,
-    "new": 28, "folders": 15, "itemids": 27, "sqlrefs": 12, "diffguard": 14,
-    "schema": 26, "dump": 12, "expand": 25, "sql": 12, "events": 13,
+    "check": 16, "edit": 22, "patch": 47, "params": 23, "paths": 12,
+    "new": 29, "folders": 15, "itemids": 27, "sqlrefs": 12, "diffguard": 14,
+    "schema": 26, "dump": 12, "expand": 26, "sql": 12, "events": 13,
 }
 
 
@@ -1633,7 +1634,7 @@ doc_names = ["SKILL.md", "README.md", "CHANGELOG.md", "references/walkthrough.md
 #      ⚠️ **别**把判据放宽回"只判降"（那正是刚修掉的病根：净 0 换块会逃逸）。
 _DOC_GUARD_BLOCK_BASELINE = (
     "17a", "17b", "17c", "17c-2", "17d", "17e", "17f", "17g", "17h", "17i",
-    "17h", "17i", "17k", "17j", "17j-2", "17j-3", "17j-4", "17j-7", "17j-8", "17j-9",
+    "17h", "17i", "17t", "17k", "17j", "17j-2", "17j-3", "17j-4", "17j-7", "17j-8", "17j-9",
     "17j-10", "17j-11", "17j-5", "17j-6", "17j-12", "17j-13", "17j-14", "17l", "17m", "17n",
     "17o", "17p", "17q", "17q-自洽", "17r", "17s",
 )
@@ -2129,7 +2130,8 @@ def _check_docs(tmp, node, failures, write) -> None:
         except (OSError, ValueError) as _exc:
             doc_fail.append("metadata.json 读不了或不是合法 JSON：%s" % _exc)
 
-    # 清单的「改已有文件 X + 新建文件 Y」拆分须与参考清单实算一致（SKILL.md 内该形态出现 1 处；`finditer` 会核全部命中）
+    # 17t 清单的「改已有文件 X + 新建文件 Y」拆分须与参考清单实算一致（SKILL.md 内该形态出现 1 处；`finditer` 会核全部命中）
+    #     起因：`SKILL.md` 自称的「改已有文件 X ＋ 新建文件 Y」拆分数字与实际参考清单不一致时**无人守**
     _grp2: dict = {}
     _g2 = None
     for _l in _txt.get("references/checklist.md", "").split("\n"):
@@ -2292,11 +2294,25 @@ def _check_docs(tmp, node, failures, write) -> None:
     #     SKILL.md；到了上限就该问"这条是不是该下沉到 references/"。数字留了余量，
     #     正常的小幅增补不会触发。
     #     起因：压缩过一轮后，新增内容很容易又堆回 SKILL.md —— 到上限该下沉到 references/，不该抬数字（防回弹护栏）。
+    #     ⚠️ **软上限 600**（下条 `elif`；硬上限 700 仍归上一条 —— 两条**独立报出**，并成一条会丢信息）：
+    #       起因①：600 是**拍的**阈值 —— 落笔时 SKILL.md ＝ 582 行（缓冲 18）；越过 ＝「该外移了」的信号、非错误。
+    #       起因②：改阈值**必须走版本位 ＋ 写明起因**（防"顺手抬上限"）。
+    #       起因③：**它证明不了"本次新增没让它涨"**（**跨版本**属性、单树判不了）；且**不为它引 git 历史**
+    #              （多一条 `git ls-files` 门控守卫 ⇒ **非 git 时红** ⇒ zip 假报警，与既有方向冲突）。
     for _nm, _cap in (("SKILL.md", 700), ("README.md", 150)):
         _n = len(docs.get(_nm, []))
         if _n > _cap:
             doc_fail.append("%s 已 %d 行，超过 %d 行上限（新增内容请考虑下沉到 references/）"
                             % (_nm, _n, _cap))
+        elif _nm == "SKILL.md" and _n > 600:
+            try:
+                _rf = sorted(f for f in os.listdir(os.path.join(root, "references")) if f.endswith(".md"))
+                _rl = sum(len(open(os.path.join(root, "references", f), encoding="utf-8").read().splitlines()) for f in _rf)
+                _stat = ("`references/` 现有 %d 份、合计 %d 行；`SKILL.md` 里已有 %d 处指针可挂"
+                         % (len(_rf), _rl, sum("references/" in _l for _l in docs.get("SKILL.md", []))))
+            except (OSError, UnicodeDecodeError):   # UnicodeDecodeError 是 ValueError 子类、非 OSError ⇒ 必须并列
+                _stat = "统计不出（references/ 不可读）"
+            doc_fail.append("SKILL.md 行数 %d 已超软上限 600（硬上限 700）⇒ **新增内容默认走 `references/`**（%s）。" % (_n, _stat))
 
     # 17j-7 `--help` 篇幅上限（通道 B 的护栏）：把 §一/§三/§五/§七 的细节搬进
     #     `xwl.py` 的 `help=` / 参数 help / `epilog` 之后，`--help` 会变长；这条钉住它别再涨。
@@ -2308,8 +2324,8 @@ def _check_docs(tmp, node, failures, write) -> None:
     #     说明」留空间而不误报；再涨就该把内容挪去 `epilog` 或 `references/`（见 workflow-notes §二）。
     #     ⚠️ 两侧都判：`_got > _hcap` = 「超顶」（上限偏低）；`_hcap − _got > 设计余量` = 「上限过松」
     #       （上限被单向放宽、白留空行也无人发觉 —— 常驻注入用例把某子命令上限调大后仍全绿＝活证）。
-    #       ⚠️ 只堵「过松」一侧：余量 **＜** 设计余量（＝「守卫偏严」）**不报**；本表 `patch` 余 1 /
-    #       `new` 余 4 / `expand` 余 4 都属这一侧，**有意保留、本版不动任何 cap**（归下一版按 `实测 + 5` 补满）。
+    #       ⚠️ 只堵「过松」一侧：余量 **＜** 设计余量（＝「守卫偏严」）**不报**（本版已把 `new` /
+    #       `expand` 按 `实测 + 5` 补满 ⇒ 现全表余量恰好等于设计余量、无偏严项）。
     #     ⚠️ 新增子命令必须同步在此登记上限（下面 `_h_unreg` 会把漏登的红出来）。
     #     起因：通道 B 把细节搬进 `--help` 后它会一路变长 —— 不钉住就会淹没「必读面」，读者找不到关键项。
     #     ⚠️ 表体已**移出函数体**（#15 有界下沉）⇒ 见**模块级常量 `_help_caps`**（本文件 `_check_docs` 之前）。
@@ -3766,9 +3782,10 @@ def _check_patch_contract(tmp, node, failures, write) -> None:
             json.dump(ops, fh, ensure_ascii=False, indent=1)
         return p
 
-    def _patch(target, ops_name, ops, dry_run=False, backup=False):
+    def _patch(target, ops_name, ops, dry_run=False, backup=False, allow_new_key=False):
         return _run(xwl.cmd_patch, file=target, ops=_mkops(ops_name, ops), indent=1,
-                    eol="auto", dry_run=dry_run, backup=backup, node=None, no_js=True)
+                    eol="auto", dry_run=dry_run, backup=backup, node=None, no_js=True,
+                    allow_new_key=allow_new_key)
 
     def _page(extra_top=None, children=None):
         obj = {"hidden": False, "children": [] if children is None else children,
@@ -3789,24 +3806,68 @@ def _check_patch_contract(tmp, node, failures, write) -> None:
                     {"type": "panel", "configs": {"itemId": "dp"}, "children": [],
                      "events": {"click": "app.dp.hide();"}}]
 
-    # ---- 默认放行新建键 + `[warn]` 预告 + rc 不变 ----
-    t1 = {"title": "t", "children": []}
-    w1: list = []
-    xwl.apply_ops(t1, [{"op": "set", "path": ["newTopKey"], "value": "v"}], created=[], warned=w1)
+    # ---- 默认拒绝新建键：apply_ops 抛错 + 真跑 rc=2、[FAIL] 直接教两条出路 ----
+    f1 = []
+    try:
+        xwl.apply_ops({"title": "t"}, [{"op": "set", "path": ["nk"], "value": "v"}],
+                      created=[], warned=[])
+        f1.append("apply_ops 默认未拒新建键（应 ValueError）")
+    except ValueError as exc:
+        s1 = str(exc)
+        if '"create": true' not in s1 or "--allow-new-key" not in s1:
+            f1.append("apply_ops 报错未教两条出路：%s" % s1)
     p1 = write("pc_5_1.xwl", _page())
     rc1, o1 = _patch(p1, "pc_5_1_ops.json", [{"op": "set", "path": ["newTopKey"], "value": "v"}])
-    f1 = []
-    if t1.get("newTopKey") != "v":
-        f1.append("默认未放行新建键（键没被建）")
-    if w1 != ["newTopKey"]:
-        f1.append("warned 未收集到新建键：%r" % w1)
-    if rc1 != 0:
-        f1.append("真跑 rc=%d（应 0）" % rc1)
-    if "[warn]" not in o1 or "本次新建了" not in o1:
-        f1.append("真跑未打 [warn] 预告:\n%s" % o1)
-    if xwl.load_xwl(p1)[2].get("newTopKey") != "v":
-        f1.append("真跑没把新键写进文件")
-    _ok("5-1", f1, "默认放行新建键、warned 收集、真跑 rc=0 且打 [warn] 预告")
+    if rc1 != 2:
+        f1.append("默认新建键真跑 rc=%d（应 2）" % rc1)
+    if "[FAIL]" not in o1 or '"create": true' not in o1 or "--allow-new-key" not in o1:
+        f1.append("默认新建键真跑未打 [FAIL] 或未教两条出路:\n%s" % o1)
+    if xwl.load_xwl(p1)[2].get("newTopKey") is not None:
+        f1.append("被拒的新建键竟然写进了文件")
+    _ok("5-1", f1, "set 新建键默认被拒绝（apply_ops ValueError ＋ 真跑 rc=2、[FAIL] 教两条出路、不写盘）")
+
+    # ---- 全局逃生开关 `--allow-new-key` 恢复旧行为（放行 + 留痕 + rc=0）----
+    # ⚠️ 这条**直调** `apply_ops(..., allow_new_key=True)`（与 `--strict` 夹具同理，见 `_check_new_guards` ①）：
+    #    开关一被改坏就可能抛异常 ⇒ **必须自己兜异常**，否则整块崩、**没有定向 `[FAIL]` 行**、
+    #    且同块后续检查全被跳过。`except` 里保持 `t2b` / `w2b` / `f2b` 已初始化 ⇒ 失败落成**定向红行**。
+    f2b: list = []
+    t2b = {"title": "t", "children": []}
+    w2b: list = []
+    try:
+        xwl.apply_ops(t2b, [{"op": "set", "path": ["newTopKey"], "value": "v"}],
+                      created=[], warned=w2b, allow_new_key=True)
+    except Exception as exc:  # noqa: BLE001 —— 开关改坏本身就该红，别静默放过
+        f2b.append("直调 `apply_ops(..., allow_new_key=True)` 抛异常: %s: %s"
+                   % (type(exc).__name__, exc))
+    # ⚠️ `patch --help` 的 **options 段**必须**直接**含 `--allow-new-key`（对称于 `_check_new_guards` ① 对 `--strict` 的 help 直断言）。
+    #    起因：该选项**只靠 `_help_caps` 的「上限过松」臂间接保护**（cap=47）—— 把选项从 help 里删掉，
+    #    只要行数仍落在 [实测, 实测+5] 内，cap 臂就看不见（本项目病根：**新能力靠间接保护**）。故补**直断言**。
+    #    ⚠️ **只认 options 段那一行**（以 `--allow-new-key` 起头）；**不能用整篇 `in` 判**：patch 的
+    #    **usage 行**与 **epilog** 里也出现该字样 ⇒ 整篇 `in` 会在「选项被删、epilog 尚在」时**假绿**（实测）。
+    try:
+        _p2b = xwl.build_parser()
+        _s2b = next((a for a in _p2b._actions if getattr(a, "choices", None)), None)
+        _patch_help2b = _s2b.choices["patch"].format_help() if _s2b is not None else ""
+    except Exception as exc:  # noqa: BLE001
+        _patch_help2b = ""
+        f2b.append("取 `patch --help` 失败: %s: %s" % (type(exc).__name__, exc))
+    if not any(ln.lstrip().startswith("--allow-new-key") for ln in _patch_help2b.splitlines()):
+        f2b.append("`patch --help` 的 **options 段**里没有 `--allow-new-key`"
+                   "（该选项只靠 cap 过松臂间接保护 ⇒ 补直断言）")
+    p2b = write("pc_5_1b.xwl", _page())
+    rc2b, o2b = _patch(p2b, "pc_5_1b_ops.json",
+                       [{"op": "set", "path": ["newTopKey"], "value": "v"}], allow_new_key=True)
+    if t2b.get("newTopKey") != "v":
+        f2b.append("--allow-new-key 未放行新建键（键没被建）")
+    if w2b != ["newTopKey"]:
+        f2b.append("warned 未收集被放行的新建键：%r" % w2b)
+    if rc2b != 0:
+        f2b.append("真跑 rc=%d（应 0）" % rc2b)
+    if "--allow-new-key" not in o2b or "已放行" not in o2b:
+        f2b.append("真跑未打 --allow-new-key 放行留痕:\n%s" % o2b)
+    if xwl.load_xwl(p2b)[2].get("newTopKey") != "v":
+        f2b.append("--allow-new-key 真跑没把新键写进文件")
+    _ok("5-1b", f2b, "--allow-new-key 逃生开关恢复旧行为：放行新建键、warned 收集、真跑 rc=0 且留痕")
 
     # ---- `create:true` 放行且无 `[warn]` ----
     t2 = {"title": "t", "children": []}
@@ -3824,7 +3885,7 @@ def _check_patch_contract(tmp, node, failures, write) -> None:
         f2.append("created 未收集该键：%r" % c2)
     if rc2 != 0:
         f2.append("真跑 rc=%d（应 0）" % rc2)
-    if "[warn] 本次新建了" in o2:
+    if "[warn] --allow-new-key" in o2:
         f2.append("带 create 却打了新建键预告")
     _ok("5-2", f2, "create:true 放行、created 收集、warned 为空、stdout 不含 [warn] 预告")
 
@@ -3843,7 +3904,7 @@ def _check_patch_contract(tmp, node, failures, write) -> None:
         f3.append("已存在键 + create 误报 [warn]：%r" % w3)
     if rc3 != 0:
         f3.append("真跑 rc=%d（应 0）" % rc3)
-    if "[warn] 本次新建了" in o3:
+    if "[warn] --allow-new-key" in o3:
         f3.append("已存在键 + create 打了新建键预告")
     _ok("5-3", f3, "已存在键 + create:true ⇒ 不报错、不 [warn]、rc=0（幂等保护）")
 
@@ -3913,14 +3974,15 @@ def _check_patch_contract(tmp, node, failures, write) -> None:
         f6.append("delete 缺失键冒了 traceback")
     _ok("5-6", f6, "delete 越界 / 缺失键 ⇒ rc=2，报错不冒裸异常类型名、无 traceback")
 
-    # ---- `--dry-run` 的 `[new-key]` 与 `[warn]` 分列，且不写盘 ----
+    # ---- `--dry-run` 的 `[new-key]` 与 `[warn]` 分列，且不写盘（逃生开关下两条都出现）----
     p7 = write("pc_5_7.xwl", _page())
     m7 = _md5(p7)
     rc7, o7 = _patch(p7, "pc_5_7_ops.json",
                      [{"op": "set", "path": ["kCreate"], "value": "v", "create": True},
-                      {"op": "set", "path": ["kWarn"], "value": "v"}], dry_run=True)
+                      {"op": "set", "path": ["kWarn"], "value": "v"}], dry_run=True,
+                     allow_new_key=True)
     nk = [ln for ln in o7.splitlines() if ln.startswith("[new-key]")]
-    wn = [ln for ln in o7.splitlines() if ln.startswith("[warn] 本次新建了")]
+    wn = [ln for ln in o7.splitlines() if ln.startswith("[warn] --allow-new-key")]
     f7 = []
     if rc7 != 0:
         f7.append("dry-run rc=%d（应 0）" % rc7)
@@ -3930,7 +3992,15 @@ def _check_patch_contract(tmp, node, failures, write) -> None:
         f7.append("[warn] 行应恰 1 条且只列 kWarn：%r" % wn)
     if _md5(p7) != m7:
         f7.append("--dry-run 竟然写了盘")
-    _ok("5-7", f7, "--dry-run 下 [new-key]（只列带 create）与 [warn]（只列不带 create）分列且不写盘")
+    # 同一组 ops 不给 `--allow-new-key` ⇒ 不带 create 的 kWarn 触发默认拒绝（rc=2）
+    p7b = write("pc_5_7b.xwl", _page())
+    rc7b, _o7b = _patch(p7b, "pc_5_7b_ops.json",
+                        [{"op": "set", "path": ["kCreate"], "value": "v", "create": True},
+                         {"op": "set", "path": ["kWarn"], "value": "v"}], dry_run=True)
+    if rc7b != 2:
+        f7.append("dry-run 不给 --allow-new-key 时 rc=%d（应 2）" % rc7b)
+    _ok("5-7", f7, "--dry-run 下 [new-key]（只列带 create）与 [warn]（逃生开关放行的那批）分列、"
+                   "不写盘；不给开关则 rc=2")
 
     # ---- `itemids --suggest` 产出逐条带 create:true，且能原样跑通 patch ----
     p8 = write("pc_5_8.xwl", _page(children=dup_children))
@@ -4495,7 +4565,11 @@ def _run_parallel(blocks, node, jobs: int) -> list[str]:
     """并发（`--jobs N`）：每块在**独立子进程**里跑（各自 mkdtemp、失败写 JSON）。
 
     子进程把 `[ok]` / `[note]` **直接打到自己继承的 stdout**（行缓冲 ⇒ 每行一次原子写，
-    不会交错成半行）；父进程收齐后只按**固定块顺序**汇总打印 `[FAIL]`。
+    **不会交错成半行**）—— ⚠️ 但这**只保证「不交错」、不保证「不丢」**：多个子进程并发写
+    **同一继承句柄**时，整行**可能丢失**（实测并行档的 `[ok]` 计数会低于 `--jobs 1`，
+    差的正是展示行；`rc` 与 `ALL OK` 不受影响）。失败（`[FAIL]`）走"每块 JSON 文件、
+    父进程回收"⇒ **失败永不丢**，只可能丢展示行；故并行档在汇总处打一行 `[note]`
+    提示"要精确计数请 `--jobs 1`"。父进程收齐后只按**固定块顺序**汇总打印 `[FAIL]`。
     """
     rdir = tempfile.mkdtemp(prefix="xwl_selftest_res_")
     procs: dict[str, tuple] = {}
@@ -4541,9 +4615,16 @@ def main(argv: list[str] | None = None) -> int:
     # 确无 `.git`（如 zip 分发解包后）时用本开关**显式**降级为"标注继续、rc 按其他项定"。
     ap.add_argument("--allow-nogit", action="store_true",
                     help="允许在无 .git 时降级（不因 3 族 git 门控守卫没跑而判红；默认无此开关即判红）")
-    # 以下三个是**内部**参数（仅供 `--jobs>1` 派生的子进程用），不写进 --help。
-    ap.add_argument("--only", default=None, help=argparse.SUPPRESS)
-    ap.add_argument("--result", default=None, help=argparse.SUPPRESS)
+    # `--only` / `--list-blocks` 面向人工最小子集回归（进 --help）；`--result` 供并行派发的子进程落 JSON
+    # （人工单跑可不给 ⇒ 只跑并打印），`--node` 仍纯内部（不写进 --help）。
+    ap.add_argument("--only", default=None, metavar="<块名>",
+                    help="只跑指定自检块（最小子集回归）；块名用 --list-blocks 查。"
+                         "未给 --result 时只跑并打印、不落 JSON")
+    ap.add_argument("--list-blocks", action="store_true",
+                    help="按定义序逐行打印全部自检块名后退出 —— 它们是自检块（供 --only 选），"
+                         "不是 _check_docs 内部的 17a–17t 守卫编号")
+    ap.add_argument("--result", default=None, metavar="<路径>",
+                    help="把本次自检块的失败清单落成 JSON（并行派发的子进程用；人工单跑可不给）")
     ap.add_argument("--node", default=None, help=argparse.SUPPRESS)
     args = ap.parse_args(argv)
 
@@ -4556,13 +4637,45 @@ def main(argv: list[str] | None = None) -> int:
     except Exception:           # noqa: BLE001
         pass
 
-    # ---- 子进程模式：只跑指定块，把 failures 写 JSON 即退出 ----
+    # ---- `--list-blocks`：按定义序逐行打印自检块名（供 `--only` 选块）后退出 ----
+    if args.list_blocks:
+        _blk_named = _blocks()
+        for _bn, _bf in _blk_named:
+            print(_bn)
+        sys.stderr.write(
+            "[note] 以上 %d 个是**自检块**（`_blocks()` 定义序，供 `--only <块名>`）——"
+            "区别于 `_check_docs` 内部的 `17a`–`17t` **守卫编号**（那些不是块名）。\n"
+            % len(_blk_named))
+        return 0
+
+    # ---- 单跑模式（`--only <块名>`）：人工最小子集回归；`--jobs>1` 派生的子进程也走此入口 ----
     if args.only:
-        fn = dict(_blocks()).get(args.only)
+        _blk_named = _blocks()
+        fn = dict(_blk_named).get(args.only)
         if fn is None:
             sys.stderr.write("未知自检块：%s\n" % args.only)
+            sys.stderr.write("可用自检块（共 %d 个，按定义序）：%s\n"
+                             % (len(_blk_named), "，".join(n for n, _f in _blk_named)))
             return 2
+        if args.result is None:
+            # 人工单跑：**不许静默收窄** —— 明写"只跑了哪块／未跑哪些块"（对齐"收窄必显式打印"的既有口径）
+            _others = [n for n, _f in _blk_named if n != args.only]
+            _shown = "，".join(_others[:12])
+            if len(_others) > 12:
+                _shown += "，另有 %d 块未列" % (len(_others) - 12)
+            print("[note] 只跑了 `%s`：1/%d 块；未跑 %d 块：%s"
+                  % (args.only, len(_blk_named), len(_others), _shown))
         failures = _run_block(args.only, fn, args.node or None)
+        if args.result is None:
+            # 人工单跑、未给 `--result` ⇒ 只跑并打印、不落 JSON；rc 据本次结果
+            print("[note] 未给 `--result` ⇒ 只跑并打印、不落 JSON；要落 JSON 才加 `--result <路径>`")
+            if failures:
+                # 单跑也要**看得到失败原因**（"有 rc 却看不到原因"是病根）；逐条 + 汇总格式照全量分支
+                for f in failures:
+                    print(f"[FAIL] {f}")
+                print(f"=== selftest FAIL（{len(failures)} 项）")
+            return 1 if failures else 0
+        # 内部契约（`--jobs>1` 父进程派发用）：failures 写 JSON 即退出 0，rc 由父进程据 JSON 定
         with open(args.result, "w", encoding="utf-8") as fh:
             json.dump(failures, fh, ensure_ascii=False)
         return 0
@@ -4578,6 +4691,8 @@ def main(argv: list[str] | None = None) -> int:
 
     jobs = args.jobs if args.jobs is not None else min(6, os.cpu_count() or 4)
     failures = _run_serial(blocks, node) if jobs <= 1 else _run_parallel(blocks, node, jobs)
+    if jobs > 1:
+        print(f"[note] 并行档（--jobs {jobs}）：展示行可能丢失；要精确计数请 `--jobs 1`")
 
     print()
     if failures:

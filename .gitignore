@@ -2,3 +2,19 @@ __pycache__/
 *.pyc
 *.bak
 .DS_Store
+
+# 开发期临时件 / 编辑器与系统垃圾（避免未跟踪的临时件被纳入分发面扫描）
+*.orig
+*.rej
+*.tmp
+*~
+.#*
+.selftest_tmp*
+.inject_runner.lock
+*.log
+
+# 编辑器目录 / Windows 系统垃圾
+.vscode/
+.idea/
+Thumbs.db
+desktop.ini

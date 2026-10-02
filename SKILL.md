@@ -2,7 +2,7 @@
 name: webbuilder-xwl-patch
 slug: skill-webbuilder-xwl-patch
 displayName: webbuilder-xwl-patch
-version: 1.4.4
+version: 1.5.0
 license: MIT
 metadata:
   category: development-tools
@@ -144,7 +144,7 @@ hidden, children, roles, title, iconCls, inframe, pageLink
 > [`references/measured-data.md`](references/measured-data.md) §九。
 
 > **要补齐这类「缺钥匙」文件时**：`set` 一个**原本不存在**的顶层键就是**新建键**，该 op 要带 `"create": true`
-> （`patch` 默认仍放行，只打一行预告，详见 §3.1）：
+> （或命令行加 `--allow-new-key` 全局放行；不给则默认拒绝、rc=2，详见 §3.1）：
 
 ```json
 [{"op": "set", "path": ["inframe"], "value": false, "create": true}]
@@ -285,17 +285,16 @@ python scripts/xwl.py new wb/modules/<模块>/xxxSql/queryXxx.xwl --kind sql --t
 > 补**数组元素**走 `append` / `insert`，本就不算新建键（`"create"` 挂在这两种 op 上属用法错误）。
 > 任意一条 set 可带 `"create": true`：补**原本不存在的键**时用它；写到已存在的键上是幂等保护。
 >
-> 中间态：**现在仍允许新建键，只打 `[warn]`；到下一版本才默认拒绝，届时给已存在的键 `set` 不受影响、新建键要加 `"create": true`**（该版本号与升级须知写在 `CHANGELOG.md`）。
+> 默认：**`set` 到原本不存在的键会被拒绝（打印 `[FAIL]`、rc=2）**，报错会直接教两条出路 —— **给该 op 加 `"create": true`**（逐条放行）**或命令行加 `--allow-new-key`**（全局放行，两者任一即放行）；写到**已存在的键上不受影响**。
 
 ```json
 [{"op": "set", "path": ["@panel1", "configs", "newKey"], "value": "v", "create": true}]
 ```
 
-> 不带 `create` 的新建键，真跑时在 stdout 打这条预告（`--dry-run` 另把**带 `create`** 的待建键单列一行 `[new-key]`）：
+> 归全局开关 `--allow-new-key` 放行的那批新建键，真跑时在 stdout 打这条痕（`--dry-run` 另把**带 `create`** 的待建键单列一行 `[new-key]`）：
 
 ```text
-[warn] 本次新建了 N 个键（本版仍允许；默认拒绝将在后续版本启用）：<path1>, <path2>, …
-       届时给已存在的键 set 不受影响；新建键请加 "create": true
+[warn] --allow-new-key 已放行 N 个新建键：<path1>, <path2>, …
 ```
 
 1. **能用 `@itemId` 就别手写下标** —— `paths` 给出的 `["@dataprovider","configs","sql"]`
@@ -401,7 +400,7 @@ python scripts/xwl.py diffguard <改过的文件或目录> --strict    # CI / pr
 | `diffguard` | **相对 git 基线**检测「多行内容被压平」 |
 | `itemids` | 注册键重名报告 + 建议改名（只读） |
 | `paths` | 列出 `sql` / `totalSql` / `serverScript` / `url` 四类字段的位置 |
-| `params` | 核对「页面 → store → SQL」传参链路（`--strict` 缺来源判失败，本版与默认同效；`--upstream` 追加「谁在调用本页」的上游扫描） |
+| `params` | 核对「页面 → store → SQL」传参链路（缺来源**默认只告警**、`--strict` 才判失败；`--upstream` 追加「谁在调用本页」的上游扫描） |
 | `sqlrefs` | 校验 `{#名字#}` ↔ `serverScript` 是否自洽 |
 | `folders` | `folder.json`（设计器导航树索引）一致性检查 / 登记 |
 | `schema` | 查设计器控件注册表（合法 `configs` / `events` / 骨架） |
@@ -424,7 +423,7 @@ python scripts/xwl.py diffguard <改过的文件或目录> --strict    # CI / pr
 | 命令 | 默认 | 收紧（严格） | 放松（留痕） |
 |---|---|---|---|
 | `diffguard` | 疑似压平**只告警**（rc=0） | `--strict`：疑似压平判失败（rc=1）；一个文件都没比成才 rc=2 | 非 git 仓库 / 新文件以 `[note]` 跳过 |
-| `params` | 缺来源判失败（rc=1） | `--strict`：**本版与默认同效**（rc=1）——为下一版翻转预留的逃生开关 | 缺来源时打一行 `[note]` 预告放松将生效 |
+| `params` | 缺来源**只告警**（rc=0） | `--strict`：缺来源判失败（rc=1） | 缺来源时打一行 `[note]` 告知怎么改成阻塞 |
 
 > **原则：判定变严要喧哗、放松要留痕** —— 收紧必须让调用方**当场**看得见（`[FAIL]` / rc≠0）；
 > 放松必须留一条**可查的预告行**（`[note]`），不能悄悄改掉默认行为。

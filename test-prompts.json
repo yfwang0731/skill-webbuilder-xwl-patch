@@ -12,7 +12,7 @@
   {
     "id": 3,
     "prompt": "页面上的日期条件我改了 itemId，现在查询不生效了，SQL 也没报错，帮我看下哪里断了",
-    "expected": "指出「参数名 = 控件 itemId」这条命名契约，用 xwl.py params 做交叉核对（页面送的参数名 vs SQL 的 {?名?} / app.get('名')），说明名字对不上只会取到 null、条件静默失效；并覆盖 out / params 两条通路与同名参数覆盖方向相反的坑；顺带覆盖四条最易踩：① 别用 Wb.request 代替 store（列表 / 分页要用 store.load）② Wb.requestAg 不用写 url（框架固定改成 m?xwl=common/save-all），但 bean / method 必须给 ③ 上传类失败的错误对象不同（action.response.responseText → {msg}）④ 跨页面传参不在核对范围，params 报『未发现来源』是能力边界不是错误"
+    "expected": "指出「参数名 = 控件 itemId」这条命名契约，用 xwl.py params 做交叉核对（页面送的参数名 vs SQL 的 {?名?} / app.get('名')），说明名字对不上只会取到 null、条件静默失效；并覆盖 out / params 两条通路与同名参数覆盖方向相反的坑；顺带覆盖五条最易踩：① 别用 Wb.request 代替 store（列表 / 分页要用 store.load）② Wb.requestAg 不用写 url（框架固定改成 m?xwl=common/save-all），但 bean / method 必须给 ③ 上传类失败的错误对象不同（action.response.responseText → {msg}）④ 跨页面传参不在核对范围，params 报『未发现来源』是能力边界不是错误 ⑤ params 缺来源**默认只告警（rc=0）**，要让它阻塞须给逃生开关 `--strict`（rc=1）"
   },
   {
     "id": 4,
@@ -78,5 +78,10 @@
     "id": 16,
     "prompt": "同事手写的一个 xwl 跑 check 时报了「⑧ 加载链完整性」的 [warn]，可退出码是 0、文件在设计器里也能打开。这个告警要不要管？会不会让 CI / pre-commit 失败？",
     "expected": "先说清 ⑧ 的定位与退出码语义：第 ⑧ 维「加载链完整性」是**只提示项、不进 rc** —— 违规时只打 `[warn] ⑧ 加载链完整性：…`（逐条含**键名与期望类型**，如 `children 不是数组（期望数组，实为 str）`），**退出码仍是 0**（check 判成败看退出码，[warn] 有意不阻塞）。所以「报了问题却 rc 仍 0」是本工具的既定口径、不是 bug，**也不会让 CI / pre-commit 变红**，可放心把它当告警而非阻塞项。再讲它为什么值得顺键名去看：判据对齐框架 `XwlBuffer` 的取键方式（`children` 取 `getJSONArray`、`children[0].configs` 与 `roles` 取 `getJSONObject` —— 缺失即抛、类型不符即抛）⇒ 这类文件能被 ④ 解析、**页面却在加载期打不开**；官方定位是「防手写 / 半成品」（`new` 的产物一定完整）。澄清一个常见误判：`patch` / `edit` / `expand` **写盘后的自动校验不纳入 ⑧**（与 ⑥⑦ 同口径，写盘后只判 ①–⑥）⇒ 写盘不会因 ⑧ 多报或把退出码顶红；要连 ⑧ 一起体检就单独跑 `check`。⑧ 恒留一行、三形态定死：全过 ⇒ `[note] ⑧ 加载链完整性：无异常`；有违规 ⇒ `[warn] ⑧ 加载链完整性：…`（如 `children` 须是**非空数组**、`children[0].configs` 与 `roles` 须是**对象**）；④ 解析失败 ⇒ `[note] ⑧ 加载链完整性：因解析失败跳过`（这行出现在 `-> FAIL` 之后，其 rc=1 是 ④ 给的、**不是 ⑧**）。结论：⑧ 的 [warn] 不会阻塞、不进 rc，但它是「页面可能打不开」的早期信号 —— 顺着键名补齐 `children` / `children[0].configs` / `roles` 即可。"
+  },
+  {
+    "id": 17,
+    "prompt": "我在 CI 里用 xwl.py params 核对页面传参，预期缺来源时返回非零退出码让流水线失败，可现在它返回 0 了，是不是坏了？",
+    "expected": "不应答成坏了。`params` 缺来源**默认只告警（rc=0）**，要让它阻塞须显式加**逃生开关 `--strict`**（rc=1）—— 与 `diffguard --strict` 同名同义。所以 CI 里应显式加 `--strict`（如 `xwl.py params <页面> --strict`，令其缺来源即返回非零）：缺来源的判定本身没变，只是**默认退出码翻到了宽松侧**。同时说明缺来源时输出末尾会多一行 `[note]` 留痕（不加 `--strict` 时提示怎么改成阻塞、加了则提示已按失败处理）；这条翻转是**有意**的（默认放宽、收紧靠显式开关），不是静默失效。另注意 `--strict` 只影响退出码、不改输出里的逐条比对结果。"
   }
 ]
