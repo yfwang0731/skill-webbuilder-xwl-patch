@@ -1,3 +1,5 @@
+> 发布面：随 skill 发布 ｜ 层归属：规格层
+
 # 反模式：看起来对、实际有害的做法
 
 **这份文档是「动手前」看的。** 它与 [`faq.md`](faq.md) 互补 ——
@@ -299,7 +301,7 @@ FAQ 回答"**已经坏了怎么救**"（按症状查），这里回答"**你正�
   声明 `destroy` 却复用 `app.X` ⇒ 销毁后再取 `app.X` 是 `undefined`、得到空白窗。同样**静默通过 `check`**。
 - **正确做法**：把"打开 / 关闭 / `closeAction`"当成**一组**一起写 —— 常驻（`hide` + `app.X.hide()`）
   或每次重建（`createInstance:"false"` + `app._X` + `closeAction:"destroy"`）；窗口要重建还需挂到
-  `module` 直接子级才拿得到 `app._X`。完整对照见 `js-api.md` §5，实测分布见 `measured-data.md` §十二。
+  `module` 直接子级才拿得到 `app._X`。完整对照见 `js-api.md` §5，实测分布见 `measured-data-designer.md` §十二。
 
 ## 只记三条的话
 

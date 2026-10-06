@@ -1,3 +1,5 @@
+> 发布面：随 skill 发布 ｜ 层归属：规格层
+
 # WebBuilder 设计器控件清单（控件注册表）
 > 数据来源：工程的 **`wb/system/controls.json`**（设计器自己的控件注册表，133 个控件）+ 全项目 **2777 个 `.xwl`** 的实际使用统计。
 >
@@ -285,7 +287,7 @@
 ### 4.2 典型骨架（照这个搭就不会错）
 
 **页面顶层 —— 7 把钥匙，键序固定**（样本工程里绝大多数 xwl 都是这个顺序，
-**独立页面与被引用的 SQL 载体完全一样**；份额见 [`measured-data.md`](measured-data.md) §九）。
+**独立页面与被引用的 SQL 载体完全一样**；份额见 [`measured-data-skeleton.md`](measured-data-skeleton.md) §九）。
 **键序见 `SKILL.md` §1.3**（`xwl.py new` 已内置）。
 
 取值形态：`roles` 是 **dict（角色名 → 1）**，如 `{"default":1}`；`iconCls` / `pageLink` 多为空串；

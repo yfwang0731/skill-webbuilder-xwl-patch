@@ -1,3 +1,5 @@
+> 发布面：随 skill 发布 ｜ 层归属：规格层
+
 # SQL 片段：结构、字段与传参
 
 > **什么算「SQL 片段」**：被别的 xwl 用 `store.configs.url = 'm?xwl=…'` 引用的 `.xwl`
@@ -7,7 +9,7 @@
 > **本文件是 [`SKILL.md`](../SKILL.md) 第六章的完整内容**（那一章只留骨架与入口）—— 编辑方式（`patch` / `@itemId` / 校验）见那边第三章。
 > **什么时候看这份**：改 SQL 片段、或改「参数控件 → store → SQL」链路时。
 >
-> **数字与统计口径在 [`measured-data.md`](measured-data.md)**（SQL 相关口径在 §八）——
+> **数字与统计口径在 [`measured-data-criteria.md`](measured-data-criteria.md)**（SQL 相关口径在 §八）——
 > 那只是一份样本工程的量级参考，换工程请以自己的为准。
 
 ---
@@ -36,7 +38,7 @@
 > 显式覆盖的键（如 `roles:{"demo":1}`）会静默带进新文件。
 
 **分布**：多数文件两者都有；也有一部分**只有 `serverScript`** —— 这些自己用 `app.run` /
-`app.send` 直接出数据，不靠 `dataprovider`。（文件数见 [`measured-data.md`](measured-data.md) §八。）
+`app.send` 直接出数据，不靠 `dataprovider`。（文件数见 [`measured-data-criteria.md`](measured-data-criteria.md) §八。）
 
 ## 二、两个字段的格式（权威来源：控件注册表）
 
@@ -81,7 +83,7 @@ where t.ID = {?ID?}            -- ← 绑定参数
 
 实测交集（`{#x#}` 与 `setAttribute('x',…)` **同名**）：
 **`sql` / `sql1` / `sql2` / `whereSql` / `joinsql` / `date` / `username`**，其中 `{#sql#}` 最常见
-（次数见 [`measured-data.md`](measured-data.md) §八）。
+（次数见 [`measured-data-criteria.md`](measured-data-criteria.md) §八）。
 
 ### 3.2 三种占位符，来源不同（别混）
 
@@ -91,7 +93,7 @@ where t.ID = {?ID?}            -- ← 绑定参数
 | `{#任意名#}` | **同文件 `module` 的 serverScript** 用 `request.setAttribute('名字', …)` 提供 | `sql`、`sql1`、`whereSql` |
 | `{?名字?}` | **绑定参数**（不是文本替换） | `ID`、`name`、`query`、`month` |
 
-> 各例在样本工程里的出现次数见 [`measured-data.md`](measured-data.md) §八。
+> 各例在样本工程里的出现次数见 [`measured-data-criteria.md`](measured-data-criteria.md) §八。
 
 > `{?…?}` 由 `com.wb.tool.Query` 解析成 `PreparedStatement` 参数（常量可见 `"{?"`、`"?}"`），
 > **所以不要在 SQL 里手工拼值**（也就不用操心转义 / 注入）。
@@ -107,7 +109,7 @@ where t.ID = {?ID?}            -- ← 绑定参数
 
 → 文件是 `wb/modules/<模块>/<业务目录>/xxxSql/queryBizList.xwl`（**补上 `.xwl`**）。
 反过来**从文件找引用方**：在工程里的 xwl 中搜 `m?xwl=<该路径去扩展名>`。
-被引用的片段是**常态**（引用点数量级见 [`measured-data.md`](measured-data.md) §八）。
+被引用的片段是**常态**（引用点数量级见 [`measured-data-criteria.md`](measured-data-criteria.md) §八）。
 
 ### 3.4 url 三类写法与解析口径
 
@@ -125,7 +127,7 @@ where t.ID = {?ID?}            -- ← 绑定参数
 第二种短名（`/<短名>`，**捷径**，如 `/upload`）工具**不解析**、只提示 —— 它**不只会出现在理论上**：
 全量 24986 个文件里，`url:` 的写法分三类 —— **字面量含 `m?xwl=`（已覆盖）**、
 **字面量不含 `m?xwl=`（捷径等）**、**变量 / 表达式（静态不可能解析）**，后两类工具都**不纳入核对**，
-量级见 [`measured-data.md`](measured-data.md) 第十一节。
+量级见 [`measured-data-criteria.md`](measured-data-criteria.md) 第十一节。
 
 ## 四、两条硬规则（有源码依据）
 
@@ -144,7 +146,7 @@ where t.ID = {?ID?}            -- ← 绑定参数
 | `com.wb.tool.Query` | SQL 执行 + `{?…?}` 参数绑定 |
 | `com.wb.util.WebUtil#replaceParams(req, s)` | `{#…#}` 替换实现 |
 
-**serverScript 的常用 API**（按使用频次排序；数字见 [`measured-data.md`](measured-data.md) §八）：
+**serverScript 的常用 API**（按使用频次排序；数字见 [`measured-data-criteria.md`](measured-data-criteria.md) §八）：
 `Wb.isEmpty` · `app.get` · `request.setAttribute` · `app.run` · `app.send` · `Wb.decode` ·
 `Wb.each` · `Wb.encode` · `request.getParameter` · `SysUtil.getId` · `app.log` · `app.update`
 
@@ -275,7 +277,7 @@ python scripts/xwl.py params  <page.xwl> [--controls …]   # 页面 → store �
 - **`sqlrefs`** —— 检查三件事：每个 `{#名字#}` 是否有 serverScript 提供（`sys.*` / `Str.*` 视为内置）、
   **serverScript 里是否误用了 `{#…#}`**、顺带列出所有 `{?参数?}` 名字。
 
-  > 样本工程上的自洽率约 **99%**（明细见 [`measured-data.md`](measured-data.md) §八）：
+  > 样本工程上的自洽率约 **99%**（明细见 [`measured-data-criteria.md`](measured-data-criteria.md) §八）：
   > 少量告警是「由调用方传入」的正常场景，或 serverScript 误用 `{#…#}`。
   > 这类告警要**结合调用方判断**，不要一律当成错误。
 

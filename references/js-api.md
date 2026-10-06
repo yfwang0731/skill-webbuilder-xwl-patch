@@ -1,3 +1,5 @@
+> 发布面：随 skill 发布 ｜ 层归属：规格层
+
 # 事件 JS 里的四条引用通路（怎么写、怎么收）
 
 本文是 [`SKILL.md`](../SKILL.md) 第五章 5.4 的展开 —— 四条引用通路的完整写法。
@@ -217,4 +219,4 @@ Wb.requestAg({
 
 **出处**：框架侧为 `ExtControl`（服务端生成那对孪生键）与 ExtJS 注册器（按注册键注销）；
 平台自带示例 `examples/basic/import-module.xwl` 的注释把两种用法都演示了。
-实测分布见 [`measured-data.md`](measured-data.md) §十二。
+实测分布见 [`measured-data-designer.md`](measured-data-designer.md) §十二。

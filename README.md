@@ -115,7 +115,9 @@ webbuilder-xwl-patch/
 ├── references/               # 参考材料（每份的条数与作用见 SKILL.md 首页那张索引表）
 └── scripts/
     ├── xwl.py                # 全部子命令（纯标准库，零依赖）
-    └── selftest.py           # 内置样本自检：python scripts/selftest.py
+    ├── selftest.py           # 内置样本自检：python scripts/selftest.py
+    ├── privacy_scan.py       # 维护者发布前扫描器（本仓自身；结构面 / --patterns 外置清单面）
+    └── privacy_patterns.example.json  # **占位示例**：外置清单模板，不能当有效清单用
 ```
 
 > 各文件的**条数/数字不在这里重复**（两处维护必然漂移）—— 每份文件自己的开头写着它的条数，
@@ -127,5 +129,6 @@ webbuilder-xwl-patch/
 - （可选）**Node.js** —— 仅用于事件 JS 语法校验；缺失时自动降级为警告。
   可用 `--node <path>` 或环境变量 `NODE_BIN` 指定。
 - **改完 `scripts/xwl.py` 后先跑** `python -B scripts/selftest.py`（内置样本自检，不碰工程语料）。
+- **发布前跑** `python -B scripts/privacy_scan.py`（**结构面**：`.py` 里的本机路径 / 邮箱 / 手机号 / 疑似 token / uid 形状；加 `--patterns <仓外清单>` 才跑**外置业务标识面**）。
 
 MIT，见 [LICENSE](LICENSE)。

@@ -2,7 +2,7 @@
 name: webbuilder-xwl-patch
 slug: skill-webbuilder-xwl-patch
 displayName: webbuilder-xwl-patch
-version: 1.5.0
+version: 1.5.1
 license: MIT
 metadata:
   category: development-tools
@@ -49,7 +49,7 @@ WebBuilder 的页面与查询定义都写在 `.xwl` 里。它**看起来像 JSON
 | **对象** | 仅 `.xwl` 文件本身：格式、编辑、校验、抽取。**不含**后端 Java、模块打包、`target/` 部署副本同步、数据库菜单注册（`WB_MENU`） |
 | **操作系统** | Windows 与 POSIX（含 macOS）均支持；路径分隔符与换行按各平台惯例处理，跨平台时注意检出/存储形态差异 |
 | **环境** | Python 3.9+，**纯标准库零依赖**；`node` 可选，只用于事件 JS 语法校验，找不到时自动降级为提示 |
-| **规模** | 跨 5 个工程 / **8 个 wb 根**实测 **24986 个 xwl**，最大单文件 **728.8 KB**（746299 字节，按 1024 算；口径与耗时见 [`references/measured-data.md`](references/measured-data.md) §十）。该量级下 `check` 全开约 **0.56 s** —— **性能不是约束**。**工具没有任何文件大小上限**，但**未验证**过 1 MB 以上的文件、或单文件事件段极多的情形 |
+| **规模** | 跨 5 个工程 / **8 个 wb 根**实测 **24986 个 xwl**，最大单文件 **728.8 KB**（746299 字节，按 1024 算；口径与耗时见 [`references/measured-data-skeleton.md`](references/measured-data-skeleton.md) §十）。该量级下 `check` 全开约 **0.56 s** —— **性能不是约束**。**工具没有任何文件大小上限**，但**未验证**过 1 MB 以上的文件、或单文件事件段极多的情形 |
 | **能改的前提** | 目标文件能被加载器解析（即 `check` 的 ④ 通过）。已经是坏文件的，先用 `edit` 做文本级修复 |
 
 > 上表「规模」是**样本实测值，不是硬上限** —— 换工程要自己测。别把两处数字混起来：**这里**是"跨 5 个
@@ -85,6 +85,13 @@ WebBuilder 的页面与查询定义都写在 `.xwl` 里。它**看起来像 JSON
 | 想跑最小示例（每条命令都真跑过） | [`examples/README.md`](examples/README.md)（示例 `.xwl` 用 `xwl.py new` 现场生成，不在仓库里预置） |
 | 数字从哪来（引用次数 / 分布 / 统计口径） | [`references/measured-data.md`](references/measured-data.md) |
 | **为什么这么定**（判据依据、踩过的坑、已作废的做法） | [`references/workflow-notes.md`](references/workflow-notes.md) |
+| 查 **itemId / normalName 重名**的数据依据 | [`references/measured-data-addressing.md`](references/measured-data-addressing.md) |
+| 查**设计器写回 / 控件 / 窗口**的实测 | [`references/measured-data-designer.md`](references/measured-data-designer.md) |
+| 查 **SQL 分布 / 判据修正对照数** | [`references/measured-data-criteria.md`](references/measured-data-criteria.md) |
+| 查**顶层骨架 / folder.json / 规模耗时** | [`references/measured-data-skeleton.md`](references/measured-data-skeleton.md) |
+| 查**判据因果 / 守卫维护 / 豁免面** | [`references/workflow-notes-guards.md`](references/workflow-notes-guards.md) |
+
+> `references/anti-patterns.md`、`references/faq.md` 是**查询式规格（规格层）**，不受 8k 约束（8k 只约束记忆类的"按需读一次"成本）；⚠️ 上表拆出的**主题文件属依据层，仍受 ≤8k 约束**（实测最大 7,202 字符）。
 
 **触发场景**（正文里只留这三条，完整触发词见 frontmatter）：读懂或修改任何 `.xwl`
 （PC 页面 / 弹窗 / store 数据源 / SQL 定义全是同一套格式）；从零新建页面或 SQL 载体；
@@ -141,7 +148,7 @@ hidden, children, roles, title, iconCls, inframe, pageLink
 > （工程里确实存在这种「缺钥匙」的文件，如 `dev/ide/add-file.xwl`）。
 > 所以**新建时不要手写顶层键** —— 用 `xwl.py new`（内置了这套键序，见**第三章第 0 步**）。
 > 7 把钥匙各自的**取值形态与实测分布**（1635 个页面类文件的计数）见
-> [`references/measured-data.md`](references/measured-data.md) §九。
+> [`references/measured-data-skeleton.md`](references/measured-data-skeleton.md) §九。
 
 > **要补齐这类「缺钥匙」文件时**：`set` 一个**原本不存在**的顶层键就是**新建键**，该 op 要带 `"create": true`
 > （或命令行加 `--allow-new-key` 全局放行；不给则默认拒绝、rc=2，详见 §3.1）：
@@ -186,7 +193,7 @@ hidden, children, roles, title, iconCls, inframe, pageLink
 > 反编译复刻 + 回放校验）。三个共同规则：`--eol` 沿用·多数·**回退 LF**（三命令共用、不静默）；
 > `patch` **整份重建**（单行源改完一定是多行）；`edit` 按目标文件的实际换行**推断**、无换行时按 LF。
 > 详见 [`references/faq.md`](references/faq.md) §四，写回算法与规模占比见
-> [`references/measured-data.md`](references/measured-data.md) §五。
+> [`references/measured-data-designer.md`](references/measured-data-designer.md) §五。
 
 | 源 | `auto` 怎么定 |
 |---|---|
@@ -198,13 +205,13 @@ hidden, children, roles, title, iconCls, inframe, pageLink
 
 > 「字面反斜杠 + n」的**机制**、**语义无损**（与原文件**逐字节相同**）与**默认 / `--safe`** 的取舍
 > （**按"这个文件给谁看"决定**：要提交用默认、只人读用 `--safe`）见
-> [`references/measured-data.md`](references/measured-data.md) §5.2；反例与替代（人读用 `xwl.py sql` / `events`）见
+> [`references/measured-data-designer.md`](references/measured-data-designer.md) §5.2；反例与替代（人读用 `xwl.py sql` / `events`）见
 > [`references/anti-patterns.md`](references/anti-patterns.md) 第 20 条。
 
 ### 2.6 压平检测：`diffguard`（相对 git 基线）
 
 > `diffguard` 的**判据**（定义级 / **粗筛**）、漏报面、前置必要条件、跳过与退出码、成本与 `--rev` 用法见
-> [`references/faq.md`](references/faq.md) §三 与 [`references/workflow-notes.md`](references/workflow-notes.md) §二③；
+> [`references/faq.md`](references/faq.md) §三 与 [`references/workflow-notes-guards.md`](references/workflow-notes-guards.md) §二③；
 > **它只在 git 仓库里有意义**，且**只扫改动过的文件**，别对整个 `wb/` 跑。提交前该跑一次，见**第三章第 5 步**。
 
 ## 三、处理流程
@@ -228,7 +235,7 @@ python scripts/xwl.py new wb/modules/<模块>/xxxSql/queryXxx.xwl --kind sql --t
 - **顶层键不用管** —— 手写时漏掉 `inframe` / `pageLink`，`check` 照样 ALL OK，问题会被静默吞掉；
 - **也不要用 `cp` 别的文件再整树重写** —— 种子是**继承式**的：它顶层没被显式覆盖的键会
   **静默残留**（种子的 `roles:{"demo":1}` 会跟着进新页面）。实测证据见
-  [`references/measured-data.md`](references/measured-data.md) §九；
+  [`references/measured-data-skeleton.md`](references/measured-data-skeleton.md) §九；
 - 默认**拒绝覆盖已存在文件**（要覆盖得显式 `--force`；改已有文件应该用 `patch`）；
 - `--from-json <obj.json>` 可以喂一个自己拼的顶层对象，它会**按设计器键序重排并补齐缺失的页面钥匙**
   （补齐了哪些会明确回报），且不覆盖你给的 `title` / `roles`。
@@ -329,7 +336,7 @@ python scripts/xwl.py patch <file.xwl> --ops ops.json --backup
    同一个数组上先 `insert` 再 `delete`，下标要按前一步之后的数组算。
 2. **事件 JS / SQL / serverScript 都写普通多行字符串**（`\n` 照常写）—— 序列化器会按设计器规则
    转成续行形态，你不用管。JS 里请用**单引号**。
-> 重排的"顺带规整"与 diff 最小化口径见 [references/measured-data.md](references/measured-data.md) §五；想压小 diff 改用 3.2 的 `edit`（语义相同、只含你改的那一处）。
+> 重排的"顺带规整"与 diff 最小化口径见 [references/measured-data-designer.md](references/measured-data-designer.md) §五；想压小 diff 改用 3.2 的 `edit`（语义相同、只含你改的那一处）。
 
 > 改 **SQL / serverScript** 时，`path` 用 `["@dataprovider","configs","sql"]` 这类写法 —— 见第六章。
 
@@ -503,7 +510,7 @@ python scripts/xwl.py diffguard <改过的文件或目录> --strict    # CI / pr
 末尾加独立分组 `[外部可传入]`（各上游调用方与传入键），再给一行**载入侧汇总**（节点级「同根命中 / 本根未找到 / 非 m?xwl 的 url」＋
 出现级「动态写法 / 非 `m?xwl` 字面量」；**两种量纲分开标**；节点级三数**之和 = 本页 store.url 数**）。**默认关 ⇒ 零成本**（不开时**不出现**这两段；**唯一例外**见 §4.2 的留痕规则 —— 缺来源时本就有一行 `[note]` 预告）；
 开了才单根全扫一遍（≈5 秒量级）。它只认 `params: {名:值}` **字面量键**，`out: app.<容器>` 与运行时拼接的 url **只计数**；
-**不并入 `provided`、不改退出码**。命中量级的**完整口径**（节点级「同根命中／本根未找到」＋出现级「动态写法／非 `m?xwl` 字面量」，**两种量纲分开**）与**多根三分类**（同根命中 / 跨工程 / 全根不存在）见 [`references/measured-data.md`](references/measured-data.md) **§11.4（节点级多根三分类）与 §11.3（`url:` 三类形态）**。
+**不并入 `provided`、不改退出码**。命中量级的**完整口径**（节点级「同根命中／本根未找到」＋出现级「动态写法／非 `m?xwl` 字面量」，**两种量纲分开**）与**多根三分类**（同根命中 / 跨工程 / 全根不存在）见 [`references/measured-data-criteria.md`](references/measured-data-criteria.md) **§11.4（节点级多根三分类）与 §11.3（`url:` 三类形态）**。
 
 ## 七、itemId 命名规范与重名处置
 
@@ -517,7 +524,7 @@ python scripts/xwl.py diffguard <改过的文件或目录> --strict    # CI / pr
 
 > 「重名后 `app.X` 取不到值 / 取到的不是你以为的那个」的**确切机制**（注册是**普通赋值**、
 > `unregister` 按同名键直接 `delete` ⇒ **后创建的覆盖先创建的**、**任一重复项被销毁会删掉整个名字**）见
-> [`references/measured-data.md`](references/measured-data.md) §7.5（含源码原文）。
+> [`references/measured-data-addressing.md`](references/measured-data-addressing.md) §7.5（含源码原文）。
 
 ### 7.2 三类控件，三种规则
 
@@ -530,10 +537,10 @@ python scripts/xwl.py diffguard <改过的文件或目录> --strict    # CI / pr
 第四种情况：注册键**不是合法 JS 标识符**（含中文 / 空格 / `.` 等）—— 点号访问不适用，只能用
 `app.get('名')` **或** `app['名']` 取，所以 `itemids` 把这类重名判为无害（`configs.id` 命名空间不在本工具建模范围）。
 
-> `normalName` 的合法性（**不是所有控件都接受**，写了属**非法配置**）见 [references/measured-data.md](references/measured-data.md) §7.1。
+> `normalName` 的合法性（**不是所有控件都接受**，写了属**非法配置**）见 [references/measured-data-addressing.md](references/measured-data-addressing.md) §7.1。
 
 各类在**样本工程**里的实测组数、比例与按类型的分布见
-[`references/measured-data.md`](references/measured-data.md) §七。那些数字只是**一个样本的量级参考**，
+[`references/measured-data-addressing.md`](references/measured-data-addressing.md) §七。那些数字只是**一个样本的量级参考**，
 不要当成通用阈值 —— **在你自己的工程上跑 `itemids` / `check` 才是该工程的真实情况**。
 
 ### 7.3 遇到重名：先读父子关系，再把候选交给用户选
@@ -542,13 +549,13 @@ python scripts/xwl.py diffguard <改过的文件或目录> --strict    # CI / pr
 
 > `itemids` 的常用三个选项（`--dups-only` / `--name` / `--suggest`）见 `xwl.py itemids --help`（另有 `--fix` / `--controls` / `--json`）。
 
-> 建议值的命名惯例与实测依据见 [references/measured-data.md](references/measured-data.md) §7.6。
+> 建议值的命名惯例与实测依据见 [references/measured-data-addressing.md](references/measured-data-addressing.md) §7.6。
 
 > 想知道**某个工程整体**有多少重名：在**你自己的工程**上跑一遍就是最新结果 ——
 > `itemids <file> --dups-only`（单文件明细）、`check`（该文件的 error / benign 计数）、
 > `itemids <file> --json`（机器可读，便于汇总）。
 > 样本工程的一份完整分布（各档组数 + 按控件类型的 Top）见
-> [`references/measured-data.md`](references/measured-data.md) §7.2，只作**量级参考**。
+> [`references/measured-data-addressing.md`](references/measured-data-addressing.md) §7.2，只作**量级参考**。
 >
 > `itemids <file> --json` 的**字段契约**（脚本消费用）：`groups[].name` 的值 = **注册键**
 > （`normalName || itemId`，**不是 `itemId`**）；`groups[]` 另有 `itemIds`（该组节点的 `itemId` 列表）

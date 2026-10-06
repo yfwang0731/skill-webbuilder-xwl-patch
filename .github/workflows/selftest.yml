@@ -45,6 +45,13 @@ jobs:
           python scripts/xwl.py --help
           python scripts/xwl.py folders --help
 
+      # 隐私扫描·**结构面**：本机路径（.py）/ 邮箱 / 手机号 / 疑似 token / uid 形状。
+      #   这里**不传** `--patterns` —— 外置业务标识清单面**只在本地跑**（真实清单落在仓库之外）。
+      #   未传清单时脚本会**显式打印**「本地业务标识清单未参与」，**不静默跳过**；
+      #   于是 CI 日志里能直接看到"本次哪一面没跑"，而不是看着全绿却漏了一面。
+      - name: Privacy scan（结构面）
+        run: python scripts/privacy_scan.py
+
   # 非 git 布局（模拟平台把 skill 打成 zip、解包后没有 .git）：
   #   默认必须**判红**（静默绿是病根）；显式 `--allow-nogit` 才降级为"打印没扫、rc 按其他项定"。
   no-git-layout:

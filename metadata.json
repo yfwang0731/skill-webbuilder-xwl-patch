@@ -3,7 +3,7 @@
   "name_en": "webbuilder-xwl-patch",
   "displayName": "webbuilder-xwl-patch",
   "author": "yfwang0731",
-  "version": "1.5.0",
+  "version": "1.5.1",
   "schema_version": "1.0",
   "description": "WebBuilder（wb）平台 .xwl 定义文件的处理与安全编辑：结构级 patch（只给值 / 子树，工具按设计器自己的算法重建整份文件）+ 格式校验 + 相对 git 基线的压平检测。",
   "core_capabilities": [
@@ -80,9 +80,15 @@
     "references/js-api.md",
     "references/sql-fragments.md",
     "references/measured-data.md",
-    "references/workflow-notes.md"
+    "references/measured-data-addressing.md",
+    "references/measured-data-designer.md",
+    "references/measured-data-criteria.md",
+    "references/measured-data-skeleton.md",
+    "references/workflow-notes.md",
+    "references/workflow-notes-guards.md"
   ],
   "update_history": [
+    { "version": "1.5.1", "date": "2026-10-06", "summary": "适配与加固版（patch）：补 references/ 发布声明、拆记忆类文档、加隐私扫描与 CI 挂载 —— 对外能力零变化（子命令总数仍 15、无新参数、无新子命令、无新增输出行；不改 xwl.py 的对外面、不动 core_capabilities），全在 references/、scripts/（守卫与扫描器）与 CI 侧。① references/ 补发布声明（14 份）：每份 .md 首行加统一发布声明「> 发布面：随 skill 发布 ｜ 层归属：依据层|规格层」，编年三臂（17l）与权威面（17p／17q）由「写死文件名单」改为「按首行『层归属』机械选取」（声明即豁免、删声明即失效），并新增守卫块 17u 校验声明齐不齐、字段合不合法（动态遍历 references/ 实际文件、不写死清单）；doc_names 由写死清单改为按磁盘实际文件推导（12 → 17）；17u 另加依据层家族结构佐证（声明依据层者 stem 须属 measured-data／workflow-notes 家族），堵住「把规格层文件改成依据层即自授豁免」，另有 6 处硬编码名单改结构判据（按首行『层归属』选取，不再点名具体文件）。② 记忆类文档拆分（2 份 → 7 份）：measured-data.md 拆出 measured-data-addressing／designer／criteria／skeleton.md、workflow-notes.md 拆出 workflow-notes-guards.md（5 份均归依据层），节号不重编、原节标题原样保留，主文件保留主题文件索引。③ 隐私扫描＋ CI 挂载：新增 scripts/privacy_scan.py 与 scripts/privacy_patterns.example.json（发布前跑、白名单外 0 命中），.github/workflows/selftest.yml 挂载该扫描；「发布前跑该脚本」写在 README.md 的「依赖与许可」维护者段（与「改完 scripts/xwl.py 后先跑 selftest」并列）——它扫的是本仓自身分发面，不是用户的 .xwl 工作流。④ 守卫同步与指针改指：_chron_exempt 覆盖 4 → 9（CHANGELOG.md ＋ metadata.json ＋ 依据层 7 份）、_splits 9 条 _dst 改指、跨文件节号指针 27 处改指（改指后 0 残留）。⑤ 打包元数据与评测契约同步：metadata.json 的 references 9 → 14（守卫 17i 强制）、test-prompts.json 1 处指针改指（id 与条目数不动）。既有子命令行为与输出逐字不变。" },
     { "version": "1.5.0", "date": "2026-10-01", "summary": "默认值翻转版（minor）：翻转两处默认值并新增一个全局逃生开关 ⇒ 对外能力有新增（新参数 `--allow-new-key`），按本仓尺子发 minor（子命令总数仍 15、无新子命令）。① `patch` 的 `set` 新建键默认被拒绝（打印 `[FAIL]`、rc=2、不写盘），报错文本直接教两条出路 —— 给该 op 加 `\"create\": true`（逐条放行）或命令行加 `--allow-new-key`（全局放行，两者任一即放行）；走全局开关放行时打一行 `[warn] --allow-new-key 已放行 N 个新建键：…` 留痕，`--dry-run` 下带 `create` 的待建键仍单列 `[new-key]`。② `params` 缺来源默认退出码由 1 改为 0（只告警），要阻塞须显式加逃生开关 `--strict`（rc=1，与 `diffguard --strict` 同名同义）；`--strict` 引入时「与默认同效」的预留说明全部翻成终态（`--help` / `SKILL.md` 两表 / `scripts/xwl.py` 运行期 `[note]` / `scripts/selftest.py` 断言文字）。③ `--strict` 登进 `core_capabilities` 并补 `test-prompts.json` 评测契约（`id 3` 期望同步、新增 `id 17`）；`--help` 行数上限随 `patch` / `params` 变化同步上调。既有 ops（写到已存在的键）与无 miss 的 `params` 页面行为不变。" },
     { "version": "1.4.4", "date": "2026-09-30", "summary": "分发物纪律／守卫修正版（patch）：对外能力零变化（子命令总数仍 15、无新参数、无新子命令、无新增输出行；不改 xwl.py、不动 core_capabilities），全在文档守卫与分发文档侧。① 非 git 停用面：**默认判红**（[FAIL]、rc=1）＋ 显式 `--allow-nogit` 才降级 —— 三条依赖 git ls-files 的守卫（17j-9／编年／17r）在 zip 分发解包（本无 .git）时取不到清单；原口径只标注、绝不判红，副作用是「一个没跑的守卫族，全绿输出仍读得出一切正常」⇒ **有意收窄**为默认判红，确无 .git 须 `--allow-nogit` 才降级为打印 `[note] …本次没扫`（降级仍保留汇总行「本次 … 未执行：无 git」标注）；② 17j-14 围栏块输出文案臂**跳过 CHANGELOG.md**（M-09，与全族历史豁免口径对齐）；③ 17j 节号臂**判据修正**（M-08，既有 bug）：§N.M 两位数原先因负前瞻回溯误判成 §1，现整体不匹配、交 17j-12 判，消除双报；④ 结构收口（#15/#10b）：跨守卫分工表移出 `_check_docs` 函数体、`11k` 章节顺序守卫归位（判据不变）；⑤ 分发文档纪律：SKILL.md §六 4 个内联实测数字下沉为定性句＋指向 references/measured-data.md §11.4/§11.3、§4.2 退出码表补 sql／events 空结果 rc=1 两行（M-14/M-15）；⑥ 仪表审计整改（同版追加）：`params --upstream` 补真覆盖（真实上游调用方 ＋ 非 `m?xwl` 的 `store.url`，节点级三分类之和＝本页 `store.url` 数）；`sql`／`events`／`dump` 补命令级断言（`sql` 抽全含 `totalSql`、`events --outdir` 指向新目录须**自建**、`dump` 输出**多行**）；文档守卫改**块名多重集**守卫（少一个／多一个未登记块／「净 0 偷换块」都判红）；**扫描面含未跟踪文件**（`ls-files` ∪ `--others --exclude-standard`）；命令级断言改走**子进程真 CLI**（`_run_cli`：真实退出码、异常隔离、只看 stdout）。升级须知：对外能力无变化、直接替换；对「跑自检的环境」变严（无 `.git` 默认判红；块名多重集不符即判红），对 `.xwl` 与工具判定**无影响**" },
     { "version": "1.4.3", "date": "2026-09-29", "summary": "守卫与尺子版（patch）：对外能力零变化（子命令总数仍 15、无新参数、无新子命令、无新增输出行）—— check 的文档守卫三处加严：① 跨文件节号指针检查纳入代码围栏内（原先跳过围栏；实测净增只两类：第N节（中文数字）与紧贴文件名的小节名，「§N.M」/「§N」早有别的守卫管；围栏内误报面实测 0）；② --help 行数上限表新增「防过松」半臂（上限 − 实测 > 设计余量即红，单子命令 5／顶层 10；不改任何上限值、不改 --help 输出）；③ 口径声明由「文件级布尔」收紧为「口径词须与采集日期同行」才算声明（只核日期形状、不核真伪，是提高绕过门槛而非不可绕过）；另：CHANGELOG 文首补「新输出」判据一句、references/workflow-notes.md 四处知识下沉；无变严项" },

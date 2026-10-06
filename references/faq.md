@@ -1,3 +1,5 @@
+> 发布面：随 skill 发布 ｜ 层归属：规格层
+
 # 常见问题与排错（FAQ）
 
 本文是 [`SKILL.md`](../SKILL.md) 第八章的展开 —— **排错第一站**：先在这里找症状，再去对应章节看细节。
@@ -182,7 +184,7 @@ A：`events.tagEvents` 的值是 **JSON 对象字面量字符串**（形如 `{"b
 **Q：`expand` 跑完文件没变化，是没生效吗？**
 A：可能是它本来就已经是设计器排版。**不是所有 xwl 都由设计器写过** ——
 手工改过的文件缩进可能是 4 空格 + 行尾空格。判断是否"设计器原样"别用眼睛看，
-用 `expand --dry-run` 比字节。该用忠实模式还是 `--safe` 见 [`measured-data.md`](measured-data.md) §5.2。
+用 `expand --dry-run` 比字节。该用忠实模式还是 `--safe` 见 [`measured-data-designer.md`](measured-data-designer.md) §5.2。
 
 另有一种"变化很小但换行变了"的情况：**源文件是紧凑一行、末尾也没有换行符**时，
 `--eol auto` 无从"沿用"，会**回退 LF**。这条回退规则 `patch` / `edit` / `expand`
