@@ -144,7 +144,7 @@ def _run_cli(argv: list) -> tuple:
 
     起因（按 `17s` 要求写清）：命令级断言若走 `_run(xwl.cmd_*)` **直调**，一旦被测行为
     **坏到会抛异常**，异常会冲出 `_run` **把整块打崩** ⇒ 红行变成「块 … 子进程异常退出」，
-    那条**定向断言根本没跑到** —— 这叫 **"杀了 ≠ 守住了"**（`M35`：`events --outdir` 不再自建目录
+    那条**定向断言根本没跑到** —— 这叫 **"杀了 ≠ 守住了"**（实测：`events --outdir` 不再自建目录
     时抛 `XwlWriteError`，整块崩，而"events rc 应 0"那条断言从未执行）。
     改走**子进程真 CLI** 后：
       · 拿的是**真实退出码**（含 `main()` 把 `XwlWriteError` → `rc=2` 的对外契约）；
@@ -1070,7 +1070,7 @@ def _check_subcommands(tmp, node, failures, write) -> None:
     #   ⇒ 补命令级断言：`sql` 必须抽全（含键名含 `sql` 的 `totalSql`）、`events --outdir` 指向
     #   **不存在的新目录**须自建并成功、`dump` 必须**多行**（保"按加载器规则美化输出"的用途）。
     #   ⚠️ 三条一律经 `_run_cli(...)`（**子进程跑真 CLI**）取值 —— **不许**直调 `_run(xwl.cmd_*)`：
-    #     直调时被测行为一旦抛异常会**把整块打崩**（`M35` 实测：`events --outdir` 不自建目录 ⇒
+    #     直调时被测行为一旦抛异常会**把整块打崩**（实测：`events --outdir` 不自建目录 ⇒
     #     `XwlWriteError` 冲出 `_run` ⇒ 红行成"块 … 子进程异常退出"、下面那条断言**根本没跑到**）。
     #     经 CLI 则拿**真实退出码**、异常被进程隔离 ⇒ 红行**必落在定向断言上**（见 `_run_cli` docstring）。
     ce_fail: list[str] = []
@@ -1975,9 +1975,17 @@ _q_probe = ["统计甲：1234 个 xwl（全量）。",
 
 
 _b17r_docs = ("《验收基线》", "《落地清单》", "施工索引", "施工单")
+# 条代号判据（**结构化**）：覆盖**已知形态** —— 「字母-短横-数字」与「单字母-数字」，
+#   以及原「SITE ＋ 数字」形态。无短横那一半**只收单字母** ⇒ **已收窄的假阳性面（无短横的多字母缩写）**不再误抓；
+#   右侧界定符只排除「点 ＋ 词字符」⇒ 带扩展名的文件名不误抓、句末 ASCII 句点仍判。
 _b17r_code = re.compile(
-    r"(?<![A-Za-z0-9_])[A-L](?:\d{1,2}|-[a-z])(?![A-Za-z0-9_])"
+    r"(?<![A-Za-z0-9_])(?:[A-L]\d{1,2}|[A-Z]{1,3}-\d{1,2}|[A-L]-[a-z])(?![A-Za-z0-9_]|\.\w)"
     r"|(?<![A-Za-z0-9_])SITE\d(?![A-Za-z0-9_])")
+# 词形豁免（**结构化，非逐文件/逐条名单**）：**字符编码名**一类 —— 按**真实字符集族的字符集形状**
+#   逐 match 判词形后放过（含带编号族、四位／五位数字族与带下划线的族名）。
+_b17r_code_ok = re.compile(
+    r"^(?:UTF-?8|UTF-?16|UTF-?32|UTF8|UTF16|UTF32|UCS-?[24]|ISO-8859-\d{1,2}"
+    r"|GB\d{4}|GBK|GB18030|CP\d{3,5}|KOI8-[RU]|SHIFT_JIS|EUC-[A-Z]{2})$", re.I)
 _b17r_sec = re.compile(r"§\d{1,3}-\d{1,2}")
 _b17r_proc = re.compile(r"\bPRE\d+\b|\b(?:eng|qa|pm|arch|reg|tl)-\d{1,3}\b")
 
@@ -2087,6 +2095,50 @@ def _b17r_mask_strings(_text):
                 if _buf[_k] != "\n":
                     _buf[_k] = " "
     return "".join(_buf)
+
+
+def _b17r_history_skip(_rel, _text):
+    """「历史记录类载体」中应**整段跳过**扫描的行号集合（1 基）；无 ⇒ 空集。
+
+    判据（**按语义、非按文件名单**）：`CHANGELOG.md` 已有整体豁免（它是历史记录）；`metadata.json` 的
+    `update_history` 段是**同语义**（契约字段、只记录历史、不改写）⇒ 把既有豁免**按语义推广**到该段 ——
+    该段整体跳过，**其余字段仍在扫描面**（⛔ 不整文件豁免 `metadata.json`）。
+    实现：定位 `update_history` 键值后的 `[`，做**字符串感知**的括号配对找闭合 `]`，再折算成行号区间。
+    """
+    if not _rel.endswith(".json"):
+        return set()
+    _k = _text.find('"update_history"')
+    if _k < 0:
+        return set()
+    _j = _text.find("[", _k + len('"update_history"'))
+    if _j < 0:
+        return set()
+    _depth = 0
+    _in = False
+    _esc = False
+    _p = _j
+    while _p < len(_text):
+        _c = _text[_p]
+        if _in:
+            if _esc:
+                _esc = False
+            elif _c == "\\":
+                _esc = True
+            elif _c == '"':
+                _in = False
+        else:
+            if _c == '"':
+                _in = True
+            elif _c == "[":
+                _depth += 1
+            elif _c == "]":
+                _depth -= 1
+                if _depth == 0:
+                    break
+        _p += 1
+    _ls = _text.count("\n", 0, _j) + 1
+    _le = _text.count("\n", 0, _p) + 1
+    return set(range(_ls, _le + 1))
 
 
 
@@ -2596,6 +2648,22 @@ def _check_docs(tmp, node, failures, write) -> None:
             except (OSError, UnicodeDecodeError):   # UnicodeDecodeError 是 ValueError 子类、非 OSError ⇒ 必须并列
                 _stat = "统计不出（references/ 不可读）"
             doc_fail.append("SKILL.md 行数 %d 已超软上限 600（硬上限 700）⇒ **新增内容默认走 `references/`**（%s）。" % (_n, _stat))
+
+    #     同类护栏（篇幅族）第 3 小条：`CHANGELOG.md` **文首区**（首个 `## [` 之前）的非空行 ≤ 14。
+    #       起因：文首区该只放**使用者向**内容（介绍段 ＋ 数字说明）；一旦把"只有维护者
+    #         写这个文件时才需要"的规程堆回去，"读者分层"就破了 —— 用上限钉住，超级别即提示下沉。
+    #       ⚠️ 红行自带解法：**发版判据应落在依据层／记忆，文首只留使用者向内容**。
+    _cl_head_lines = docs.get("CHANGELOG.md", [])
+    _cl_ne = 0
+    for _cl_l in _cl_head_lines:
+        if _cl_l.startswith("## ["):
+            break
+        if _cl_l.strip() != "":
+            _cl_ne += 1
+    if _cl_ne > 14:
+        doc_fail.append("CHANGELOG.md 文首区（首个 `## [` 之前）非空行 %d 行 > 上限 14 —— "
+                        "发版判据应落在依据层／记忆，文首只留使用者向内容（哪一版改了什么、升了要注意什么）"
+                        % _cl_ne)
 
     # 17j-7 `--help` 篇幅上限（通道 B 的护栏）：把 §一/§三/§五/§七 的细节搬进
     #     `xwl.py` 的 `help=` / 参数 help / `epilog` 之后，`--help` 会变长；这条钉住它别再涨。
@@ -3189,14 +3257,18 @@ def _check_docs(tmp, node, failures, write) -> None:
     # 17r 分发面自包含：扫描面（`git ls-files` ∪ 磁盘新增未跟踪，见 `_git_scan_scope`）里不得出现
     #     「指向 skill 包外」的引用。
     #     判据 = 包外文档名（四种，见下方 _b17r_docs 元组）
-    #          + 外部计划文档的条目代号（字母+数字 / 字母-小写字母 / SITE+数字）+ §N-M 形式的节号指针。
+    #          + 外部计划文档的条目代号（**已知形态**：单字母-数字 ／ 字母-短横-数字 ／ 单字母-短横-小写字母，
+    #            以及原「SITE ＋ 数字」形态）+ §N-M 形式的节号指针。
     #          + 前置批次号（PRE 加数字）与过程角色编号（eng-/qa-/pm-/arch-/reg-/tl- 加数字）。
     #     `.py` 只在**字符串字面量之外**判（词法掩码），免得把夹具/文案里的代号当残留。
-    #     `CHANGELOG.md` 是历史记录，豁免；代号用前后界定符锚定，避开 `0xD800` / `BLE001` / `LF-only`。
-    #     ⚠️ 起因：本条守卫的**说明注释**不许出现被禁字面量 —— 否则守卫会把自己判红（已踩过一次）。
-    # 有界下沉：`_b17r_docs` / `_b17r_code` / `_b17r_sec` / `_b17r_proc` 已移出函数体 ⇒ 见模块级同名常量。
+    #     无短横那一半**只收单字母** ⇒ **已收窄的假阳性面（无短横的多字母缩写）**不误抓；
+    #       带短横那一半仍覆盖多字母；另有一支「单字母 ＋ 短横 ＋ 单个小写字母」，右侧界定符只排除「点 ＋ 词字符」⇒ 带扩展名文件名不误抓、句末 ASCII 句点仍判。
+    #     两处**按语义**的豁免（非逐文件 / 逐条名单）：`CHANGELOG.md` 整体（历史记录）；`metadata.json`
+    #       的 `update_history` 段（**同属历史记录语义**，按段跳过、其余字段仍判）＋ **字符编码名词形**一类。
+    #     ⚠️ 起因：说明文字本身也在扫描面内 ⇒ 注释里不得出现被禁字面量，否则守卫会把自己判红。
+    # 有界下沉：`_b17r_docs` / `_b17r_code` / `_b17r_code_ok` / `_b17r_sec` / `_b17r_proc` 已移出函数体 ⇒ 见模块级同名常量。
 
-    # 有界下沉：`_b17r_mask_strings`（纯助手）已移出函数体 ⇒ 见模块级同名函数。
+    # 有界下沉：`_b17r_mask_strings` / `_b17r_history_skip`（纯助手）已移出函数体 ⇒ 见模块级同名函数。
     _b17r_files, _ = _git_scan_scope(root)
     if _b17r_files is None:
         _nogit_gate("17r 分发面自包含", doc_fail, _nogit_arms)
@@ -3221,8 +3293,12 @@ def _check_docs(tmp, node, failures, write) -> None:
                     continue
             else:
                 _judge17 = _raw17
+            _skip17 = _b17r_history_skip(_rel17, _judge17)
             for _i17, _l17 in enumerate(_judge17.split("\n"), 1):
-                _hit17 = ([_m.group(0) for _m in _b17r_code.finditer(_l17)]
+                if _i17 in _skip17:
+                    continue
+                _hit17 = ([_m.group(0) for _m in _b17r_code.finditer(_l17)
+                           if not _b17r_code_ok.match(_m.group(0))]
                           + [_m.group(0) for _m in _b17r_sec.finditer(_l17)]
                           + [_m.group(0) for _m in _b17r_proc.finditer(_l17)]
                           + [_w for _w in _b17r_docs if _w in _l17])
@@ -3233,8 +3309,9 @@ def _check_docs(tmp, node, failures, write) -> None:
             doc_fail.extend(_b17r_fail[:12])
         else:
             print("[ok]  17r 分发面自包含：%d 个分发文件里无包外引用"
-                  "（无《验收基线》/《落地清单》/施工索引/施工单、无施工单条目代号、无 §N-M 形式的节号指针、无前置批次号/过程角色编号；"
-                  "`.py` 只判字符串字面量之外；CHANGELOG 豁免）" % len(_b17r_files))
+                  "（无《验收基线》/《落地清单》/施工索引/施工单、无施工单条目代号（单字母-数字 ／ 字母-短横-数字 ／ 单字母-短横-小写字母 形态）、"
+                  "无 §N-M 形式的节号指针、无前置批次号/过程角色编号；"
+                  "`.py` 只判字符串字面量之外；CHANGELOG 整文件 ＋ 历史记录段 ＋ 编码名词形豁免）" % len(_b17r_files))
 
     # ---- 11k.（**归位**）SKILL.md 章节顺序守卫（语义分组：认知→格式→操作→专题→经验→收尾）----
     #   ⚠️ 本块原**寄居**于 `_check_itemids`（itemids 块）——它判的是 **SKILL.md 的章节顺序**，

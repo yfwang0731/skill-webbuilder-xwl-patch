@@ -108,7 +108,7 @@ python scripts/xwl.py diffguard page.xwl                            # 有没有�
 webbuilder-xwl-patch/
 ├── SKILL.md                  # **入口文档**：适用边界、格式硬规则、处理流程、引用方式、SQL、itemId
 ├── README.md                 # 你正在看的这页：定位 + 上手 + 速查
-├── CHANGELOG.md              # 变更历史（倒序，含每一步的依据与实测数字）
+├── CHANGELOG.md              # 变更历史（倒序，使用者向：哪一版改了什么、升了要注意什么）
 ├── metadata.json             # 能力与边界声明（SkillHub 打包 / 平台评测读它）
 ├── test-prompts.json         # 典型 prompt（供 skill 评估用）
 ├── examples/                 # 可直接跑的最小示例（示例 .xwl 由 new 现场生成）
@@ -128,7 +128,5 @@ webbuilder-xwl-patch/
 - **Python 3.9+**（纯标准库，零第三方依赖）
 - （可选）**Node.js** —— 仅用于事件 JS 语法校验；缺失时自动降级为警告。
   可用 `--node <path>` 或环境变量 `NODE_BIN` 指定。
-- **改完 `scripts/xwl.py` 后先跑** `python -B scripts/selftest.py`（内置样本自检，不碰工程语料）。
-- **发布前跑** `python -B scripts/privacy_scan.py`（**结构面**：`.py` 里的本机路径 / 邮箱 / 手机号 / 疑似 token / uid 形状；加 `--patterns <仓外清单>` 才跑**外置业务标识面**）。
 
 MIT，见 [LICENSE](LICENSE)。
