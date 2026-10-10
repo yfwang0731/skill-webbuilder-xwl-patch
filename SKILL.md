@@ -2,7 +2,7 @@
 name: webbuilder-xwl-patch
 slug: skill-webbuilder-xwl-patch
 displayName: webbuilder-xwl-patch
-version: 1.5.2
+version: 1.5.3
 license: MIT
 metadata:
   category: development-tools
@@ -81,6 +81,7 @@ WebBuilder 的页面与查询定义都写在 `.xwl` 里。它**看起来像 JSON
 | **动手前**扫一遍"别这么干" | [`references/anti-patterns.md`](references/anti-patterns.md) —— 23 条，标了哪些是**静默**的 |
 | **交活前**逐条过 | 第九章 + [`references/checklist.md`](references/checklist.md) —— 30 项 |
 | 换控件 / 不知道用哪个 / 该挂哪里 | [`references/controls.md`](references/controls.md) |
+| **HTML → xwl 转写**：默认做法 / 必须回问 / 不预设 | [`references/transcription-defaults.md`](references/transcription-defaults.md) |
 | 想看一次完整实操（从零造页面 + SQL 载体） | [`references/walkthrough.md`](references/walkthrough.md) |
 | 想跑最小示例（每条命令都真跑过） | [`examples/README.md`](examples/README.md)（示例 `.xwl` 用 `xwl.py new` 现场生成，不在仓库里预置） |
 | 数字从哪来（引用次数 / 分布 / 统计口径） | [`references/measured-data.md`](references/measured-data.md) |
@@ -221,6 +222,8 @@ hidden, children, roles, title, iconCls, inframe, pageLink
 
 **改已有文件从第 1 步起；从零造新文件先走第 0 步。**
 
+> **转写（HTML → xwl）的决策归属**：skill 直接拍三件**默认做法** —— ① 不可见参数 ⇒ 用其**语义类型**的控件（`text` / `combo` / `button`）＋ `configs.hidden:"true"` 属性（⛔ **不是** `type:"hidden"`）；② 列表分页 ⇒ **不填 `pageSize`**；③ 必填校验 ⇒ **命令式**写进触发按钮的 `click`。只**回问两件**：真实后台取数（表名 / 字段 / 接口）与页面标题 / 菜单名。产物落点（模块路径 / 页面名）**既不预设、也不回问**，留待使用时提供。⚠️ **同名不同型**：页面**顶层** `hidden` 是 **bool**，控件 **`configs` 级** `hidden` 是**字符串**。详见 [`references/transcription-defaults.md`](references/transcription-defaults.md)。
+
 ### 第 0 步 · 新建文件
 
 ```bash
@@ -354,6 +357,8 @@ python scripts/xwl.py edit <file.xwl> --old-file old.txt --new-file new.txt --ex
 > **两条路都禁止**用普通编辑器 / 通用 Edit 工具直接改 xwl —— 它们会写成裸 LF，破坏格式。
 
 ### 第 4 步 · 格式校验（**改完必跑**）
+
+> **能力边界（不随时间变的一句）**：`check` 只做**静态、文件级**校验 —— **格式与结构 ①–⑤ ＋ 事件 JS 语法 ⑥ ＋ 注册键重名分级 ⑦**，**不证页面可用**（逐项判据与报错处置见 [`references/faq.md`](references/faq.md)）。
 
 `check` 共 **八项** = **7 项判定 ＋ 1 项只提示**。7 项判定 = **格式五项 ①–⑤**（无 BOM / 换行一致 / 无「反斜杠 + 空白」行 /
 **加载器等价解析** / 末行结构）+ **⑥ 事件 JS 语法**（提取后交 `node` 校验）+ **⑦ 注册键重名分级**；
@@ -530,7 +535,7 @@ python scripts/xwl.py diffguard <改过的文件或目录> --strict    # CI / pr
 
 | 类型 | 注册键重名时 | 依据与约定 |
 |---|---|---|
-| **grid 的列** `column` / `tcolumn` | **一般无害** | 命名约定：**字段名 + `_COL` / `Col` 后缀**。取数走 `app.<grid>.getSelection(0).data.XXX`，**不直接取列控件** ⇒ 列名撞车不影响取值 |
+| **grid 的列** `column` / `tcolumn` | **一般无害** | 命名约定：**列 `itemId` 默认 ＝ 字段名**；**仅当同页存在多个网格**（字段名可能跨网格重复）时，加 **`Col` 后缀（camelCase）**。取数走 `app.<grid>.getSelection(0).data.XXX`，**不直接取列控件** ⇒ 列名撞车不影响取值 |
 | **取值控件**（14 个 `Ext.form.field.*`） | **靠 `normalName` 区分** | 一般是"选中一条数据的详细展现"，`itemId` 默认就用字段名，重名不可避免。**各有唯一 `normalName` ⇒ 注册键不同、不成组**，JS 写 `app.<normalName>` |
 | **按钮 / `item` / 面板 / `tab` / `toolbar` / 数据承载** | **被引用即 `error`** | 新代码**必须**把 `itemId` 区分开。老代码若已如此且**没被 JS 引用**，可以不改；**一旦被 JS 引用就是真 bug** |
 

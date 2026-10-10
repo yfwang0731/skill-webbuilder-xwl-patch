@@ -146,15 +146,15 @@ python <本skill目录>/scripts/xwl.py new wb/modules/<模块>/orderQuery.xwl --
 [
   {"op": "set", "path": ["children", 0, "children"], "value": [
     {"configs": {"itemId": "viewport"}, "expanded": false, "children": [
-      {"configs": {"itemId": "tbar"}, "expanded": false, "type": "toolbar", "children": [
-        {"configs": {"itemId": "orderNo", "fieldLabel": "订单号"}, "expanded": false, "children": [], "type": "text"},
-        {"configs": {"itemId": "queryBtn", "text": "查询"}, "expanded": false, "children": [], "type": "button",
-         "events": {"click": "app.gridStore.load({ out: app.tbar });"}},
-        {"configs": {"itemId": "exportBtn", "text": "导出"}, "expanded": false, "children": [], "type": "button",
-         "events": {"click": "var s = app.grid1.getSelection();\nif (!s.length) { Wb.info('请先选中一行'); return; }\nWb.info('准备导出 ' + s[0].data.ORDER_NO);"}}
-      ]},
       {"configs": {"itemId": "grid1"}, "expanded": false, "type": "grid", "children": [
-        {"configs": {"itemId": "gridStore", "url": "m?xwl=<模块>/xxxSql/queryOrder"}, "expanded": false, "children": [], "type": "store"}
+        {"configs": {"itemId": "gridStore", "url": "m?xwl=<模块>/xxxSql/queryOrder"}, "expanded": false, "children": [], "type": "store"},
+        {"configs": {"itemId": "tbar"}, "expanded": false, "type": "toolbar", "children": [
+          {"configs": {"itemId": "orderNo", "fieldLabel": "订单号"}, "expanded": false, "children": [], "type": "text"},
+          {"configs": {"itemId": "queryBtn", "text": "查询"}, "expanded": false, "children": [], "type": "button",
+           "events": {"click": "app.gridStore.load({ out: app.tbar });"}},
+          {"configs": {"itemId": "exportBtn", "text": "导出"}, "expanded": false, "children": [], "type": "button",
+           "events": {"click": "var s = app.grid1.getSelection();\nif (!s.length) { Wb.info('请先选中一行'); return; }\nWb.info('准备导出 ' + s[0].data.ORDER_NO);"}}
+        ]}
       ]}
     ], "type": "viewport"}]
   },

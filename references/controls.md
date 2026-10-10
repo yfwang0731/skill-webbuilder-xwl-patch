@@ -63,7 +63,7 @@
 | `menu` | Ext.menu.Menu | 桌面 | ✔ | — | 17 | 弹出菜单（内部控件，随按钮的 `menu` 配置生成） |
 | `item` | — | 桌面 | ✔ | ✔ | 5434 | 工具栏项：分隔符（`-`）、占位（` `）、菜单项或任意控件的包装 |
 | `button` | Ext.button.Button | 桌面 | ✔ | ✔ | 974 | 按钮。事件写在 `events.click` |
-| `hidden` | Ext.form.field.Hidden | 桌面 |  | — | 35 | 隐藏字段：用来**传递不出现在界面上的参数**（内部控件，`out:` 照样会收集它） |
+| `hidden` | Ext.form.field.Hidden | 桌面 |  | — | 35 | ⚠️ **平台存在、本类场景不推荐**：要传**不出现在界面上的参数**，改用**其语义类型的控件**（文本框 `text`／下拉 `combo`／按钮 `button`）＋ `configs.hidden:"true"`（见 §六）。本控件是**内部控件**，`out:` 照样会收集它 |
 | `label` | Ext.form.Label | 桌面 |  | ✔ | 311 | 纯文本标签 |
 | `text` | Ext.form.field.Text | 桌面 |  | ✔ | 5700 | 单行文本输入 |
 | `number` | Ext.form.field.Number | 桌面 |  | ✔ | 2015 | 数字输入（空值会被 `out:` 转成 `"0"`，注意） |
@@ -86,7 +86,7 @@
 | `grid` | Ext.grid.Panel | 桌面 |  | ✔ | 1320 | 表格（`Ext.grid.Panel`）。**最常见的业务主控件** |
 | `tree` | Ext.tree.Panel | 桌面 |  | ✔ | 43 | 树（`treepanel`） |
 | `propertygrid` | Ext.grid.property.Grid | 桌面 |  | ✔ |  | 属性网格（左属性名右值） |
-| `column` | — | 桌面 | ✔ | — | 20765 | **表格列定义**。`itemId`=字段名；可嵌套 `column` 做分组表头；可挂 `combo`/`number`/`text` 作单元格编辑器 |
+| `column` | — | 桌面 | ✔ | — | 20765 | **表格列定义**。`itemId` **默认＝字段名**；**仅当同页存在多个网格**（字段名可能跨网格重复）时，加 **`Col` 后缀（camelCase）** 区分；可嵌套 `column` 做分组表头；可挂 `combo`/`number`/`text` 作单元格编辑器 |
 | `tableview` | — | 桌面 |  | ✔ | 193 | **配置载体**：`viewConfig` 视图配置 |
 | `feature` | — | 桌面 |  | — | 434 | **配置载体**：`features` grid 特性（可编辑、行号等） |
 | `editing` | — | 桌面 |  | — |  | **配置载体**：`plugins` 编辑插件（行内编辑） |
@@ -291,7 +291,7 @@
 **键序见 `SKILL.md` §1.3**（`xwl.py new` 已内置）。
 
 取值形态：`roles` 是 **dict（角色名 → 1）**，如 `{"default":1}`；`iconCls` / `pageLink` 多为空串；
-`hidden` / `inframe` 是 bool。序列化按 dict 插入序输出 ⇒ **键序写错，产出即与设计器不一致**。
+**页面顶层**的 `hidden` / `inframe` 是 **bool**（⚠️ **同名不同型**：控件节点 `configs` 级的 `hidden` 是**字符串** `"true"`，见 §六）。序列化按 dict 插入序输出 ⇒ **键序写错，产出即与设计器不一致**。
 
 > **这层别手写**：用 `xwl.py new --kind page|sql` 生成（内置了这套键序），
 > 或用 `xwl.py new --from-json` 让它按这套键序重排、补齐缺失的钥匙（见 SKILL.md 第三章第 0 步）。
@@ -303,9 +303,9 @@ module                          ← 每个 xwl 的 children[0]（页面级节点
 ├─ dataprovider                 ← 只有 serverScript 型数据源
 │  （module.configs.serverScript + dataprovider.configs.sql）
 └─ viewport / window / panel    ← 可见根容器
-   ├─ toolbar  (itemId=tbar)    ← 查询条：text/combo/date/button/item
    └─ grid  (itemId=grid1)
       ├─ store                  ← 数据源（configs.url = 'm?xwl=…'）
+      ├─ toolbar (itemId=tbar)  ← 查询条：text/combo/date/button/item（工具条挂**网格的 children**，不是网格的兄弟）
       ├─ array (itemId=columns) ← 列数组
       │  └─ column × N          ← 列（列里可真嵌套 column = 分组表头；column 可挂 combo/number/text 作 editor）
       ├─ feature (itemId=features)
@@ -328,7 +328,7 @@ module                          ← 每个 xwl 的 children[0]（页面级节点
 | 载体 type | 典型 itemId | 承载的配置项 | 次数 |
 |---|---|---|---|
 | `array` | `columns` / `features` / `dockedItems` / `items` / `series` / `axes` / `tools` / `buttons` | 数组型配置 | 1886 |
-| `column` | 字段名（如 `CNTR_NO`） | 表格列定义 | 20765 |
+| `column` | 字段名（默认；同页多网格时加 `Col` 后缀，camelCase） | 表格列定义 | 20765 |
 | `item` | 工具栏项 id | toolbar 的子项 | 5434 |
 | `feature` | `features` | grid 特性（可编辑/行号…） | 434 |
 | `store` / `treestore` | `store` | 数据源 | 2065 |
@@ -337,14 +337,14 @@ module                          ← 每个 xwl 的 children[0]（页面级节点
 
 `array` 的 itemId 实测取值分布：`columns`(1297)、`features`(322)、`dockedItems`(176)、`items`(45)、`series`(17)、`axes`(14)、`tools`(8)、`buttons`(7)
 
-> **关键澄清**：`container` 标记只说明"能不能放**真子控件**"。`grid`/`module`/`combo` 这些没标容器的节点**照样有 `children`**——里面装的是上面这些**配置载体**（`grid.children = [store, array(columns), feature, tableview]`）。所以判断能不能加子节点，要分清是加"子控件"还是加"配置载体"。
+> **关键澄清**：`container` 标记只说明"能不能放**真子控件**"。`grid`/`module`/`combo` 这些没标容器的节点**照样有 `children`**——里面装的是上面这些**配置载体**（如 `grid.children` 既装 `store`/`array(columns)`/`feature`/`tableview` 这类**配置载体**，也可装 `toolbar` 这类**真子控件**，见上方控件树）。所以判断能不能加子节点，要分清是加"子控件"还是加"配置载体"。
 
 ## 六、选型建议（哪种情况用什么）
 | 需求 | 用什么 | 备注 |
 |---|---|---|
 | PC 主页面骨架 | `viewport` → `panel`/`grid` | 根容器用一个即可 |
 | 查询条件条 | `toolbar`（`itemId` 惯用 `tbar`）+ `text`/`combo`/`date` | 查询按钮 `load({out: app.tbar})` 自动收值 |
-| 列表展示 | `grid` + `store` + `array(columns)` | 列用 `column`，`itemId`=字段名 |
+| 列表展示 | `grid` + `store` + `array(columns)` | 列用 `column`，`itemId` **默认＝字段名**（同页多网格时加 `Col` 后缀，camelCase） |
 | 弹窗编辑 | `window` → `form`/`panel` → 字段控件 | 保存按钮里用 `out: app.editWin` 收整表值 |
 | 下拉选择 | `combo` + `store` | `store.url` 指向字典/代码类 SQL 文件 |
 | 多页签 | `tab` → 多个 `panel` |  |
@@ -355,7 +355,7 @@ module                          ← 每个 xwl 的 children[0]（页面级节点
 | 纯展示字段 | `displayfield` | 只要显示不要输入框 |
 | 多行备注 | `textarea` |  |
 | 文件上传/导入 | `file` + `form` + `Wb.upload` | 见 SKILL.md 引用章节 |
-| 传递隐藏参数 | `hidden` | `out:` 会把它一起送出 |
+| 传递隐藏参数 | 用**其语义类型**的控件（`text`／`combo`／`button`）＋ `configs.hidden:"true"` | ⚠️ **别**用 `type:"hidden"`（平台存在、本类场景不推荐）；`configs.hidden` 是**字符串** `"true"`（顶层同名钥匙 `hidden` 才是 bool）；`out:` 照样收集 |
 | 自由排版 / 富文本 | `div`/`span`/`p`（lib=3）或 `htmleditor` |  |
 | 移动端页面 | `t` 前缀那一套（lib=2） | 与桌面控件一一对应，别混用 |
 | SQL 数据源 | `module.configs.serverScript` + `dataprovider.configs.sql` | 文件名惯用 `xxxSql/queryXxx` |

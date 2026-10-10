@@ -1196,6 +1196,9 @@ def cmd_expand(args) -> int:
 #            · 名字不是合法 JS 标识符（含中文 / 空格 / `.` 等）：只能 `app.get('名')` / `app['名']` 取
 #            · 按钮 / 面板 / 数据承载… 等其余类型重名：老代码可暂留，但新代码应区分
 _IID_COL_TYPES = frozenset({"column", "tcolumn"})
+# 网格容器类型 —— 供「同页是否多网格」的判据用：列 `itemId` 默认 = 字段名，
+# 仅同页多网格（字段名可能跨网格重复）时才需 `Col` 后缀区分。
+_IID_GRID_TYPES = frozenset({"grid", "tgrid"})
 _IID_JS_IDENT_RE = re.compile(r"^[A-Za-z_$][\w$]*$")
 _IID_INDEX_RE = re.compile(r"^(?P<name>.+)#(?P<idx>\d+)$")
 _APP_REF_BARE = re.compile(r"\bapp\.([A-Za-z_$][\w$]*)")
@@ -1980,9 +1983,16 @@ def cmd_itemids(args) -> int:
 
     cols = [(n, cfg) for n, t, cfg, *_ in rep["nodes"] if t in _IID_COL_TYPES]
     if cols:
+        # 列 `itemId` 默认 = 字段名；仅**同页多网格**（字段名可能跨网格重复）才需 `Col` 后缀区分。
+        # 单网格页不加后缀属正常，故不按「带后缀若干」报缺口（避免恒现噪声）。
+        n_grids = sum(1 for _n, _t, *_ in _iter_controls(obj) if _t in _IID_GRID_TYPES)
         ok = sum(1 for _n, c in cols if re.search(r"(_?[Cc][Oo][Ll])$", str(c.get("itemId") or "")))
-        print(f"\n--- 命名规范 ---\n  列控件 itemId {len(cols)} 个，带 `_COL`/`Col` 后缀 {ok} 个"
-              f"（约定：字段名 + Col，多 grid 时靠父级 itemId 区分）")
+        if n_grids >= 2:
+            print(f"\n--- 命名规范 ---\n  列控件 itemId {len(cols)} 个，带 `Col` 后缀 {ok} 个"
+                  f"（约定：默认＝字段名；同页多网格时才加 `Col` 后缀）")
+        else:
+            print(f"\n--- 命名规范 ---\n  列控件 itemId {len(cols)} 个"
+                  f"（单网格页：列 `itemId` 默认 = 字段名，无需 `Col` 后缀）")
 
     if not groups:
         print("\n（无重名注册键）")
@@ -2339,6 +2349,8 @@ _PAGE_DEFAULTS = collections.OrderedDict([
 # SQL 载体的 serverScript 骨架：取参数用 app.get('名')（**serverScript 里禁止写 {#…#}**），
 # 拼好的条件通过 request.setAttribute('sql', …) 交给 dataprovider 的 {#sql#}。
 _SQL_SERVER_SCRIPT = "var sql = '';\nrequest.setAttribute('sql', sql);"
+# 种子 `sql` 是**示例占位、非业务表**：表名 `WB_MISC` 只为让生成物可解析，
+# 使用者**必须替换**成真实业务 SQL 后再用（`new --kind sql` 会显式提示这一点）。
 _SQL_BODY = "select * from WB_MISC\nwhere 1=1\n{#sql#}"
 
 
@@ -2471,6 +2483,8 @@ def cmd_new(args) -> int:
 
     top = list(obj.keys())
     print(f"骨架: {kind} | 顶层 {len(top)} 键，键序 = {top}")
+    if kind == "sql":
+        print("[note] 种子 `sql` 为**示例占位**（表名 `WB_MISC` 非业务表）—— **必须替换**成真实 SQL 后再用。")
     if added:
         print(f"[note] 已按设计器默认值补齐缺失的页面钥匙：{added}")
         print("       缺这些键的文件 `check` 也是 ALL OK（只查格式），但设计器/框架行为会不一致。")
@@ -2493,6 +2507,7 @@ def cmd_new(args) -> int:
         print(f"  1) 设计器导航树里看不到它 → 跑 `xwl.py folders {dest}` 看 folder.json 登记情况")
         print("  2) 若这是 SQL 载体 → 跑 `xwl.py sqlrefs`；若是引用它的页面 → 跑 `xwl.py params`")
         print("  3) 要被用户打开还需在数据库 WB_MENU 里挂菜单（在 xwl 工具范围外）")
+        print("  4) 若这是 SQL 载体 → **必须替换**种子 `sql`：表名 `WB_MISC` 是**示例占位、非业务表**")
     return rc
 
 
