@@ -1,0 +1,39 @@
+[
+  {"op": "append",
+   "path": ["children", 0, "children"],
+   "value": {
+     "configs": {"itemId": "grid1", "selType": "rowmodel"},
+     "expanded": false,
+     "children": [],
+     "type": "grid"
+   }},
+  {"op": "append",
+   "path": ["@grid1", "children"],
+   "value": {
+     "configs": {"itemId": "store", "autoLoad": "true"},
+     "expanded": false,
+     "children": [],
+     "type": "store"
+   }},
+  {"op": "append",
+   "path": ["@grid1", "children"],
+   "value": {
+     "configs": {"itemId": "tbar", "dock": "top"},
+     "expanded": false,
+     "children": [],
+     "type": "toolbar"
+   }},
+  {"op": "append",
+   "path": ["@tbar", "children"],
+   "value": {
+     "configs": {
+       "itemId": "orgId",
+       "fieldLabel": "机构",
+       "hidden": "true",
+       "value": "0000"
+     },
+     "expanded": false,
+     "children": [],
+     "type": "text"
+   }}
+]

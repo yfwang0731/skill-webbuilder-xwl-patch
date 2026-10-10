@@ -1,0 +1,19 @@
+[
+  {"op": "append",
+   "path": ["children", 0, "children"],
+   "value": {
+     "configs": {"itemId": "listWin", "title": "明细", "closeAction": "hide"},
+     "expanded": false,
+     "children": [],
+     "type": "window"
+   }},
+  {"op": "append",
+   "path": ["children", 0, "children"],
+   "value": {
+     "configs": {"itemId": "editWin", "title": "编辑", "header": "false",
+                 "createInstance": "false", "closeAction": "destroy"},
+     "expanded": false,
+     "children": [],
+     "type": "window"
+   }}
+]

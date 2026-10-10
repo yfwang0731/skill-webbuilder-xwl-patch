@@ -30,7 +30,8 @@ SQL 载体的写法见第三节。
 ## 三、改一个已有文件：给页面加一个带多行 JS 的按钮
 
 第一节生成的 `<你的临时目录>/demo-page.xwl` 是空 `module` 节点。
-`examples/ops-add-button.json`（**留在仓内**，是样例数据）要往它的 `module.children` 里追加一个按钮。
+`examples/ops-add-button.json`（**留在仓内**，是样例数据）是**多 op 序列**：先往 `module.children`
+追加一个 `grid`（`itemId=demoGrid`），再往这个网格里追加一个 `button`（`itemId=queryBtn`）。
 
 ```bash
 # 1) 先看基线格式是否合法
@@ -44,7 +45,7 @@ python scripts/xwl.py patch <你的临时目录>/demo-page.xwl \
 python scripts/xwl.py patch <你的临时目录>/demo-page.xwl \
     --ops examples/ops-add-button.json --backup
 
-# 4) 改完必跑校验
+# 4) 改完必跑校验（默认八项；要连 `configs` 键 / 内联 `[js]` 一起校就加 `--controls`）
 python scripts/xwl.py check <你的临时目录>/demo-page.xwl
 
 # 5) 扫一遍：有没有把多行内容悄悄压平（需要 git 仓库；仓外页面不在仓库里 ⇒ 本步以 [note] 跳过、rc=0）
@@ -52,13 +53,13 @@ python scripts/xwl.py check <你的临时目录>/demo-page.xwl
 python scripts/xwl.py diffguard <你的临时目录>/demo-page.xwl
 ```
 
-**预期**：第 2 步的 diff 只新增按钮那几行（不重排其它内容）；
+**预期**：第 2 步的 diff 只新增网格与按钮那几行（不重排其它内容）；
 第 4 步 `→ OK`；第 5 步在没有 git 时以 `[note]` 跳过并以 rc=0 结束。
 
-关键点：
-- 你**只提供「值 / 子树」**（`ops-add-button.json`），续行符、转义、缩进、换行全部由工具产出 —— 不碰文本层。
-- 多行 JS 在 `ops.json` 里**就写 `\n`**（见该文件里 `click` 的值），工具会转成磁盘上的续行形态。
-- JS 里一律用**单引号**。
+> 该样板 `click` 里的 `app.demoGrid` 引用的网格**由本样板自己创建**（先 `append` 了 `demoGrid`，
+> 再 `append` 按钮），整份文件**同文件自洽**、可独立跑通。
+
+ops 的完整规范见**第七节**。
 
 ## 四、从零造一个 SQL 载体
 
@@ -114,3 +115,52 @@ $ python scripts/xwl.py diffguard page.xwl --strict
 
 这是 `diffguard` 存在的全部理由：**`check` 查不出压平**（压平后文件仍自洽），
 而 `diffguard` 能精确指出「基线的哪几行被并成了现在的哪一行」。
+
+## 六、ops 样板清单
+
+`examples/ops-*.json` 都是**多 op 序列**、**纯 JSON 数据**（无注释，说明以本节为准），
+每一份都能**从一个 `new --kind page` 的空页开始、一路跑到表格里的"目标形态"**。
+各份的 `path` 在**同文件内自洽** —— 目标形态用到的节点，都在同一份里按层级逐步 `append` 出来。
+
+| 文件 | 目标形态（跑完长什么样） | 示范什么决策 | ⛔ 反例 |
+|---|---|---|---|
+| `ops-add-grid.json` | `module.children` → `grid`(`grid1`) → `store` ＋ `array(columns)` ＋ `column`×3（1 个勾选列、2 个数据列 `code`/`name`） | 层级：`store`／`array`／`column` 各挂谁；列 `itemId` **默认＝字段名**；勾选列用 `configs.xtype:"checkcolumn"` | 列名无条件加 `_COL` 后缀 |
+| `ops-add-querybar.json` | `module.children` → `grid`(`grid1`) → `toolbar`(`tbar`) 在 **`grid.children` 里** → `text`＋`combo`＋`date`＋`button` | ⭐ **工具条是网格的 `children`**（不是网格的兄弟）；查询控件类型选择 | 把 `toolbar` 挂在容器下、与 `grid` 成兄弟 |
+| `ops-hide-param.json` | `module.children` → `grid` → `toolbar` → 一个 `text` ＋ `configs.hidden:"true"` | ⭐ **不可见参数用其语义类型的控件 ＋ `configs.hidden`**；⭐ **同名不同型**（顶层 `hidden` 是 bool、`configs` 级是字符串 `"true"`） | 造 `type:"hidden"` 控件 |
+| `ops-add-window.json` | `module.children` 直接子级 → **两个 `window`**：常驻档（`closeAction:"hide"`）＋ 重建档（`createInstance:"false"` ＋ `closeAction:"destroy"`，并设 `header:"false"`） | 弹层**两档**的区别与**成套**（重建档两键必须**齐**）；⚠️ 窗口**必须挂 `module` 直接子级**才拿得到 `app.<id>`；`layer` 的 `title:false` → `header:false` 的映射 | 档位张冠李戴（重建档只写一个键） |
+| `ops-required-check.json` | `module.children` → `grid` → `toolbar` → `text`(`keyword`) ＋ `button`，其 `events.click` 内含**判空＋提示** | ⭐ **必填校验写在 `click` 里**（内联判空）；`app.keyword` 引用**同文件已创建**的控件 | 加 `allowBlank`／`blankText`（查询工具条不是表单） |
+| `ops-renderer-body.json` | `grid` → `array(columns)` → `column`，其 `configs.renderer` ＝ **函数体形态** | ⭐ **`renderer` 取函数体**（`"return …;"`），**不是**函数表达式 | 写 `"function(v){…}"` |
+| `ops-extlink.json` | `panel` → `label`（`html` 里含**展示类**外链）＋ `button`（`click` 里做 `window.open` **跳转类**） | ⭐ **外链两分法**（展示 vs 跳转）；平台 `a` 控件**无 `target`** ⇒ 要"新窗口"只能写进 JS | 把**展示用**行内链接**提升成独立控件** |
+| `ops-set-store-url.json` | `grid` → `store`，其 `configs.url` ＝ `m?xwl=<模块>/xxxSql/queryDemo`（占位写法） | ⭐ **取数 url 的占位写法**；SQL 载体归 `new --kind sql`；服务端分页 `pageSize` **不填**；`totalSql` **分场景**（详见 `references/transcription-defaults.md`） | 写真实模块路径；`totalSql` 一律照抄 |
+| `ops-add-button.json` | `module.children` → `grid`(`demoGrid`) ＋ 挂其上的 `button`(`queryBtn`)，`click` 里引用 `app.demoGrid` 的选中行 | 事件 JS 的**单引号**与**手写 `\n`**；`app.<id>` 必须**同文件已创建** | 引用未创建的控件（自洽性破坏） |
+
+### 复现（每份都从空页跑到底）
+
+把 `<样例文件名>` 换成表里任一份，`<你的临时目录>` 放**仓外**：
+
+```bash
+python scripts/xwl.py new <你的临时目录>/demo-page.xwl --kind page --force
+python scripts/xwl.py patch <你的临时目录>/demo-page.xwl --ops examples/<样例文件名>
+python scripts/xwl.py check <你的临时目录>/demo-page.xwl
+```
+
+> 这些样板**都真跑过**，第 3 步的 `check` 一律 `ALL OK`。
+> `--force` 只是省去「重复生成时先删旧的」这一步；`check` 通过即说明跑到了表里的目标形态。
+
+## 七、怎么规范写 ops
+
+写 `ops.json` 时**只给结构**，格式一律交给工具；下面这几条是踩过的坑，按它写基本不会返工。
+
+1. **只给「值 / 子树」** —— 续行符 `\`、转义、缩进、换行**全部由工具产出**，不要碰文本层。
+2. **多行 JS 手写 `\n`** —— 照 `ops-add-button.json` 里 `click` 的写法，工具会把它转成磁盘上的**续行形态**。
+3. **JS 一律单引号** —— 见各份样板的 `events`。
+4. **`path` 与结构的对应**：`["children",0,"children"]` 里的 `children[0]` 就是空页的**第一个子节点**（即 `module`），
+   所以这个 `path` 指的就是 **`module.children`**；后续 op 建议改用 **`@itemId` 寻址**（形如 `["@grid1","children"]`），
+   比硬编码数组下标健壮，且让**同一份文件内自洽**。
+5. ⚠️ **看参数、别抄 `path`** —— `path` **依附结构**，结构一变 `path` 就失效；
+   要照的是「**参数该是什么**」，不是「上次 `path` 写了啥」。
+6. ⚠️ **给 `set` 赋一个还不存在的键会被默认拒绝**（设计如此，需显式放行）。三种解法，按推荐顺序：
+   - **`append` 时就把该键带上**（**推荐**，见 `ops-set-store-url.json`）；
+   - 给该 op 加 `"create": true`；
+   - 命令行加 `--allow-new-key`。
+

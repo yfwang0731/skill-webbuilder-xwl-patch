@@ -841,6 +841,10 @@ def cmd_check(args) -> int:
         print("[warn] 未找到 node，事件 JS 语法校验被跳过（用 --node 指定，或 --no-js 静音）")
 
     failed = False
+    # ⑨「键不在注册表」的运行级汇总计数（**warn、不进 rc**）—— 跨 `args.files` 累计，
+    # 供循环末尾打**一行汇总**（明细随各文件段打印）。
+    reg_hits_all = 0
+    reg_files_all = 0
     # 判定集合（**内部机制、不改 CLI 面貌**）：调用方显式给 `checks` 时优先；没给则由
     # `--no-js` / `--no-itemid` 回退到「全量 1–8」。起因：第 ⑧ 维只该在 `check` 出现、
     # **不进写盘后自检**（`_post_check` 传 1–6）—— 由调用方说"跑哪几项"，而非让 ⑧ 猜"是不是自检"。
@@ -959,6 +963,21 @@ def cmd_check(args) -> int:
                                f"benign {rep['n_benign']}）"
                                f" —— 明细: `xwl.py itemids {os.path.basename(path)}`")
 
+        # ⑨ 校 configs 键合法性（#48）＋ ⑥ 扩到 configs 内标 [js] 的键（#49）
+        #    ⚠️ **只在显式给 `--controls` 时跑**（判据来源是注册表）⇒ 默认整段不跑、输出逐字节不变。
+        #    ⚠️ 必须落在 `if errors`（下面）**之前**：⑥-ext 的**语法错**是**进 rc** 的判定，
+        #       若放在汇总行/⑧ 之后再判，会出现「先打 `-> OK`、再打 `[FAIL] ⑥`」的自相矛盾。
+        #       （⑨ 已改 **warn**、本就不再进 rc；它仍在此处算，只为与 ⑥-ext 同源取注册表。）
+        reg_show: list[str] = []
+        reg_warn: list[str] = []
+        _controls = getattr(args, "controls", None)
+        if obj is not None and _controls:
+            _rf, reg_show, reg_warn, _nh = _check_registry_dims(obj, _controls, node, args.no_js)
+            errors.extend(_rf)      # 仅 ⑥-ext（configs 内联 [js] 语法错）进 rc；⑨ 已降为 warn
+            if _nh:
+                reg_hits_all += _nh
+                reg_files_all += 1
+
         if errors:
             for e in errors:
                 print(f"  [FAIL] {e}")
@@ -982,6 +1001,8 @@ def cmd_check(args) -> int:
                 print("  [ok]   " + itemid_note)
             else:
                 print("  [ok]   ⑦ 无重名")
+            for _ln in reg_show:
+                print("  " + _ln)
             print("  -> OK")
         n_nul = bare_nul_in_strings(text)
         if n_nul:
@@ -994,6 +1015,8 @@ def cmd_check(args) -> int:
         for w in eol_warns:
             print(f"  [warn] {w}")
         for w in itemid_warns:
+            print(f"  [warn] {w}")
+        for w in reg_warn:
             print(f"  [warn] {w}")
         for n in notes:
             print(f"  [note] {n}")
@@ -1011,6 +1034,11 @@ def cmd_check(args) -> int:
                 else:
                     print("  [note] ⑧ 加载链完整性：无异常")
 
+    # ⑨「键不在注册表」的**运行级一行汇总**（warn、不进 rc）—— 明细已随各文件段打印。
+    #    独立成行是为便于人读（一次 `check` 可能带多个文件 ⇒ 需要跨文件总数）。
+    if reg_hits_all:
+        print(f"  [warn] ⑨ configs 键不在注册表：{reg_hits_all} 处（涉及 {reg_files_all} 个文件）"
+              " —— 明细见上方各文件段")
     print("=== 结果:", "FAIL" if failed else "ALL OK")
     return 1 if failed else 0
 
@@ -1032,6 +1060,120 @@ def _post_check(file: str, args) -> int:
     print("提示：注册键重名不在本步判定范围；要连它一起体检，跑 "
           "`xwl.py itemids %s`" % os.path.basename(file))
     return rc
+
+
+# ⑨/⑥ 扩展的**恒许 configs 键**：`itemId` 是工具寻址用的每节点占位键（见 `schema` 骨架），
+# 注册表即使没列也恒合法 —— 否则每个节点都误报。（「内置恒许键」都放这个常量。）
+_CHECK_IMMUTABLE_CFG_KEYS = frozenset({"itemId"})
+
+
+def _registry_configs(controls: str):
+    """读注册表 → `{type: {"configs": {键…}, "js": {标 [js] 的键}}}`；读不了返回 `None`。"""
+    try:
+        reg = json.load(open(controls, "r", encoding="utf-8"))
+    except Exception:  # noqa: BLE001 —— 读不了由调用方给 warn、跳过，不崩
+        return None
+    types: dict = {}
+
+    def walk(o):
+        if isinstance(o, dict):
+            i = o.get("id")
+            if isinstance(i, str) and i not in types:
+                cfg = o.get("configs") if isinstance(o.get("configs"), dict) else {}
+                types[i] = {
+                    "configs": set(cfg.keys()),
+                    "js": {k for k, v in cfg.items()
+                           if isinstance(v, dict) and v.get("type") == "js"},
+                }
+            for v in o.values():
+                walk(v)
+        elif isinstance(o, list):
+            for v in o:
+                walk(v)
+
+    walk(reg)
+    return types
+
+
+def _scan_configs_keys(obj, reg_types):
+    """⑨：逐控件节点校 `configs` 键合法性。返回 `(非法键消息, 已校节点数, 未登记类型数)`。"""
+    msgs: list = []
+    n_nodes = 0
+    unknown: set = set()
+    for _node, t, cfg, *_ in _iter_controls(obj):
+        if t not in reg_types:
+            unknown.add(t)          # 注册表覆盖不到 ⇒ 不判（少报不误报）
+            continue
+        n_nodes += 1
+        legal = reg_types[t]["configs"]
+        bad = sorted(k for k in cfg if k not in legal and k not in _CHECK_IMMUTABLE_CFG_KEYS)
+        if bad:
+            msgs.append("⑨ %s 的 configs 键不在注册表：%s" % (t, ", ".join(bad)))
+    return msgs, n_nodes, len(unknown)
+
+
+def _scan_configs_js(obj, reg_types):
+    """⑥ 扩展：收集 configs 里注册表标 `[js]` 的键的源码。返回 `[("type.itemId.键", 源码)]`。"""
+    job: list = []
+    for _node, t, cfg, *_ in _iter_controls(obj):
+        if t not in reg_types:
+            continue
+        for k in reg_types[t]["js"]:
+            v = cfg.get(k)
+            if isinstance(v, str) and v.strip():
+                loc = "%s.%s.%s" % (t, cfg.get("itemId") or "?", k)
+                job.append((loc, v))
+    return job
+
+
+def _check_registry_dims(obj, controls: str, node, no_js: bool):
+    """⑨ 校 configs 键合法性（#48）＋ ⑥ 扩到 configs 内联 `[js]` 的键（#49）。
+
+    返回 `(fail_bodies, show_lines, warn_bodies, n_key_hits)`（**纯数据、不打印**）：
+    · `fail_bodies` —— 进 rc 的失败正文（**仅 ⑥-ext 的语法错**；调用方以 `[FAIL] ` 前缀并入 `errors`）；
+    · `show_lines` —— 成功/跳过的展示行（含 `[ok]`/`[note]` 标记，调用方原样打印）；
+    · `warn_bodies` —— 只告警项（含 ⑨「键不在注册表」**明细**；调用方以 `[warn] ` 前缀打印）；
+    · `n_key_hits` —— 本文件 ⑨「键不在注册表」命中**处**数（供调用方打**运行级**汇总行）。
+
+    ⚠️ ⑨「键不在注册表」取 **warn（⛔ 不进 rc）** —— 实测存量语料里这类命中**几乎都是
+       「注册表未收录的既有键」**（`column.keyNameExp` 576／`array.height/width/x/y` 316／
+       平台自身错拼 `text.lableAlign` 240／`check.returnNumber` 只在缺该键的根报 276…），
+       若判 FAIL 会**开开关即 466 文件红**，与 `#34`「一开机即红 ⇒ 使用者弃用」**同型** ⇒ 不能取。
+       改 warn 后**仍"能被检出"**（warn 也是检出）⇒ 不影响 `#48` 的验收意图（"工具能报出来"，
+       而非"必须阻塞"）。⚠️ **白名单本轮不做**（降 warn 后误报不再阻塞，紧迫性下降）——
+       登记为「将来若要开严格档（进 rc）⇒ 白名单是前置」。
+    ⚠️ ⑥-ext（configs 内联 `[js]` 的**语法错**）仍判 **FAIL（进 rc）** —— 那是**真坏**、
+       非"未收录"，与 ⑥ 事件 JS 同一类。
+    ⚠️ **只在显式给 `--controls` 时由 `cmd_check` 调用** —— 这两条的判据来源是注册表；
+       默认（不给 `--controls`）整个函数不跑 ⇒ 输出与判定**逐字节不变**（承重墙）。
+    """
+    reg = _registry_configs(controls)
+    if reg is None:
+        return [], [], [f"⑨ 读注册表失败（{controls}），configs 键 / 内联 [js] 校验跳过"], 0
+    fails: list = []
+    show: list = []
+    warns: list = []
+    bad_keys, n_nodes, n_unknown = _scan_configs_keys(obj, reg)
+    if bad_keys:
+        warns.extend(bad_keys)          # 明细（运行级汇总行由调用方打）
+    else:
+        tail = f"，跳过 {n_unknown} 个未登记类型" if n_unknown else ""
+        show.append(f"[ok]   ⑨ configs 键合法性：{n_nodes} 个节点、0 处非法键{tail}")
+    job = _scan_configs_js(obj, reg)
+    if job:
+        if node and not no_js:
+            res = node_check_many(node, [code for _loc, code in job])
+            js_fail = ["⑥ configs.%s JS 语法错误: %s"
+                       % (loc, (err.splitlines()[0] if err else "语法错误"))
+                       for (loc, _code), (ok, err) in zip(job, res) if not ok]
+            if js_fail:
+                fails.extend(js_fail)
+            else:
+                show.append(f"[ok]   ⑥ configs 内联 [js] {len(job)} 个语法通过")
+        else:
+            show.append(f"[note] ⑥ configs 内联 [js] {len(job)} 个：已跳过（"
+                        + ("`--no-js`" if no_js else "未找到 node") + "）")
+    return fails, show, warns, len(bad_keys)
 
 
 # --------------------------------------------------------------------------- #
@@ -1611,7 +1753,7 @@ def _is_new_object_key(parent, key) -> bool:
     return isinstance(parent, dict) and key not in parent
 
 
-def apply_ops(obj, ops, created=None, warned=None, allow_new_key=False):
+def apply_ops(obj, ops, created=None, warned=None, allow_new_key=False, inserted=None):
     """按 ops 就地修改对象。
 
     path 是「键 / 数组下标」列表；**以 `@` 开头的段按 `configs.itemId` 寻址**
@@ -1623,10 +1765,13 @@ def apply_ops(obj, ops, created=None, warned=None, allow_new_key=False):
       {"op":"insert", "path":[...], "index":n, "value":...}   缺省 index = 末尾
       {"op":"append", "path":[...], "value":...}
       {"op":"delete", "path":[...], "index":n}                给 index 删数组元素；否则删键
+      {"op":"insertKey","path":[...],"value":...,
+       "before"|"after":"<兄弟键>" | "index":n}               对象键**定位插入/改位**（详见下）
 
     `create` 是**逐 op 字段、只挂在 `set` 上**（不是 CLI 开关）：给「原本不存在的对象键」
     写值时用它显式放行；写到已存在的键上它是**幂等保护**（既不报错也不告警）。
-    用在 `insert`/`append`/`delete` 上属**用法错误**，抛 `ValueError`（调用方据此返回 rc=2）。
+    用在 `insertKey`/`insert`/`append`/`delete` 上属**用法错误**，抛 `ValueError`（调用方据此
+    返回 rc=2）—— `insertKey` 与加减数组元素**本就不算"新建键"**（op 名即已声明意图）。
 
     ⚠️ **不带 `create` 的 `set` 新建键默认被拒绝**（抛 `ValueError`，文案直接教两条出路：
     逐条给该 op 加 `"create": true`，或全局加 `--allow-new-key`）。
@@ -1634,14 +1779,26 @@ def apply_ops(obj, ops, created=None, warned=None, allow_new_key=False):
     `allow_new_key` 是**全局逃生开关**（对应 CLI 的 `--allow-new-key`）：`True` ⇒ 放行不带
     `create` 的新建键（恢复"全允许"）；默认 `False` ⇒ 拒绝。
 
-    `created` / `warned` 是**可选的收集列表**（默认 `None` = 不收集）——调用方传列表即可拿到
-    「本次新建了哪些键」（`<path>` 紧凑写法）：
-      · `created`：带 `"create": true` 的新建键；
-      · `warned` ：**不带** `create`、但在 `allow_new_key=True` 下被放行的新建键。
-    两者都是**向后兼容的可选关键字**，既有 `apply_ops(obj, ops)` 调用不受影响。
+    `created` / `warned` / `inserted` 是**可选的收集列表**（默认 `None` = 不收集）——调用方传
+    列表即可拿到「本次新建了哪些键」（`<path>` 紧凑写法）：
+      · `created` ：带 `"create": true` 的新建键；
+      · `warned`  ：**不带** `create`、但在 `allow_new_key=True` 下被放行的新建键；
+      · `inserted`：`insertKey` **新建**的键（自授权 ⇒ 无 `create`，但**必须可见**，见下）。
+    三者都是**向后兼容的可选关键字**，既有 `apply_ops(obj, ops)` 调用不受影响。
+
+    **`insertKey`（对象键的定位插入/改位；`#44`）** —— 补 `set` 的缺口：`set`+`create` 只能把
+    新键**追加到末尾**（实测键序 `[…, value, itemId]`），而设计器要的是 `itemId→hidden→…`
+    （`dumps_designer` **不排序键** ⇒ 插入序直接进产物、与 `equivalent` 的「含键序」比对相关）。
+      · `path` 末段 = 要放的**键名**（字符串），`path[:-1]` 指到**父对象**（支持 `@itemId` 段）；
+        末段是数组下标 / 父不是对象 ⇒ 抛 `ValueError`（**只管对象**，数组用 `insert`/`append`）。
+      · 锚点**三选一、缺省末尾**：`"before":"<现存兄弟键>"`／`"after":"<…>"`／`"index":n`
+        （0 起；n==该对象键数 ⇒ 末尾）。
+      · 键**已存在** ⇒ 改值 **并移到锚点位置**（"确定性放置"、**幂等**：跑两次结果一致）；
+        键**不存在** ⇒ 建在该位置（**自授权**，不要 `create`；新建的键由 `inserted` 收集、可见）。
 
     越界 / 缺失键等用法错误统一抛 `ValueError`，文案走**统一模板**
-    （`第 K 个 op（<kind>）：<现象> —— <可能原因>；用 paths / dump 核对 path`），**不冒裸异常类型名**。
+    （`第 K 个 op（<kind>）：<现象> —— <可能原因>；用 paths / dump 核对 path`），**不冒裸异常类型名**；
+    `insertKey` 的锚点越界 / 兄弟键不存在也走此模板。
     """
     for i, op in enumerate(ops, 1):
         if not isinstance(op, dict):
@@ -1652,6 +1809,12 @@ def apply_ops(obj, ops, created=None, warned=None, allow_new_key=False):
             raise ValueError("第 %d 个 op 的 path 为空" % i)
         want_create = bool(op.get("create"))
         if want_create and kind != "set":
+            # ⚠️ 既有 op（insert/append/delete）的报错文案**保持逐字不变**（默认面承重墙）；
+            #    `insertKey` 是新 op ⇒ 给它单独的文案（自授权、不需要 create）。
+            if kind == "insertKey":
+                raise ValueError(
+                    "第 %d 个 op：`create` 只用于 `set`；`insertKey` 不支持"
+                    "（它自授权定位插入，不需要 `create`）" % i)
             raise ValueError(
                 "第 %d 个 op：`create` 只用于 `set`；`insert`/`append`/`delete` 不支持"
                 "（加数组元素用 append/insert，本就不算新建键）" % i)
@@ -1718,6 +1881,54 @@ def apply_ops(obj, ops, created=None, warned=None, allow_new_key=False):
                         '第 %d 个 op（delete）：键 "%s" 不存在 —— 无法删除'
                         "；用 paths / dump 核对 path" % (i, _fmt_keypath(path)))
                 del parent[key]
+        elif kind == "insertKey":
+            # 对象键的**定位插入/改位**（#44）—— 只管对象；数组用 insert/append。
+            parent, key = resolve_parent(obj, path)
+            if not isinstance(parent, dict):
+                raise ValueError(
+                    "第 %d 个 op（insertKey）：path 指向的不是对象 —— 末段须是**键名**、"
+                    "其父须是对象（给数组元素请用 insert/append）"
+                    "；用 paths / dump 核对 path" % i)
+            if not isinstance(key, str):
+                raise ValueError(
+                    "第 %d 个 op（insertKey）：末段须是**键名**（字符串），实为 %r" % (i, key))
+            anchors = [a for a in ("before", "after", "index") if a in op]
+            if len(anchors) > 1:
+                raise ValueError(
+                    "第 %d 个 op（insertKey）：锚点 before/after/index 只能给一个，实给了 %s"
+                    "；用 paths / dump 核对" % (i, "/".join(anchors)))
+            existed = key in parent
+            # 先按「去掉自身」的次序取一份 ⇒ 已存在的键也能**改值并移位**（幂等）。
+            items = [(k, v) for (k, v) in parent.items() if k != key]
+            order = [k for k, _v in items]
+            if "before" in op:
+                sib = op["before"]
+                if not (isinstance(sib, str) and sib in order):
+                    raise ValueError(
+                        '第 %d 个 op（insertKey）：before 的兄弟键 %r 不在该对象里'
+                        "；用 paths / dump 核对" % (i, sib))
+                pos = order.index(sib)
+            elif "after" in op:
+                sib = op["after"]
+                if not (isinstance(sib, str) and sib in order):
+                    raise ValueError(
+                        '第 %d 个 op（insertKey）：after 的兄弟键 %r 不在该对象里'
+                        "；用 paths / dump 核对" % (i, sib))
+                pos = order.index(sib) + 1
+            elif "index" in op:
+                pos = int(op["index"])
+                if not 0 <= pos <= len(order):
+                    raise ValueError(
+                        "第 %d 个 op（insertKey）：下标 %d 越界 —— 该对象去掉自身后共 %d 个键"
+                        "，合法区间 [0, %d]；用 paths / dump 核对 path"
+                        % (i, pos, len(order), len(order)))
+            else:
+                pos = len(order)            # 缺省 = 末尾（与 set+create 的落点一致）
+            if not existed and inserted is not None:
+                inserted.append(_fmt_keypath(path))
+            items.insert(pos, (key, op["value"]))
+            parent.clear()                  # 就地重建 ⇒ 保持调用方的对象引用不变
+            parent.update(items)
         else:
             raise ValueError("第 %d 个 op 类型未知: %r" % (i, kind))
     return obj
@@ -2077,9 +2288,9 @@ def cmd_patch(args) -> int:
     if isinstance(ops, dict):
         ops = [ops]
 
-    created, warned = [], []
+    created, warned, inserted = [], [], []
     try:
-        apply_ops(obj, ops, created=created, warned=warned,
+        apply_ops(obj, ops, created=created, warned=warned, inserted=inserted,
                   allow_new_key=getattr(args, "allow_new_key", False))
     except Exception as exc:  # noqa: BLE001
         msg = str(exc)
@@ -2094,6 +2305,10 @@ def cmd_patch(args) -> int:
         # 全局逃生开关 `--allow-new-key` 放行了这批新建键（旧行为）；留一条痕，便于事后追。
         print("[warn] --allow-new-key 已放行 %d 个新建键：%s"
               % (len(warned), ", ".join(warned)))
+    if inserted:
+        # `insertKey` 的新建键**自授权**（无 `create` 闸门）⇒ 但**必须可见**：手滑能看见、
+        # `--dry-run` 也能看见（下面会一并打印 diff）。把"手滑"的代价从闸门换成**可见性**。
+        print("[note] `insertKey` 新建键 %d 个：%s" % (len(inserted), ", ".join(inserted)))
 
     out = dumps_designer(obj, args.indent, eol)
     try:
@@ -2147,11 +2362,97 @@ def cmd_patch(args) -> int:
 # --------------------------------------------------------------------------- #
 # schema（查设计器控件注册表）
 # --------------------------------------------------------------------------- #
+def _obs_root(controls: str, observed: str) -> str:
+    """定「实测语料根」：显式 `--observed ROOT` 用 ROOT；缺省由 `--controls` 反推工程 wb 根。
+
+    `controls` 约定在 `<工程>/wb/system/controls.json` ⇒ wb 根 = 其**上两级**目录
+    （实测语料取 `<wb>/modules/**/*.xwl`）。
+    """
+    if observed and observed != "__auto__":
+        return os.path.abspath(observed)
+    return os.path.dirname(os.path.dirname(os.path.abspath(controls)))
+
+
+def _scan_observed(root: str, type_name: str, reg_cfg: dict) -> dict:
+    """扫 `<root>/modules/**/*.xwl`，统计 `type == type_name` 的节点**实测**用过的 configs 键 ＋ 频次。
+
+    - **频次口径**：**含该键的节点数**（不是键的原始出现次数）。
+    - 解析不过的文件只计数、跳过（`skipped`），不中断也不报错 —— 语料里本就有不可加载的文件。
+    - ⚠️ 默认扫整个 wb 根、大仓会慢 ⇒ 结果带 `files` / `skipped`（可看出没挂住），
+      并可用 `--observed ROOT` 限定范围。
+    - 另附与注册表的差集：`not_in_registry`（实测有、注册表未声明 ⇒ 新字段 or 拼写错误）／
+      `never_seen`（注册表声明、语料从未实测）。
+    """
+    mods = os.path.join(root, "modules")
+    counts: collections.Counter = collections.Counter()
+    files = 0
+    skipped = 0
+    sample = 0
+    for dirpath, _dirs, names in os.walk(mods):
+        for nm in names:
+            if not nm.lower().endswith(".xwl"):
+                continue
+            try:
+                _t, _b, obj = load_xwl(os.path.join(dirpath, nm))
+            except Exception:  # noqa: BLE001 —— 语料里本就有解析不过的文件，跳过即可
+                skipped += 1
+                continue
+            files += 1
+            for _node, t, cfg, *_ in _iter_controls(obj):
+                if t != type_name:
+                    continue
+                sample += 1
+                for key in cfg:
+                    counts[key] += 1
+    keys = collections.OrderedDict(sorted(counts.items(), key=lambda kv: (-kv[1], kv[0])))
+    reg_keys = set(reg_cfg)
+    return collections.OrderedDict([
+        ("root", root),
+        ("modules", mods),
+        ("files", files),
+        ("skipped", skipped),
+        ("sample", sample),
+        ("keys", keys),
+        ("not_in_registry", sorted(k for k in keys if k not in reg_keys)),
+        ("never_seen", sorted(k for k in reg_keys if k not in keys)),
+    ])
+
+
+def _print_observed(obs: dict) -> None:
+    """人读版「语料实测」段（`--observed`）—— JSON 形态见 `cmd_schema` 的 `--json` 分支。"""
+    tail = f"，跳过 {obs['skipped']} 个解析失败" if obs["skipped"] else ""
+    print(f"\n--- 语料实测（{obs['sample']} 个节点 / {obs['files']} 个文件{tail}；"
+          f"语料根 {obs['root']}）---")
+    if not obs["keys"]:
+        print("  （没实测到该类型的节点 —— 语料里没用过，或 ROOT 指错了）")
+        return
+    n = obs["sample"] or 1
+    for k, c in obs["keys"].items():
+        print(f"  {k:<20} {c} / {n}")
+    if obs["not_in_registry"]:
+        print("  ⚠ 实测有、注册表未声明（新字段 or 拼写错误？）：" + ", ".join(obs["not_in_registry"]))
+    if obs["never_seen"]:
+        print("  · 注册表声明、语料从未实测：" + ", ".join(obs["never_seen"]))
+
+
 def cmd_schema(args) -> int:
     """从设计器的控件注册表（wb/system/controls.json）查某控件的合法 configs / events。
 
     这是「新建节点该写哪些字段」的**权威来源** —— 不用猜、也不用从 IDE 反编译。
+
+    `--json`：出机器可读形态（供工具消费）；`--observed`：再叠一层「语料里**实测**用过哪些
+    configs 键 ＋ 频次」。两者都是**加法**：都不给时，输出与本子命令的默认输出**逐字节一致**。
     """
+    want_json = getattr(args, "json", False)
+    want_obs = getattr(args, "observed", None)   # None=未给；"__auto__"=缺省语料根；否则=显式 ROOT
+    # 组合规则（详见 references/controls.md）：`--tree` 是「面板分组示意」、给人看的，v1 不出 JSON；
+    # `--observed` 针对**一个具体控件类型**，不与「看全部」的 `--list` 或分组的 `--tree` 同用。
+    if want_json and getattr(args, "tree", False):
+        print("[FAIL] `--json` 与 `--tree` 不能同用（`--tree` 是面板分组示意，v1 不出 JSON）")
+        return 2
+    if want_obs is not None and (args.list or getattr(args, "tree", False)):
+        print("[FAIL] `--observed` 针对一个具体控件类型，不能与 `--list` / `--tree` 同用")
+        return 2
     try:
         reg = json.load(open(args.controls, "r", encoding="utf-8"))
     except Exception as exc:  # noqa: BLE001
@@ -2199,8 +2500,12 @@ def cmd_schema(args) -> int:
         return 0
 
     if args.list:
-        for k in sorted(k for k, v in nodes.items() if "general" in v):
-            print(k)
+        ids = sorted(k for k, v in nodes.items() if "general" in v)
+        if want_json:
+            print(json.dumps(ids, ensure_ascii=False, indent=2))
+        else:
+            for k in ids:
+                print(k)
         return 0
 
     node = nodes.get(args.type)
@@ -2211,6 +2516,62 @@ def cmd_schema(args) -> int:
     general = node.get("general") or {}
     lib = (general.get("tag") or {}).get("lib")
     libname = {1: "桌面 ExtJS", 2: "移动 Touch(t*)", 3: "原生 HTML"}.get(lib, "结构/服务端")
+    cfg = node.get("configs") or {}
+    ev = node.get("events") or {}
+    shown = {k: v for k, v in ev.items() if not (isinstance(v, dict) and v.get("hidden"))}
+
+    def _skeleton():
+        """按注册表声明推导「该控件最小骨架」—— 只含该控件**允许**的键（不是写死 text）。"""
+        sk = collections.OrderedDict()
+        cfgs = collections.OrderedDict()
+        cfgs["itemId"] = "<必填：工具寻址用（@itemId）>"
+        for cand in ("text", "title"):          # 只加该控件**确实允许**的「显示名」键
+            if cand in cfg:
+                cfgs[cand] = ""
+        if args.type == "window":
+            # 窗口这两个键**都是非缺省**（缺省分别是「真」与 'hide'），写错代价最大 ——
+            # `closeAction=destroy` 时若仍复用实例、第二次打开即空白窗 ⇒ 预填「每次重建」那一档。
+            cfgs["createInstance"] = "false"
+            cfgs["closeAction"] = "destroy"
+        sk["configs"] = cfgs
+        sk["expanded"] = False
+        sk["children"] = []
+        sk["type"] = args.type
+        if "click" in shown:
+            # 真实控件节点的键集合只有两种：无事件时**没有** events 键（见 SKILL 1.2）
+            sk["events"] = {"click": ""}
+        return sk
+
+    obs = None
+    if want_obs is not None:
+        obs = _scan_observed(_obs_root(args.controls, args.observed), args.type, cfg)
+
+    if want_json:
+        out = collections.OrderedDict()
+        out["type"] = args.type
+        out["lib"] = lib
+        out["libname"] = libname
+        out["xtype"] = general.get("xtype")
+        out["extClass"] = general.get("type")
+        out["container"] = bool(general.get("container"))
+        out["inPanel"] = general.get("design", True) is not False
+        if general.get("autoNames"):
+            out["autoNames"] = general["autoNames"]
+        out["configs"] = collections.OrderedDict(
+            (k, ({"type": v.get("type"), "list": v.get("list"), "group": v.get("group")}
+                 if isinstance(v, dict) else {}))
+            for k, v in cfg.items())
+        out["events"] = collections.OrderedDict(
+            (k, ({"rename": v.get("rename")} if isinstance(v, dict) and v.get("rename") else {}))
+            for k, v in shown.items())
+        if args.skeleton:
+            out["skeleton"] = _skeleton()
+        if obs is not None:
+            out["observed"] = obs
+        print(json.dumps(out, ensure_ascii=False, indent=2))
+        return 0
+
+    # ---- 人读路径（不给 --json / --observed 时，输出与本子命令默认逐字节一致）----
     print(f"type = {args.type}   [{libname}]")
     print(f"  xtype={general.get('xtype')!r}  ExtJS 类={general.get('type')!r}  "
           f"容器={bool(general.get('container'))}  "
@@ -2219,7 +2580,6 @@ def cmd_schema(args) -> int:
         print(f"  自动 itemId（按父控件 type）: {json.dumps(general['autoNames'], ensure_ascii=False)}"
               "  ← 挂到哪个父控件下、自动叫什么名字")
 
-    cfg = node.get("configs") or {}
     print(f"\n合法 configs（{len(cfg)} 个）：")
     for k, v in cfg.items():
         if isinstance(v, dict):
@@ -2231,35 +2591,14 @@ def cmd_schema(args) -> int:
         else:
             print(f"  {k}")
 
-    ev = node.get("events") or {}
-    shown = {k: v for k, v in ev.items() if not (isinstance(v, dict) and v.get("hidden"))}
     print(f"\n合法 events（{len(shown)} 个，已隐藏 hidden 项）：")
     for k, v in shown.items():
         rn = v.get("rename") if isinstance(v, dict) else None
         print(f"  {k}" + (f"  (实际名 {rn})" if rn else ""))
 
     if args.skeleton:
-        # 骨架必须**只含该控件允许的键** —— 否则照抄进 xwl 就是非法配置。
-        # 所以 configs 从注册表声明推导（不是写死 text），events 键按「该控件是否真有事件」决定。
-        sk = collections.OrderedDict()
-        cfgs = collections.OrderedDict()
-        cfgs["itemId"] = "<必填：工具寻址用（@itemId）>"
-        for cand in ("text", "title"):          # 只加该控件**确实允许**的「显示名」键
-            if cand in cfg:
-                cfgs[cand] = ""
-        if args.type == "window":
-            # 窗口这两个键**都是非缺省**（缺省分别是「真」与 'hide'），写错代价最大 ——
-            # `closeAction=destroy` 时若仍复用实例、第二次打开即空白窗 ⇒ 预填「每次重建」那一档。
-            # 纯查询（内嵌 grid 的常驻窗）靠缺省就对，不预填也不会错。
-            cfgs["createInstance"] = "false"
-            cfgs["closeAction"] = "destroy"
-        sk["configs"] = cfgs
-        sk["expanded"] = False
-        sk["children"] = []
-        sk["type"] = args.type
-        if "click" in shown:
-            # 真实控件节点的键集合只有两种：无事件时**没有** events 键（见 SKILL 1.2）
-            sk["events"] = {"click": ""}
+        # 骨架只含该控件允许的键（由 `_skeleton()` 从注册表声明推导）。
+        sk = _skeleton()
         keys = ", ".join(sk.keys())
         print(f"\n设计器同款最小骨架（键序与设计器一致：{keys}）：")
         print(json.dumps(sk, ensure_ascii=False, indent=2))
@@ -2268,6 +2607,9 @@ def cmd_schema(args) -> int:
         elif "click" not in shown:
             print(f"\n> 该控件没有 click 事件；可挂的是：{' / '.join(shown)} —— 需要时自己加 events 键。")
         print(f"> 提示：configs 只放上表列出的键（共 {len(cfg)} 个）；注册键（normalName||itemId）必须唯一。")
+
+    if obs is not None:
+        _print_observed(obs)
     return 0
 
 
@@ -3862,6 +4204,9 @@ def build_parser() -> argparse.ArgumentParser:
     c.add_argument("--node", help="node 可执行文件路径")
     c.add_argument("--no-js", action="store_true", help="跳过事件 JS 语法校验")
     c.add_argument("--no-itemid", action="store_true", help="跳过注册键重名分级检查")
+    c.add_argument("--controls", metavar="CONTROLS",
+                   help="设计器控件注册表路径（wb/system/controls.json）；**给了才**校 configs 键 "
+                        "与 configs 内联 [js]（缺省不校、也不自动找）")
     c.set_defaults(func=cmd_check)
 
     e = sub.add_parser("edit", help="文本级安全替换（锚点按目标换行归一、断言出现次数、拍平多行时警示）")
@@ -3890,9 +4235,12 @@ def build_parser() -> argparse.ArgumentParser:
                                "     \"value\": {\"configs\": {\"itemId\": \"newBtn\"}, \"expanded\": false,\n"
                                "               \"children\": [], \"type\": \"button\"}},\n"
                                "    {\"op\": \"delete\", \"path\": [\"children\", 0, \"children\"], \"index\": 3},\n"
+                               "    {\"op\": \"insertKey\", \"path\": [\"@panel1\", \"configs\", \"itemId\"],\n"
+                               "     \"value\": \"p1\", \"before\": \"hidden\"},\n"
                                "    {\"op\": \"set\", \"path\": [\"@panel1\", \"configs\", \"newKey\"],\n"
                                "     \"value\": \"v\", \"create\": true}\n"
                                "  ]\n"
+                               "insertKey 把对象键插到指定位置（before/after/index 三选一，缺省末尾）：键已存在则改值并移到该位置，键不存在则建在该位置（自授权，新建的键会以 [note] 列出来可见）。⚠️ 拼块（多条 insertKey）用 before:<固定兄弟>（正序）或 index 递增；⛔ 别共用 after:／同一 index（会逆序）。\n"
                                "ops 按顺序执行，path 按执行到那一步时的结构解释。\n"
                                "set 到**原本不存在的键**默认被拒绝（rc=2）：要么给该 op 加 \"create\": true（这是逃生开关，逐条放行）、要么命令行加 --allow-new-key（全局放行）；写到已存在的键上不受影响。\n"
                                "\n"
@@ -3901,7 +4249,7 @@ def build_parser() -> argparse.ArgumentParser:
                                "  [\"@外\", \"@内\", …]          串联 @，后一段只在上一段子树里找\n"
                                "  [\"@名字\", \"children\", 0]     按父子关系只改真正要改的那个")
     pt.add_argument("file", help="要修改的 .xwl 文件")
-    pt.add_argument("--ops", required=True, help="ops JSON 文件：set/insert/append/delete 的数组")
+    pt.add_argument("--ops", required=True, help="ops JSON 文件：set/insertKey/insert/append/delete 的数组")
     pt.add_argument("--indent", type=int, default=1, help="缩进因子（设计器固定用 1，一般不用改）")
     pt.add_argument("--eol", choices=["auto", "lf", "crlf"], default="auto",
                     help="换行：auto=沿用原文件（只有一种换行就沿用它；混用时只在 CRLF/LF 取多数、"
@@ -4004,6 +4352,11 @@ def build_parser() -> argparse.ArgumentParser:
     sc.add_argument("--list", action="store_true", help="列出全部控件 id")
     sc.add_argument("--tree", action="store_true", help="按设计器面板分组打印控件树（含库/容器标记）")
     sc.add_argument("--skeleton", action="store_true", help="顺便输出设计器同款最小骨架节点")
+    sc.add_argument("--json", action="store_true",
+                    help="以 JSON 输出（供工具消费；与 --observed 同用时含实测段）")
+    sc.add_argument("--observed", metavar="ROOT", nargs="?", const="__auto__",
+                    help="统计该控件类型在语料里**实测**用过的 configs 键＋频次"
+                         "（缺省语料根由 --controls 推出；可显式给 ROOT）")
     sc.set_defaults(func=cmd_schema)
 
     d = sub.add_parser("dump", help="按加载器规则解析后美化输出（拿不准嵌套层级时用它核对）")

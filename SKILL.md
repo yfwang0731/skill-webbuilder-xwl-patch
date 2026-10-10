@@ -2,7 +2,7 @@
 name: webbuilder-xwl-patch
 slug: skill-webbuilder-xwl-patch
 displayName: webbuilder-xwl-patch
-version: 1.5.3
+version: 1.6.0
 license: MIT
 metadata:
   category: development-tools
@@ -358,13 +358,13 @@ python scripts/xwl.py edit <file.xwl> --old-file old.txt --new-file new.txt --ex
 
 ### 第 4 步 · 格式校验（**改完必跑**）
 
-> **能力边界（不随时间变的一句）**：`check` 只做**静态、文件级**校验 —— **格式与结构 ①–⑤ ＋ 事件 JS 语法 ⑥ ＋ 注册键重名分级 ⑦**，**不证页面可用**（逐项判据与报错处置见 [`references/faq.md`](references/faq.md)）。
+> **能力边界（不随时间变的一句）**：`check` 只做**静态、文件级**校验 —— **格式与结构、事件 JS 语法、注册键重名分级等静态项**，**不证页面可用**（逐项判据与报错处置见 [`references/faq.md`](references/faq.md)）。
 
 `check` 共 **八项** = **7 项判定 ＋ 1 项只提示**。7 项判定 = **格式五项 ①–⑤**（无 BOM / 换行一致 / 无「反斜杠 + 空白」行 /
 **加载器等价解析** / 末行结构）+ **⑥ 事件 JS 语法**（提取后交 `node` 校验）+ **⑦ 注册键重名分级**；
 **第 ⑧ 维「加载链完整性」只提示、不进 rc**（判据对齐框架取键方式：`children` 须是**非空数组**、
 `children[0].configs` 与 `roles` 须是**对象**，否则文件能被 ④ 解析、页面却在加载期抛）。逐项判据与报错处置见
-[`references/faq.md`](references/faq.md)；不通过时先用 `--backup` 的 `<file>.bak` 回退再排查。
+[`references/faq.md`](references/faq.md)；不通过时先用 `--backup` 的 `<file>.bak` 回退再排查。**另**：给了 `--controls` 时**另校 `configs` 键与内联 `[js]`**（缺省不校、也不自动找），它**不计入上面八项**。
 
 ```bash
 python scripts/xwl.py check <file.xwl> [more.xwl ...]
@@ -408,7 +408,7 @@ python scripts/xwl.py diffguard <改过的文件或目录> --strict    # CI / pr
 | `patch` | **结构级编辑（默认方式）**：只给值 / 子树，按设计器算法重建整份文件 |
 | `edit` | 文本级安全替换（**例外**手段，改一小段文本且不希望整份重排时用） |
 | `expand` | 单行源 → 设计器同款多行 |
-| `check` | 八项校验：格式五项 + 事件 JS 语法 + **注册键**重名分级 + 加载链完整性（只提示） |
+| `check` | 八项校验：格式五项 + 事件 JS 语法 + **注册键**重名分级 + 加载链完整性（只提示）；**给了 `--controls` 时另校 `configs` 键与内联 `[js]`** |
 | `diffguard` | **相对 git 基线**检测「多行内容被压平」 |
 | `itemids` | 注册键重名报告 + 建议改名（只读） |
 | `paths` | 列出 `sql` / `totalSql` / `serverScript` / `url` 四类字段的位置 |

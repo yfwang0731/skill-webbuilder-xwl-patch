@@ -1,0 +1,32 @@
+[
+  {"op": "append",
+   "path": ["children", 0, "children"],
+   "value": {
+     "configs": {"itemId": "panel1"},
+     "expanded": false,
+     "children": [],
+     "type": "panel"
+   }},
+  {"op": "append",
+   "path": ["@panel1", "children"],
+   "value": {
+     "configs": {
+       "itemId": "intro",
+       "html": "<p>相关文档：<a href=\"https://example.com/docs\">使用说明</a></p>\n<p>服务状态页：https://example.com/status</p>"
+     },
+     "expanded": false,
+     "children": [],
+     "type": "label"
+   }},
+  {"op": "append",
+   "path": ["@panel1", "children"],
+   "value": {
+     "configs": {"itemId": "openBtn", "text": "打开外部系统", "iconCls": "link_icon"},
+     "expanded": false,
+     "children": [],
+     "type": "button",
+     "events": {
+       "click": "window.open('https://example.com/portal', '_blank');"
+     }
+   }}
+]

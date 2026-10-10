@@ -1,0 +1,50 @@
+[
+  {"op": "append",
+   "path": ["children", 0, "children"],
+   "value": {
+     "configs": {"itemId": "grid1", "selType": "rowmodel"},
+     "expanded": false,
+     "children": [],
+     "type": "grid"
+   }},
+  {"op": "append",
+   "path": ["@grid1", "children"],
+   "value": {
+     "configs": {"itemId": "store", "autoLoad": "true"},
+     "expanded": false,
+     "children": [],
+     "type": "store"
+   }},
+  {"op": "append",
+   "path": ["@grid1", "children"],
+   "value": {
+     "configs": {"itemId": "columns", "isConfig": "true"},
+     "expanded": false,
+     "children": [],
+     "type": "array"
+   }},
+  {"op": "append",
+   "path": ["@columns", "children"],
+   "value": {
+     "configs": {"itemId": "sel", "xtype": "checkcolumn", "width": 40},
+     "expanded": false,
+     "children": [],
+     "type": "column"
+   }},
+  {"op": "append",
+   "path": ["@columns", "children"],
+   "value": {
+     "configs": {"itemId": "code", "dataIndex": "code", "text": "编码", "width": 140},
+     "expanded": false,
+     "children": [],
+     "type": "column"
+   }},
+  {"op": "append",
+   "path": ["@columns", "children"],
+   "value": {
+     "configs": {"itemId": "name", "dataIndex": "name", "text": "名称", "width": 200},
+     "expanded": false,
+     "children": [],
+     "type": "column"
+   }}
+]

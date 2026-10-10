@@ -10,6 +10,39 @@
 
 ---
 
+## [1.6.0] - 2026-10-10
+
+**注册表口径能力补齐版（minor）**：把「设计器控件注册表」这条线在 `check` / `schema` / `patch` 三处补齐 —— `check` 新增 `--controls`（校 `configs` 键合法性 ＋ `configs` 内联 `[js]` 语法）、`schema` 新增 `--json`（机器可读）与 `--observed`（语料**实测**用过的键 ＋ 频次）、`patch` 新增 `insertKey`（按键序插入 / 合并对象键）。**版本位依据是这三处新增能力（新参数 ＋ 新输出 ＋ 新 op）**；同版随附的**文档与示例批**只有 patch 性质（见下「文档 / 示例」节），不构成抬价理由。
+
+### 新增
+
+- **`check --controls`**（`#37②`）：给注册表路径时，另校两件事 ——
+  - **⑨ `configs` 键合法性**：按 `controls.json` 逐键核对该控件类型**认得**的键（实例：`grid.flex`）；违规打 **`[warn]`**、**不进退出码**（存量语料里「注册表未收录既有键」很常见，判 FAIL 会让一开开关即红）。
+  - **⑥ 扩到 `configs` 里标 `[js]` 的键**（`renderer` / `validator` / `handler` …）：提取后交 `node --check`；语法错打 **`[FAIL]`**、**进退出码**。
+  - ⚠️ **两者都只在显式给 `--controls` 时才跑**，缺省不跑、也不自动找注册表 ⇒ **不给开关时，输出与判定逐字节不变**（`check` 原有八项校验面不受影响，`configs` 键校验**不计入**那八项）。
+- **`schema --json`**（`#55`）：以 JSON 输出供工具消费 —— `schema <type> --json` 出**单个对象**（含 `type` / `lib` / `xtype` / `configs` / `events` / `skeleton` 等）、`schema --list --json` 出**数组**；与 `--observed` 同用时含实测段。`--json` 与 `--tree` **不能同用**（`--tree` 是面板分组示意、v1 不出 JSON）。
+- **`schema --observed [ROOT]`**（`#46`）：统计该控件类型在**语料**里**实测**用过的 `configs` 键 ＋ **频次**（＝含该键的**节点数**），并与注册表给**差集**（① 实测有而注册表无 ② 注册表有但从未实测）。默认扫 `<工程>/wb/modules/**/*.xwl`（语料根由 `--controls` 上两级推出），⚠️ **大仓会慢** ⇒ 用 `--observed ROOT` 限定范围。`--observed` 针对**一个**控件类型，不与 `--list` / `--tree` 同用。
+- **`patch` 的 `insertKey`**（`#44`）：把对象键**插到指定位置**（`before` / `after` / `index` 三选一，缺省末尾）—— 键已存在则改值并移到该位置，键不存在则建在该位置。补 `set` 的缺口（`set` + `create` 只能把新建键放**路径末端**，无法定位 / 改位）。`insertKey` 的**新建键自授权**（op 名即已声明意图、无 `create` 闸门），但**必须可见**：新建的键以一行 `[note]` 列出。⚠️ 拼块（多条 `insertKey`）用 `before:<固定兄弟>`（正序）或 `index` 递增；**别**共用 `after:` / 同一 `index`（会逆序）。`insertKey` 与 `insert` / `append` / `delete` 是**对象键 vs 数组元素**两回事：`create` 只用于 `set`、用到 `insertKey` 等上属**用法错误**（rc=2）。
+
+### 变更
+
+- **`--help` / 子命令表同步**：`check` 的 `--controls`、`schema` 的 `--json` / `--observed`、`patch` 的 `--ops`（新增 `insertKey`）全部登进 `--help` 与 `--list-blocks` 的编号范围串；`SKILL.md` / `README.md` / `references/faq.md` / `references/controls.md` 的对应行同步。
+
+### 文档 / 示例
+
+> ⚠️ **本节条目为随版并入的 patch 性质改动**（`#68` / `#69`）—— **版本位依据仍是上面「新增」的段 1 能力**，本节不单独抬版本号。
+
+- **`references/transcription-defaults.md`**：`totalSql` 由「别漏」改为**分场景** —— **(a) 输入源无可参考的 SQL（纯新建）可省**（机制上框架会补足；⚠️ 该解释**仅对 (a)**，不得据此把 (b) 判「可省」）；**(b) 输入源（参考页面）已含该逻辑则须保留**。同处把「外链」由「一律不转写」改为**两小类**：**(a) 点击跳转类** ⇒ 保留 `href` 写进 JS、点击直接跳；**(b) 展示类** ⇒ 直接作为控件文本 / `html` 写入（判据＝点它是要跳走还是只把地址显示出来）。⚠️ 跳转类**本轮无样本**（判据已立、未用样本校准）。
+- **`examples/ops-*.json` 样板扩充（8 份新增 ＋ 1 份改写）**：新增 `ops-add-grid` / `ops-add-querybar` / `ops-hide-param` / `ops-add-window` / `ops-required-check` / `ops-renderer-body` / `ops-extlink` / `ops-set-store-url`；`ops-add-button.json` 由「单 op」改为**多 op 序列**（先建 `grid`、再挂 `button`，同文件自洽）。每份都是**多 op 序列 ＋ 纯 JSON 数据**，**都能从一个空页一路跑到目标形态**（已真跑、`check` 一律 `ALL OK`）。`examples/README.md` 新增「ops 样板清单」表（含各份的 ⛔ 反例）与「怎么规范写 ops」一节。
+- **`examples/README.md`**：补 `ops-set-store-url.json` 的指针（取数 `url` 占位写法 / SQL 载体归 `new --kind sql` / `pageSize` 不填 / `totalSql` 分场景）。
+- **`references/faq.md`**：`check` 校验面清单同步 —— 「默认不校」表里的 `configs` 键合法性 / 内联 `[js]` 两行标注「**给了 `--controls` 时会校**」；「注册表怎么发现」拆清「⑦ 自动发现」与「`--controls` 显式给」两件事；「适用版本」改为**当前发布版**（不再写死 `1.5.x` 线）。
+
+### 内部（不随包发布）
+
+- `selftest.py`：新增 `check --controls` 的双向断言（⑨ 真阳性 + 明细行 + `[warn]` 级不进 rc、⑥-ext 真阳性 + 进 rc、**不给开关时该段不出现**的承重墙断言）；把 README ↔ 磁盘的"鬼文件"守卫**扩扫描面**（并入 `examples/README.md` 的 `ops-*.json` 族）；新增两条注入用例钉住上述断言（`reg48-configs-key-warn-drop` / `reg49-configs-js-fail-drop`）。
+
+---
+
 ## [1.5.3] - 2026-10-10
 
 **口径与文档版（patch）**：把实例测试得出的「转写默认做法 ＋ 平台惯例 ＋ 无现成对应物的形态落法」落成一份新的参考材料，并修正三处会把人带错的口径（隐藏参数选型、列 `itemId` 命名、控件树里工具条的挂载层），另同步两处同型副本；`check` 的能力边界改为「稳定声明 ＋ 详细清单落 references」。**对外能力零变化**（不改判定、不改退出码、无新子命令／新参数）；⚠️ 唯一可感知的输出变化是**两处提示文案**（新建 SQL 载体时多一行"种子为占位、必须替换"提示；`itemids` 的后缀提示由恒现改为按"同页是否多网格"条件触发）⇒ 仍属 patch。

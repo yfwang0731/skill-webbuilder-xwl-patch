@@ -1,0 +1,45 @@
+[
+  {"op": "append",
+   "path": ["children", 0, "children"],
+   "value": {
+     "configs": {"itemId": "grid1", "selType": "rowmodel"},
+     "expanded": false,
+     "children": [],
+     "type": "grid"
+   }},
+  {"op": "append",
+   "path": ["@grid1", "children"],
+   "value": {
+     "configs": {"itemId": "store", "autoLoad": "true"},
+     "expanded": false,
+     "children": [],
+     "type": "store"
+   }},
+  {"op": "append",
+   "path": ["@grid1", "children"],
+   "value": {
+     "configs": {"itemId": "tbar", "dock": "top"},
+     "expanded": false,
+     "children": [],
+     "type": "toolbar"
+   }},
+  {"op": "append",
+   "path": ["@tbar", "children"],
+   "value": {
+     "configs": {"itemId": "keyword", "fieldLabel": "关键字", "width": 160},
+     "expanded": false,
+     "children": [],
+     "type": "text"
+   }},
+  {"op": "append",
+   "path": ["@tbar", "children"],
+   "value": {
+     "configs": {"itemId": "queryBtn", "text": "查询", "iconCls": "query_icon"},
+     "expanded": false,
+     "children": [],
+     "type": "button",
+     "events": {
+       "click": "var kw = app.keyword.getValue();\nif (!kw) {\n  Wb.info('请输入关键字');\n  return;\n}\napp.grid1.getStore().load({params: {keyword: kw}});"
+     }
+   }}
+]

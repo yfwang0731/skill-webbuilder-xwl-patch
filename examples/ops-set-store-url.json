@@ -1,0 +1,18 @@
+[
+  {"op": "append",
+   "path": ["children", 0, "children"],
+   "value": {
+     "configs": {"itemId": "grid1"},
+     "expanded": false,
+     "children": [
+       {"configs": {"itemId": "store1", "autoLoad": true, "url": "m?xwl=<模块>/xxxSql/queryDemo"},
+        "expanded": false,
+        "children": [],
+        "type": "store"}
+     ],
+     "type": "grid"
+   }},
+  {"op": "set",
+   "path": ["children", 0, "children", 0, "children", 0, "configs", "url"],
+   "value": "m?xwl=<模块>/xxxSql/queryDemo"}
+]

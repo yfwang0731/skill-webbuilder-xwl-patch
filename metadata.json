@@ -3,12 +3,14 @@
   "name_en": "webbuilder-xwl-patch",
   "displayName": "webbuilder-xwl-patch",
   "author": "yfwang0731",
-  "version": "1.5.3",
+  "version": "1.6.0",
   "schema_version": "1.0",
   "description": "WebBuilder（wb）平台 .xwl 定义文件的处理与安全编辑：结构级 patch（只给值 / 子树，工具按设计器自己的算法重建整份文件）+ 格式校验 + 相对 git 基线的压平检测。",
   "core_capabilities": [
     "结构级 patch 编辑（不碰文本层，格式错误在构造上不会发生）",
-    "check 八项校验（7 项判定：BOM / 换行一致 / 续行空白 / 加载器等价解析 / 末行结构 / 事件 JS 语法 / 注册键重名分级 ＋ 1 项只提示：加载链完整性）",
+    "check 八项校验（7 项判定：BOM / 换行一致 / 续行空白 / 加载器等价解析 / 末行结构 / 事件 JS 语法 / 注册键重名分级 ＋ 1 项只提示：加载链完整性）；另：给了 `--controls` 时另校 `configs` 键合法性（`[warn]`、不进 rc）与 `configs` 内联 `[js]` 语法（`[FAIL]`、进 rc），缺省不校也不自动找",
+    "schema 的机器可读与语料实测（`--json` / `--observed`）：`--json` 出机器可读形态（单个对象 / `--list` 出数组）；`--observed [ROOT]` 统计该控件类型在语料里实测用过的 `configs` 键 ＋ 频次，并与注册表给差集",
+    "patch 的按键序插入 `insertKey`：把对象键插到指定位置（before/after/index 三选一），补 `set` 只能新建末端的缺口；新建键自授权、以 `[note]` 列出可见",
     "从零新建页面与 SQL 载体（内置设计器真实键序骨架）",
     "注册键重名分级报告（候选清单 + 建议改名）",
     "SQL 片段自洽核对与页面传参链路核对（sqlrefs / params）",
@@ -89,6 +91,7 @@
     "references/transcription-defaults.md"
   ],
   "update_history": [
+    { "version": "1.6.0", "date": "2026-10-10", "summary": "注册表口径能力补齐版（minor）：把「设计器控件注册表」这条线在 check / schema / patch 三处补齐 —— 版本位依据是这三处新增对外能力（新参数 ＋ 新输出 ＋ 新 op）。① `check --controls`（#37②）：给注册表路径时另校两件事 —— ⑨ `configs` 键合法性（按 controls.json 逐键核对该控件类型认得的键，违规打 `[warn]`、不进退出码）＋ ⑥ 扩到 `configs` 里标 `[js]` 的键（renderer/validator/handler…，提取后交 node --check，语法错打 `[FAIL]`、进退出码）；⚠️ 两者只在显式给 `--controls` 时才跑（缺省不跑、也不自动找注册表）⇒ 不给开关时输出与判定逐字节不变，且这两项不计入 check 原有八项。② `schema --json`（#55）：以 JSON 输出供工具消费（`schema <type> --json` 出单个对象、`--list --json` 出数组），与 `--observed` 同用含实测段；与 `--tree` 不能同用。③ `schema --observed [ROOT]`（#46）：统计该类型在语料里实测用过的 configs 键 ＋ 频次（＝含该键的节点数），与注册表给差集；默认扫 `<工程>/wb/modules/**/*.xwl`（大仓会慢，用 ROOT 限定范围），针对一个控件类型、不与 --list/--tree 同用。④ `patch` 的 `insertKey`（#44）：把对象键插到指定位置（before/after/index 三选一、缺省末尾），补 set 的缺口（set+create 只能放路径末端）；新建键自授权但以 [note] 列出可见；拼块用 before:<固定兄弟> 或 index 递增，别共用 after:/同一 index。⑤ --help / 子命令表 / SKILL.md / README.md / references 同步。⑥ 随版并入的**文档与示例批**（#68 分页 totalSql 分场景 ＋ 外链两分法；#69 examples/ops-*.json 8 份新增 ＋ ops-add-button 改多 op 序列 ＋ examples/README 清单与规范节）**为 patch 性质、不抬版本号**（版本位依据仍是上述段 1 能力）；references/faq.md 的 check 校验面清单同步（configs 键/内联 [js] 标注「给了 --controls 时会校」、适用版本改当前发布版）。" },
     { "version": "1.5.3", "date": "2026-10-10", "summary": "文档与口径批（patch）：把实例测试得出的「转写默认做法 ＋ 平台惯例 ＋ 无现成对应物的形态落法」落成一份新的参考材料（references/transcription-defaults.md；每条带出处与证据强度、未独立复现者明写），并修正三处会把人带错的口径 —— 隐藏参数选型（由\"用 `hidden` 控件\"改为「用其语义类型的控件 ＋ `configs.hidden:\"true\"`」，并补同名不同型：页面顶层 `hidden` 是 bool、控件 `configs` 级是字符串）、列 `itemId` 命名（默认＝字段名、仅同页多网格才加后缀）、控件树里工具条的挂载层（属网格的 `children`、不是网格的兄弟）；另同步两处同型副本（`references/walkthrough.md` 的控件树示例、`references/checklist.md` 的列命名项）。`check` 的能力边界改写为「稳定声明 ＋ 详细清单落 references」——`SKILL.md` 只留一句不随时间变的声明，当前校验面清单与注册表发现规则落 `references/faq.md`。对外能力零变化（不改判定、不改退出码、无新子命令／新参数）；唯一可感知的输出变化是两处提示文案（新建 SQL 载体时多一行\"种子为占位、必须替换\"提示；`itemids` 的后缀提示由恒现改为按\"同页是否多网格\"条件触发）⇒ 仍属 patch。" },
     { "version": "1.5.2", "date": "2026-10-08", "summary": "文档读者分层版（patch）：`CHANGELOG.md` 文首的维护者规程迁出本文件 ⇒ 文首只留使用者向内容（介绍段 ＋ 数字说明）；升级须知这一结构约定改由不随包发布的开发者规则承载，并加一条文首行数上限守卫钉住；指针改指（workflow-notes ×3 ＋ README ×1，改后 0 残留）；`README.md` 移除两条发版类维护者动作（改由不随包发布的开发者规则落点承载）。另随版本并入一条与本主题无关的内部守卫修正：分发面自包含守卫的条代号判据由窄字符类改为结构化「字母-数字」形态，并配编码名词形豁免与 metadata.json 的 update_history 按段豁免；依据层 workflow-notes-guards.md 的判据说明同步。对外能力零变化（不改 xwl.py 一个字节、无新子命令／新参数／新增输出行）。" },
     { "version": "1.5.1", "date": "2026-10-06", "summary": "适配与加固版（patch）：补 references/ 发布声明、拆记忆类文档、加隐私扫描与 CI 挂载 —— 对外能力零变化（子命令总数仍 15、无新参数、无新子命令、无新增输出行；不改 xwl.py 的对外面、不动 core_capabilities），全在 references/、scripts/（守卫与扫描器）与 CI 侧。① references/ 补发布声明（14 份）：每份 .md 首行加统一发布声明「> 发布面：随 skill 发布 ｜ 层归属：依据层|规格层」，编年三臂（17l）与权威面（17p／17q）由「写死文件名单」改为「按首行『层归属』机械选取」（声明即豁免、删声明即失效），并新增守卫块 17u 校验声明齐不齐、字段合不合法（动态遍历 references/ 实际文件、不写死清单）；doc_names 由写死清单改为按磁盘实际文件推导（12 → 17）；17u 另加依据层家族结构佐证（声明依据层者 stem 须属 measured-data／workflow-notes 家族），堵住「把规格层文件改成依据层即自授豁免」，另有 6 处硬编码名单改结构判据（按首行『层归属』选取，不再点名具体文件）。② 记忆类文档拆分（2 份 → 7 份）：measured-data.md 拆出 measured-data-addressing／designer／criteria／skeleton.md、workflow-notes.md 拆出 workflow-notes-guards.md（5 份均归依据层），节号不重编、原节标题原样保留，主文件保留主题文件索引。③ 隐私扫描＋ CI 挂载：新增 scripts/privacy_scan.py 与 scripts/privacy_patterns.example.json（发布前跑、白名单外 0 命中），.github/workflows/selftest.yml 挂载该扫描；「发布前跑该脚本」写在 README.md 的「依赖与许可」维护者段（与「改完 scripts/xwl.py 后先跑 selftest」并列）——它扫的是本仓自身分发面，不是用户的 .xwl 工作流。④ 守卫同步与指针改指：_chron_exempt 覆盖 4 → 9（CHANGELOG.md ＋ metadata.json ＋ 依据层 7 份）、_splits 9 条 _dst 改指、跨文件节号指针 27 处改指（改指后 0 残留）。⑤ 打包元数据与评测契约同步：metadata.json 的 references 9 → 14（守卫 17i 强制）、test-prompts.json 1 处指针改指（id 与条目数不动）。既有子命令行为与输出逐字不变。" },

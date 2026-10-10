@@ -2,6 +2,14 @@
   {"op": "append",
    "path": ["children", 0, "children"],
    "value": {
+     "configs": {"itemId": "demoGrid", "selType": "rowmodel"},
+     "expanded": false,
+     "children": [],
+     "type": "grid"
+   }},
+  {"op": "append",
+   "path": ["@demoGrid", "children"],
+   "value": {
      "configs": {"itemId": "queryBtn", "text": "查询", "iconCls": "query_icon"},
      "expanded": false,
      "children": [],

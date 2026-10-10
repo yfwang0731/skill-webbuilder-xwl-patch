@@ -1477,6 +1477,81 @@ def _check_new_guards(tmp, node, failures, write) -> None:
         print("[ok]  ③ `folders` 结论行：含「index 悬空项」「folder.json 损坏」、"
               "不含「未登记」（未登记只在明细）")
 
+    # ---- ④ `check --controls`：⑨ 校 configs 键合法性（`[warn]`）＋ ⑥ 扩到 configs 内联 `[js]`（`[FAIL]`）----
+    # 起因（`#48`/`#49` 落地后**整条无覆盖**）：`check` 的 ⑨/⑥-ext **只在显式给 `--controls` 时才跑**，
+    #   而本文件**没有一条断言**碰 `--controls`（`_run_check` 的 NS 根本没有 `controls` 字段）⇒
+    #   两个新能力"绿但空"：把 `_check_registry_dims` 整段删掉、或把 ⑨ 误改成 `[FAIL]`、或把 ⑥-ext
+    #   退回只校 events，**自检都不动**。故**双向钉**：真阳性（非法键 ⇒ ⑨ 报出；`[js]` 语法错 ⇒ ⑥ 进 rc）
+    #   ＋ 假阳性守卫（合法键 ⇒ 不进 `[warn]`；不给 `--controls` ⇒ 默认面一行不出现）。
+    # ⚠️ 夹具用**自造 mini 注册表**（同 §16 的 `mini_controls.json` 手法）：不依赖工程 `wb/system/controls.json`，
+    #   故 CI 里照跑；`[js]` 语法错**必须真跑 node** ⇒ 无 node 时该半条跳过（非默认面，跳过要出声）。
+    # ⚠️ ⑨ 取 `[warn]` 而非 `[FAIL]` 是**有意**（`#48` 的裁定，理由见 `_check_registry_dims` docstring）⇒
+    #   本段的 `⑨` 断言**只判"warn 里出现、rc 仍 0"**，不判"进 rc"。
+    reg_fail: list[str] = []
+    reg4 = os.path.join(tmp, "mini_controls_reg.json")
+    with open(reg4, "w", encoding="utf-8") as f:
+        json.dump({"children": [
+            {"id": "grid", "general": {"design": True},
+             "configs": {"itemId": {"type": "string"}, "selType": {"type": "string"}},
+             "events": {}},
+            {"id": "label", "general": {"design": True, "xtype": "label"},
+             "configs": {"itemId": {"type": "string"}, "html": {"type": "string"},
+                         "renderer": {"type": "js"}},
+             "events": {}},
+        ]}, f, ensure_ascii=False)
+
+    def _mkreg(name, cfg):
+        p = os.path.join(tmp, "reg-%s.xwl" % name)
+        with open(p, "w", encoding="utf-8", newline="") as f:
+            f.write(xwl.dumps_designer(
+                {"title": "t", "roles": {}, "children": [
+                    {"configs": cfg, "type": "label", "expanded": False, "children": []}]},
+                1, CRLF))
+        return p
+
+    def _run_check_ctl(files, node_):
+        buf = io.StringIO()
+        ns = type("NS", (), {"files": files, "node": node_, "no_js": node_ is None,
+                             "controls": reg4, "no_itemid": True})()
+        with contextlib.redirect_stdout(buf):
+            code = xwl.cmd_check(ns)
+        return code, buf.getvalue()
+
+    # ④-1 真阳性（⑨）：`grid.flex` 不在 mini 注册表的 grid.configs 里 ⇒ 应进 `[warn]`、rc 仍 0
+    _rc9, _o9 = _run_check_ctl([_mkreg("okkey", {"itemId": "l1", "html": "<b>x</b>"})], node)
+    _rc9b, _o9b = _run_check_ctl([_mkreg("gridflex", {"itemId": "g1", "selType": "rowmodel",
+                                                      "flex": "1"})], node)
+    if "⑨" not in _o9b or "flex" not in _o9b:
+        reg_fail.append("④ ⑨ 真阳性：含非法键 `grid.flex` 的文件没被 `[warn]` 报出：\n%s" % _o9b)
+    # ⚠️ 判**明细行**（带具体键名）而非只看 "⑨" —— 运行级汇总行（`[warn] ⑨ … N 处`）由
+    #   `_check_registry_dims` 返回的计数驱动，即使"明细被弱化"它**照旧打印** ⇒ 只判 "⑨ 出现过"
+    #   会被它兜住（**注入实测**：把 `warns.extend(bad_keys)` 改成 `pass`、断言仍绿）。故此处钉
+    #   "文件名段里那行明细"（`⑨ grid 的 configs 键不在注册表：flex`）。
+    if not any(l.strip().startswith("[warn] ⑨") and "flex" in l for l in _o9b.splitlines()):
+        reg_fail.append("④ ⑨ 明细行缺失（只有汇总行 ⇒ 弱化 `warns.extend(bad_keys)` 会逃逸）：\n%s" % _o9b)
+    if _rc9b != 0:
+        reg_fail.append("④ ⑨ 是 `[warn]` 级（不进 rc），但含非法键时 rc=%s（应为 0）" % _rc9b)
+    # ④-2 假阳性守卫（⑨）：只含注册表内合法键 ⇒ 应打 `[ok] ⑨ … 0 处非法键`、不进 warn
+    if "[warn]" in _o9 and "⑨" in _o9:
+        reg_fail.append("④ ⑨ 假阳性：全合法键的文件仍被 warn：\n%s" % _o9)
+    # ④-3 真阳性（⑥-ext）：`configs.renderer`（注册表标 `[js]`）写入语法错 ⇒ 应 `[FAIL]` 且 rc≠0
+    if node is not None:
+        _rcj, _oj = _run_check_ctl([_mkreg("badjs", {"itemId": "l1",
+                                                     "renderer": "function(v){ return ; ;;("})], node)
+        if "⑥" not in _oj or "JS 语法" not in _oj:
+            reg_fail.append("④ ⑥-ext 真阳性：`configs.renderer` 语法错没被 ⑥ 报出：\n%s" % _oj)
+        if _rcj == 0:
+            reg_fail.append("④ ⑥-ext 是 `[FAIL]` 级（进 rc），语法错时 rc 仍 0")
+    # ④-4 默认面（承重墙）：不给 `--controls` ⇒ ⑨/⑥-ext 一行都不出现
+    _rc0, _o0 = _run_check([_mkreg("def", {"itemId": "g1", "flex": "1"})], node)
+    if "⑨" in _o0 or "configs 内联" in _o0:
+        reg_fail.append("④ 默认面：不给 `--controls` 时仍打了 ⑨/⑥-ext 的行（承重墙破）：\n%s" % _o0)
+    if reg_fail:
+        failures.extend(reg_fail)
+    else:
+        print("[ok]  ④ `check --controls`：⑨ 校 configs 键（非法键进 `[warn]`、rc 不变）＋ "
+              "⑥ 扩到 configs 内联 `[js]`（语法错进 `[FAIL]`、rc≠0）；不给 `--controls` 时该段不出现")
+
 
 # ---- 跨守卫分工表（**原寄居 `_check_docs` 函数体**；#15「减负」时移出，函数体只留指向本常量的指针）----
 #   位置口径：移出函数体是为了给 `_check_docs`（曾实测 1337 行）减负（阈值 `>1300 行` 触发，见 `plan/00 §五·11`）。
@@ -1761,7 +1836,7 @@ _DOC_GUARD_BLOCK_BASELINE = (
     "17a", "17b", "17c", "17c-2", "17d", "17e", "17f", "17g", "17h", "17i",
     "17h", "17i", "17t", "17k", "17j", "17j-2", "17j-3", "17j-4", "17j-7", "17j-8", "17j-9",
     "17j-10", "17j-11", "17j-5", "17j-6", "17j-12", "17j-13", "17j-14", "17l", "17m", "17n",
-    "17o", "17p", "17q", "17q-自洽", "17u", "17r", "17s",
+    "17o", "17p", "17q", "17q-自洽", "17u", "17r", "17v", "17s",
 )
 _DOC_GUARD_BLOCK_BASE = collections.Counter(_DOC_GUARD_BLOCK_BASELINE)
 
@@ -2591,7 +2666,6 @@ def _check_docs(tmp, node, failures, write) -> None:
             doc_fail.append("SKILL.md 的「%s 份参考材料」与清单 %d 条 / 磁盘 %s 不一致"
                             % (_raw, _cnt, _diskdesc))
         break
-    _tree = re.findall(r"[├└]──\s+([A-Za-z0-9_.\-]+\.(?:md|py|json))", _rm_txt)
     _disk = set()
     for _r, _dn, _fs in os.walk(root):
         if ".git" in _r or "__pycache__" in _r:
@@ -2599,9 +2673,37 @@ def _check_docs(tmp, node, failures, write) -> None:
         for _x in _fs:
             _disk.add(_x)
             _disk.add(os.path.relpath(os.path.join(_r, _x), root).replace(os.sep, "/"))
-    _ghost = [x for x in _tree if x not in _disk]
+    _ghost = []
+    # ① 根 README.md 的 ASCII 目录树：`[├└]──` 形态（原有面）。
+    _tree = re.findall(r"[├└]──\s+([A-Za-z0-9_.\-]+\.(?:md|py|json))", _rm_txt)
+    _ghost += [x for x in _tree if x not in _disk]
+    # ② `examples/README.md` 表格里提到的 `ops-*.json`（本臂新增面）：
+    #     起因：`examples/README.md` 是**对外清单**、逐一列出 `examples/ops-*.json` 并逐份讲"示范什么"，
+    #       但 ① 只扫根 README 的 ASCII 树 ⇒ 删掉/改名一份样板后，那张表**照旧列着它**、无人报红
+    #       （`17v` 只跑**磁盘上实际存在**的样板 ⇒ 也不报警）。两臂合起来才盖住"清单 ↔ 实物"两个方向。
+    #     ⚠️ 抽取**限 `ops-<小写短横>.json` 族**：`examples/README.md` 里还有别的 `.json` 提法（如未来
+    #       的工具输出样例），限族可避免把"非样板"的字面也当成承诺；本文件表形与行内提及**都收**。
+    #     ⚠️ 读不出**报红**、不算「没命中」（与全仓其它读盘面同口径：空集合上默默通过＝静默降级）。
+    _ex_rm = os.path.join(root, "examples", "README.md")
+    try:
+        with open(_ex_rm, "r", encoding="utf-8", newline="") as _fx:
+            _ex_txt = _fx.read()
+    except (OSError, UnicodeDecodeError) as _exc:
+        _ex_txt = None
+        doc_fail.append("文档守卫：读不出 examples/README.md（%s: %s）—— 报错，不算「没命中」"
+                        % (type(_exc).__name__, _exc))
+    if _ex_txt is not None:
+        _ex_disk = set()
+        _ex_dir = os.path.join(root, "examples")
+        try:
+            _ex_disk = set(f for f in os.listdir(_ex_dir) if f.endswith(".json"))
+        except OSError as _exc:
+            doc_fail.append("文档守卫：列不出 examples/ 目录（%s: %s）—— 报错，不算「没命中」"
+                            % (type(_exc).__name__, _exc))
+        _ex_ref = sorted(set(re.findall(r"`(ops-[a-z-]+\.json)`", _ex_txt)))
+        _ghost += [x for x in _ex_ref if x not in _ex_disk]
     if _ghost:
-        doc_fail.append("README 目录树列了磁盘上没有的文件：%s" % _ghost)
+        doc_fail.append("README 里列了磁盘上没有的文件：%s" % sorted(set(_ghost)))
 
     # 17j-3 索引双向登记：SKILL.md 里提到的每个 `references/*.md` 都必须在「怎么用」那张
     #     **参考材料索引表**里占一行（那张表是唯一的材料索引）。起因是压缩时把材料清单从
@@ -3312,6 +3414,31 @@ def _check_docs(tmp, node, failures, write) -> None:
                   "（无《验收基线》/《落地清单》/施工索引/施工单、无施工单条目代号（单字母-数字 ／ 字母-短横-数字 ／ 单字母-短横-小写字母 形态）、"
                   "无 §N-M 形式的节号指针、无前置批次号/过程角色编号；"
                   "`.py` 只判字符串字面量之外；CHANGELOG 整文件 ＋ 历史记录段 ＋ 编码名词形豁免）" % len(_b17r_files))
+
+    # 17v 真跑 examples/ 下全部 ops-*.json 样板：空页 `new` → `patch --ops` → `check`，三步都要 rc=0。
+    #   起因：样板是"从 `new --kind page` 空页出发、同文件自洽"的**对外承诺**，无守卫保证它**当下**跑得通 ——
+    #     改了 `xwl.py` 的 ops 语义、或样板的 `path` 指错，样板跑不通了没人知道。经 `_run_cli`（子进程跑真 CLI）：
+    #     拿真实退出码、异常被进程隔离；`new`/`patch` 带 `--no-js` 免依赖 node，`check` **不带**（连事件 JS 一起校验）。
+    _b17v_dir = os.path.join(root, "examples")
+    _b17v_names = sorted(_n for _n in (os.listdir(_b17v_dir) if os.path.isdir(_b17v_dir) else [])
+                         if _n.startswith("ops-") and _n.endswith(".json"))
+    _b17v_bad: list = []
+    for _b17v_nm in _b17v_names:
+        _b17v_x = os.path.join(tmp, "ops-sample-%s.xwl" % _b17v_nm[4:-5])
+        for _b17v_cmd in (["new", _b17v_x, "--kind", "page", "--no-js"],
+                          ["patch", _b17v_x, "--ops", os.path.join(_b17v_dir, _b17v_nm), "--no-js"],
+                          ["check", _b17v_x]):
+            _b17v_rc, _b17v_out, _b17v_err = _run_cli(_b17v_cmd)
+            if _b17v_rc != 0:
+                _b17v_tail = (_b17v_out or _b17v_err).strip().splitlines()
+                _b17v_bad.append("真跑样板 %s 失败（%s rc=%s）：%s"
+                                 % (_b17v_nm, _b17v_cmd[0], _b17v_rc,
+                                    _b17v_tail[-1] if _b17v_tail else "（无输出）"))
+                break
+    if _b17v_bad:
+        doc_fail.extend(_b17v_bad)
+    else:
+        print("[ok]  真跑 examples/ops-*.json 样板（%d 份）全部通过" % len(_b17v_names))
 
     _check_docs_section_order(failures)
 
@@ -4985,7 +5112,7 @@ def main(argv: list[str] | None = None) -> int:
                          "未给 --result 时只跑并打印、不落 JSON")
     ap.add_argument("--list-blocks", action="store_true",
                     help="按定义序逐行打印全部自检块名后退出 —— 它们是自检块（供 --only 选），"
-                         "不是 _check_docs 内部的 17a–17u 守卫编号")
+                         "不是 _check_docs 内部的 17a–17v 守卫编号")
     ap.add_argument("--result", default=None, metavar="<路径>",
                     help="把本次自检块的失败清单落成 JSON（并行派发的子进程用；人工单跑可不给）")
     ap.add_argument("--node", default=None, help=argparse.SUPPRESS)
@@ -5007,7 +5134,7 @@ def main(argv: list[str] | None = None) -> int:
             print(_bn)
         sys.stderr.write(
             "[note] 以上 %d 个是**自检块**（`_blocks()` 定义序，供 `--only <块名>`）——"
-            "区别于 `_check_docs` 内部的 `17a`–`17u` **守卫编号**（那些不是块名）。\n"
+            "区别于 `_check_docs` 内部的 `17a`–`17v` **守卫编号**（那些不是块名）。\n"
             % len(_blk_named))
         return 0
 

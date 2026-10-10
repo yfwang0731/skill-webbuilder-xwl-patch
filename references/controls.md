@@ -5,6 +5,8 @@
 >
 > 这份表回答四个问题：**有哪些控件 / 各自干什么 / 该挂在哪里 / 哪种情况用哪个**。
 > 查单个控件的合法字段用 `xwl.py schema <控件id> --controls <…/controls.json>`。
+> 加 `--json` 出**机器可读**形态：`schema <type> --json` 出**单个对象**（含 `type`／`lib`／`xtype`／`configs`／`events`／`skeleton` 等），`schema --list --json` 出**数组**；加 `--observed [ROOT]` 出该类型**实测**用过的 `configs` 键＋**频次**（＝含该键的**节点数**），并与注册表给**差集**（① 实测有而注册表无 ② 注册表有但从未实测）。
+> `--observed` 默认扫 `<工程>/wb/modules/**/*.xwl`，统计该控件类型**实测**用过的 `configs` 键 ＋ 频次（缺省语料根由 `--controls` 上两级推出）——⚠️ **大仓（数万个 `.xwl`）会慢**，限定范围用 `--observed ROOT`；配 `--json` 出机器可读形态。`--json` 与 `--tree` 不同用（`--tree` 是面板分组示意、不出 JSON）；`--observed` 针对一个控件类型，不与 `--list`／`--tree` 同用。
 
 ## 目录
 
