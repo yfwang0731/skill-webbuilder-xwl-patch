@@ -13,6 +13,9 @@ __pycache__/
 .inject_runner.lock
 *.log
 
+# 本仓不预置也不分发 .xwl（业务格式；SkillHub 等平台的文件类型白名单拒收）⇒ 机械兜底，免得 `new` 出的仓内 .xwl 混进分发面扫描
+*.xwl
+
 # 编辑器目录 / Windows 系统垃圾
 .vscode/
 .idea/

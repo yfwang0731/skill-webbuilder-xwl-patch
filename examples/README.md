@@ -6,12 +6,13 @@
 > 你手上的工程完全同源，也不会过期；`ops-add-button.json` 是纯数据，直接给就好。
 >
 > 复现方式：先 `cd` 到本 skill 根目录（`examples/` 的上一层）。
-> 生成出来的 `.xwl` 若不想留在仓库里，删掉即可（它是可复现的产物）。
+> 生成目标请放**仓外**（下文示例统一用占位路径 `<你的临时目录>/demo-page.xwl`）——`.xwl` 是业务格式、
+> 会被平台拒收，也不该混进分发面扫描；示例页面**本就不进仓库**，跑完随手删掉即可。
 
 ## 一、先生成一个示例页面
 
 ```bash
-python scripts/xwl.py new examples/demo-page.xwl --kind page --title "示例页面"
+python scripts/xwl.py new <你的临时目录>/demo-page.xwl --kind page --title "示例页面"
 ```
 
 产出 238 B、单个空 `module` 节点，顶层 7 把钥匙的**键序与设计器一致**（不用手写顶层键）。
@@ -28,26 +29,27 @@ SQL 载体的写法见第三节。
 
 ## 三、改一个已有文件：给页面加一个带多行 JS 的按钮
 
-第一节生成的 `examples/demo-page.xwl` 是空 `module` 节点。
-`examples/ops-add-button.json` 要往它的 `module.children` 里追加一个按钮。
+第一节生成的 `<你的临时目录>/demo-page.xwl` 是空 `module` 节点。
+`examples/ops-add-button.json`（**留在仓内**，是样例数据）要往它的 `module.children` 里追加一个按钮。
 
 ```bash
 # 1) 先看基线格式是否合法
-python scripts/xwl.py check examples/demo-page.xwl
+python scripts/xwl.py check <你的临时目录>/demo-page.xwl
 
 # 2) 看这次会改成什么样（不写盘）
-python scripts/xwl.py patch examples/demo-page.xwl \
+python scripts/xwl.py patch <你的临时目录>/demo-page.xwl \
     --ops examples/ops-add-button.json --dry-run
 
-# 3) 确认后落盘（--backup 会先写 examples/demo-page.xwl.bak）
-python scripts/xwl.py patch examples/demo-page.xwl \
+# 3) 确认后落盘（--backup 会先写 <你的临时目录>/demo-page.xwl.bak）
+python scripts/xwl.py patch <你的临时目录>/demo-page.xwl \
     --ops examples/ops-add-button.json --backup
 
 # 4) 改完必跑校验
-python scripts/xwl.py check examples/demo-page.xwl
+python scripts/xwl.py check <你的临时目录>/demo-page.xwl
 
-# 5) 提交前扫一遍：有没有把多行内容悄悄压平（需要 git 仓库）
-python scripts/xwl.py diffguard examples/demo-page.xwl
+# 5) 扫一遍：有没有把多行内容悄悄压平（需要 git 仓库；仓外页面不在仓库里 ⇒ 本步以 [note] 跳过、rc=0）
+#    要看 diffguard 抓到压平的真实效果（含 --strict 的 rc=1），见第五节的最小实验
+python scripts/xwl.py diffguard <你的临时目录>/demo-page.xwl
 ```
 
 **预期**：第 2 步的 diff 只新增按钮那几行（不重排其它内容）；

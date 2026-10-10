@@ -3313,54 +3313,9 @@ def _check_docs(tmp, node, failures, write) -> None:
                   "无 §N-M 形式的节号指针、无前置批次号/过程角色编号；"
                   "`.py` 只判字符串字面量之外；CHANGELOG 整文件 ＋ 历史记录段 ＋ 编码名词形豁免）" % len(_b17r_files))
 
-    # ---- 11k.（**归位**）SKILL.md 章节顺序守卫（语义分组：认知→格式→操作→专题→经验→收尾）----
-    #   ⚠️ 本块原**寄居**于 `_check_itemids`（itemids 块）——它判的是 **SKILL.md 的章节顺序**，
-    #     与 itemids 无关。`#10b③` 归位到**文档守卫侧**（本函数 `_check_docs`）；判据**不变**，
-    #     旧标识 `11k` 保留（不重编，免动全库引用）。归属变化：其 `[ok]`／失败行现随文档守卫块输出。
-    # 起因：压缩会搬动章节；顺序被打乱后“先建心智模型 → 再看格式规则 → 再看流程”的阅读路径就断了（内容没丢、但难读）。
-    skill_md = os.path.join(os.path.dirname(HERE), "SKILL.md")
-    if os.path.exists(skill_md):
-        with open(skill_md, "r", encoding="utf-8", newline="") as f:
-            titles = [l.rstrip("\r\n") for l in f if l.startswith("## ")]
-        # `want_order` / `want_keys` 已移出函数体（有界下沉）⇒ 见模块级同名常量。
-        got_order = [t[3] for t in titles if len(t) > 4 and t[3] in want_order]
+    _check_docs_section_order(failures)
 
-        if got_order == want_order and all(k in t for k, t in zip(want_keys, [x for x in titles if x.startswith("## ") and x[3] in want_order])):
-            print("[ok]  SKILL.md 章节顺序符合语义分组（认知→格式→操作→专题→经验→收尾）")
-        else:
-            failures.append("SKILL.md 章节顺序错位: %s" % [t[:22] for t in titles])
-        if any("单行源" in t for t in titles):
-            failures.append("「单行源 vs 多行源」应并入格式章，不该单列一章")
-    else:
-        print("[note] 未找到 SKILL.md，跳过章节顺序守卫")
-
-    # 17s 守卫维护规则：本文件里每个守卫块（头 `# 17<字母>`）之后 15 行内必须有「起因」备注。
-    #     起因：本仓出现过“说不清目的的守卫”（清账时多组无出处）⇒ 后人不敢删、也不敢改；钉住它，
-    #     新增/修改守卫时必须同步写清“不这么做会漏什么”。
-    #     判据（宽）：从头行起 16 行窗口内出现「起因」二字即算过 —— 宁可少报，别乱报。
-    #     已知盲区：① 相邻守卫块的起因可能落进前一守卫的窗口（漏报，可接受）；
-    #               ② 只认「起因」二字、不判因果质量（写「起因：无（待补或删）」也算过）；
-    #               ③ 只管 `# 17<字母>` 形式的块，`# ---- 18.` 等其它编号块不在管辖内。
-    _s_ok = True
-    try:
-        with open(os.path.join(HERE, "selftest.py"), "r", encoding="utf-8", newline="") as _sfh:
-            _self_lines = _sfh.read().splitlines()
-    except OSError as _sexc:
-        doc_fail.append("17s 守卫维护规则跑不起来（读不出 selftest.py）：%s" % _sexc)
-        _s_ok = False
-    else:
-        _s_missing = []
-        for _sx, _sline in enumerate(_self_lines):
-            if re.match(r"^\s*# 17[a-z]", _sline):
-                if "起因" not in "\n".join(_self_lines[_sx:_sx + 16]):
-                    _s_missing.append((_sx + 1, _sline.strip()[:48]))
-        if _s_missing:
-            doc_fail.append("17s 守卫维护规则：这些守卫块之后 15 行内没有「起因」备注：%s"
-                            % ["%d:%s" % (_a, _b) for _a, _b in _s_missing[:12]])
-            _s_ok = False
-    if _s_ok:
-        print("[ok]  17s 守卫维护规则：每个 `# 17<字母>` 守卫块之后 15 行内都有「起因」备注"
-              "（宽判据：16 行窗口内出现「起因」二字即过；盲区见注释）")
+    _check_docs_guard_maint(doc_fail)
 
     # ⚠️ 破计数遮蔽（本轮仪表审计整改）：判**块名多重集 == 基线多重集**（少 / 多未登记的 ⇒ 红）。
     #   起因与"如何有意增删块时更新基线"见模块级 `_DOC_GUARD_BLOCK_BASELINE` 的注释。
@@ -3438,6 +3393,59 @@ def _check_docs(tmp, node, failures, write) -> None:
         failures.extend(b_fail)
     else:
         print("[ok]  SKILL.md 声明了平台边界、调用入口与规模约束")
+
+
+def _check_docs_section_order(failures) -> None:
+    # ---- 11k.（**归位**）SKILL.md 章节顺序守卫（语义分组：认知→格式→操作→专题→经验→收尾）----
+    #   ⚠️ 本块原**寄居**于 `_check_itemids`（itemids 块）——它判的是 **SKILL.md 的章节顺序**，
+    #     与 itemids 无关。`#10b③` 归位到**文档守卫侧**（本函数 `_check_docs`）；判据**不变**，
+    #     旧标识 `11k` 保留（不重编，免动全库引用）。归属变化：其 `[ok]`／失败行现随文档守卫块输出。
+    # 起因：压缩会搬动章节；顺序被打乱后“先建心智模型 → 再看格式规则 → 再看流程”的阅读路径就断了（内容没丢、但难读）。
+    skill_md = os.path.join(os.path.dirname(HERE), "SKILL.md")
+    if os.path.exists(skill_md):
+        with open(skill_md, "r", encoding="utf-8", newline="") as f:
+            titles = [l.rstrip("\r\n") for l in f if l.startswith("## ")]
+        # `want_order` / `want_keys` 已移出函数体（有界下沉）⇒ 见模块级同名常量。
+        got_order = [t[3] for t in titles if len(t) > 4 and t[3] in want_order]
+
+        if got_order == want_order and all(k in t for k, t in zip(want_keys, [x for x in titles if x.startswith("## ") and x[3] in want_order])):
+            print("[ok]  SKILL.md 章节顺序符合语义分组（认知→格式→操作→专题→经验→收尾）")
+        else:
+            failures.append("SKILL.md 章节顺序错位: %s" % [t[:22] for t in titles])
+        if any("单行源" in t for t in titles):
+            failures.append("「单行源 vs 多行源」应并入格式章，不该单列一章")
+    else:
+        print("[note] 未找到 SKILL.md，跳过章节顺序守卫")
+
+
+def _check_docs_guard_maint(doc_fail) -> None:
+    # 17s 守卫维护规则：本文件里每个守卫块（头 `# 17<字母>`）之后 15 行内必须有「起因」备注。
+    #     起因：本仓出现过“说不清目的的守卫”（清账时多组无出处）⇒ 后人不敢删、也不敢改；钉住它，
+    #     新增/修改守卫时必须同步写清“不这么做会漏什么”。
+    #     判据（宽）：从头行起 16 行窗口内出现「起因」二字即算过 —— 宁可少报，别乱报。
+    #     已知盲区：① 相邻守卫块的起因可能落进前一守卫的窗口（漏报，可接受）；
+    #               ② 只认「起因」二字、不判因果质量（写「起因：无（待补或删）」也算过）；
+    #               ③ 只管 `# 17<字母>` 形式的块，`# ---- 18.` 等其它编号块不在管辖内。
+    _s_ok = True
+    try:
+        with open(os.path.join(HERE, "selftest.py"), "r", encoding="utf-8", newline="") as _sfh:
+            _self_lines = _sfh.read().splitlines()
+    except OSError as _sexc:
+        doc_fail.append("17s 守卫维护规则跑不起来（读不出 selftest.py）：%s" % _sexc)
+        _s_ok = False
+    else:
+        _s_missing = []
+        for _sx, _sline in enumerate(_self_lines):
+            if re.match(r"^\s*# 17[a-z]", _sline):
+                if "起因" not in "\n".join(_self_lines[_sx:_sx + 16]):
+                    _s_missing.append((_sx + 1, _sline.strip()[:48]))
+        if _s_missing:
+            doc_fail.append("17s 守卫维护规则：这些守卫块之后 15 行内没有「起因」备注：%s"
+                            % ["%d:%s" % (_a, _b) for _a, _b in _s_missing[:12]])
+            _s_ok = False
+    if _s_ok:
+        print("[ok]  17s 守卫维护规则：每个 `# 17<字母>` 守卫块之后 15 行内都有「起因」备注"
+              "（宽判据：16 行窗口内出现「起因」二字即过；盲区见注释）")
 
 
 def _check_platform(tmp, node, failures, write) -> None:
