@@ -1118,7 +1118,10 @@ def _scan_configs_js(obj, reg_types):
     for _node, t, cfg, *_ in _iter_controls(obj):
         if t not in reg_types:
             continue
-        for k in reg_types[t]["js"]:
+        # `#71`：迭代 **`sorted(...)`**（原为裸 `set`）。`set` 的迭代序随 `PYTHONHASHSEED` 变
+        #   （CPython 默认开 str hash 随机化）⇒ 同一节点 **≥2 个坏 `[js]` 键**时，`[FAIL]` 行的
+        #   **顺序不确定**，破坏本仓「确定 / 可 diff」命门（多处验收靠逐字节比对）。
+        for k in sorted(reg_types[t]["js"]):
             v = cfg.get(k)
             if isinstance(v, str) and v.strip():
                 loc = "%s.%s.%s" % (t, cfg.get("itemId") or "?", k)
@@ -1753,7 +1756,16 @@ def _is_new_object_key(parent, key) -> bool:
     return isinstance(parent, dict) and key not in parent
 
 
-def apply_ops(obj, ops, created=None, warned=None, allow_new_key=False, inserted=None):
+def _is_container(v) -> bool:
+    """`v` 是不是**容器**（对象 / 数组）——`#72` 用它判「把整个容器覆盖成标量」这种结构损坏。
+
+    标量 = 既不是 `dict` 也不是 `list`（含 `str`/`int`/`float`/`bool`/`None`）。
+    """
+    return isinstance(v, (dict, list))
+
+
+def apply_ops(obj, ops, created=None, warned=None, allow_new_key=False, inserted=None,
+              overwrites=None):
     """按 ops 就地修改对象。
 
     path 是「键 / 数组下标」列表；**以 `@` 开头的段按 `configs.itemId` 寻址**
@@ -1784,7 +1796,11 @@ def apply_ops(obj, ops, created=None, warned=None, allow_new_key=False, inserted
       · `created` ：带 `"create": true` 的新建键；
       · `warned`  ：**不带** `create`、但在 `allow_new_key=True` 下被放行的新建键；
       · `inserted`：`insertKey` **新建**的键（自授权 ⇒ 无 `create`，但**必须可见**，见下）。
-    三者都是**向后兼容的可选关键字**，既有 `apply_ops(obj, ops)` 调用不受影响。
+      · `overwrites`（`#72`）：`set`/`insertKey` **把已存在的容器键**（旧值是 `dict`/`list`）
+        覆盖成**标量**（新值不是 `dict`/`list`）的键 —— 这是**结构损坏**级动作 ⇒ 调用方据此打
+        `[warn]` 让人看见（⚠️ 只是**加信号**：⛔ 不改 `rc`、⛔ 不改既有 `create`/`--allow-new-key`
+        的默认拒绝语义）。
+    四者都是**向后兼容的可选关键字**，既有 `apply_ops(obj, ops)` 调用不受影响。
 
     **`insertKey`（对象键的定位插入/改位；`#44`）** —— 补 `set` 的缺口：`set`+`create` 只能把
     新键**追加到末尾**（实测键序 `[…, value, itemId]`），而设计器要的是 `itemId→hidden→…`
@@ -1841,8 +1857,20 @@ def apply_ops(obj, ops, created=None, warned=None, allow_new_key=False, inserted
                         "第 %d 个 op（set）：下标 %d 越界 —— 数组长度 %d，合法区间 [0, %d]"
                         "；用 paths / dump 核对 path（末段是数组下标，不是对象键）"
                         % (i, idx, len(parent), len(parent) - 1))
+                # `#72`：数组下标命中**已存在的容器元素**（`dict`/`list`）而新值是**标量**
+                #   ⇒ 与 dict 分支同款结构损坏（把整个容器静默替换成标量）⇒ 收进 `overwrites`
+                #   （下标已在上面的越界检查里保证存在 ⇒ 直接读 `parent[idx]` 拿旧值）。
+                if (_is_container(parent[idx]) and not _is_container(op["value"])
+                        and overwrites is not None):
+                    overwrites.append(_fmt_keypath(path))
                 parent[idx] = op["value"]
             else:
+                # `#72`：末段命中**已存在的容器键**（`configs`/`children` …）而新值是**标量**
+                #   ⇒ 既不是"新建键"、也不是普通改键：它会把**整个容器静默替换成标量**（结构损坏）
+                #   ⇒ 收进 `overwrites` 供调用方打 `[warn]`（⛔ 只加信号：不改 rc、不改默认拒绝语义）。
+                if (key in parent and _is_container(parent[key])
+                        and not _is_container(op["value"]) and overwrites is not None):
+                    overwrites.append(_fmt_keypath(path))
                 parent[key] = op["value"]
         elif kind in ("insert", "append"):
             arr = resolve_path(obj, path)
@@ -1926,6 +1954,11 @@ def apply_ops(obj, ops, created=None, warned=None, allow_new_key=False, inserted
                 pos = len(order)            # 缺省 = 末尾（与 set+create 的落点一致）
             if not existed and inserted is not None:
                 inserted.append(_fmt_keypath(path))
+            # `#72`：键**已存在**且旧值是容器、新值是标量 ⇒ 与 `set` 同款结构损坏 ⇒ 收进 `overwrites`
+            #   （仍在 `parent.clear()` 之前读 `parent[key]` ⇒ 取到的还是旧值）。
+            if (existed and _is_container(parent[key])
+                    and not _is_container(op["value"]) and overwrites is not None):
+                overwrites.append(_fmt_keypath(path))
             items.insert(pos, (key, op["value"]))
             parent.clear()                  # 就地重建 ⇒ 保持调用方的对象引用不变
             parent.update(items)
@@ -2288,9 +2321,10 @@ def cmd_patch(args) -> int:
     if isinstance(ops, dict):
         ops = [ops]
 
-    created, warned, inserted = [], [], []
+    created, warned, inserted, overwrites = [], [], [], []
     try:
         apply_ops(obj, ops, created=created, warned=warned, inserted=inserted,
+                  overwrites=overwrites,
                   allow_new_key=getattr(args, "allow_new_key", False))
     except Exception as exc:  # noqa: BLE001
         msg = str(exc)
@@ -2309,6 +2343,11 @@ def cmd_patch(args) -> int:
         # `insertKey` 的新建键**自授权**（无 `create` 闸门）⇒ 但**必须可见**：手滑能看见、
         # `--dry-run` 也能看见（下面会一并打印 diff）。把"手滑"的代价从闸门换成**可见性**。
         print("[note] `insertKey` 新建键 %d 个：%s" % (len(inserted), ", ".join(inserted)))
+    if overwrites:
+        # `#72`：把**已存在的容器键**（对象/数组）覆盖成**标量** ⇒ 结构损坏级动作，**必须可见**
+        #   （`rc` 不变、也不改默认拒绝语义 —— 这不是"新建键"）。`--dry-run` 同样会打（在下面 return 之前）。
+        print("[warn] 有 %d 个 op 把**已存在的容器键**（对象/数组）覆盖成了标量 —— 这是结构损坏级改动，"
+              "请确认是本意：%s" % (len(overwrites), ", ".join(overwrites)))
 
     out = dumps_designer(obj, args.indent, eol)
     try:
@@ -3594,6 +3633,63 @@ def strip_js_comments(js: str) -> str:
     return "".join(out)
 
 
+def strip_sql_comments(sql: str) -> str:
+    """去掉 SQL 的 `--` / `#` 行注释与 `/* */` 块注释（**引号内不动**）—— `#50` 需求侧剥注释用。
+
+    ⚠️ **为什么不能直接复用 `strip_js_comments`**（`#50` 前置验证实测）：
+      `strip_js_comments` 是**面向 JS** 的剥离器 —— 它认 `//` 行注释，**不认** SQL 的 `--` 行注释；
+      而 SQL 里的 `//` **不是**注释（可能是 `'jdbc:mysql://…'` 一类串里的 `//`）⇒ 口径不对。
+      实测：对 `"select a -- {?x?}\\nfrom t"`，`strip_js_comments` **原样返回**（`{?x?}` 仍在）
+      ⇒ 反例不通过 ⇒ **改设计**：SQL 侧走本函数（剥 `--` / `#`），JS 侧（`serverScript`）仍走
+      `strip_js_comments`。
+    ⚠️ 引号保护**保留**（正例）：`'http://h/a'` 一类串里的 `//` 不被误切。
+    ⚠️ **`#` 是 MySQL 行注释**（本后端确为 MySQL）—— 从 `#` 到行尾整段剥除（引号内不动）。
+      ⛔ **不剥会导致误报**：`# {?x?}` 一类被注释掉的引用会残留 `{?x?}` ⇒ 被 `find_sql_refs`
+      当成真实引用计入。
+    ⚠️ 本函数**自实现** `/* */` 块注释（SQL 标准块注释、**不嵌套**）——⛔ **不再委托
+      `strip_js_comments`**：那是 **JS 口径**，会把 `//` 也当行注释切掉（SQL 里 `//` 不是注释）
+      ⇒ 委托等于把 JS 语义偷带进 SQL、口径不纯。
+    """
+    out: list[str] = []
+    i, n, quote = 0, len(sql), None
+    while i < n:
+        ch = sql[i]
+        if quote:
+            out.append(ch)
+            if ch == "\\" and i + 1 < n:
+                out.append(sql[i + 1])
+                i += 2
+                continue
+            if ch == quote:
+                quote = None
+            i += 1
+            continue
+        if ch in ("'", '"', "`"):
+            quote = ch
+            out.append(ch)
+            i += 1
+            continue
+        if ch == "-" and i + 1 < n and sql[i + 1] == "-":
+            while i < n and sql[i] != "\n":
+                i += 1
+            continue
+        if ch == "#":
+            # MySQL `#` 行注释：从 `#` 到行尾（不含换行，换行保留 ⇒ 原样交给后续按行处理）。
+            while i < n and sql[i] != "\n":
+                i += 1
+            continue
+        if ch == "/" and i + 1 < n and sql[i + 1] == "*":
+            # SQL 标准块注释 `/* … */`（**不嵌套**）——自实现，与 JS 口径解耦。
+            i += 2
+            while i + 1 < n and not (sql[i] == "*" and sql[i + 1] == "/"):
+                i += 1
+            i += 2
+            continue
+        out.append(ch)
+        i += 1
+    return "".join(out)
+
+
 def read_expr(js: str, i: int) -> str:
     """从 js[i] 起读一个表达式：括号配平，遇顶层 `,` / `}` 或收尾括号即停。"""
     depth = 0
@@ -3763,15 +3859,87 @@ def _mxwl_target(url: str):
     return url.split("m?xwl=")[-1].split("&")[0]
 
 
-def _scan_upstream(root: str, page_file: str, field_set) -> dict:
-    """扫**单根**，找所有指向本页的上游调用（只读、不写盘）。
+def _ref_kind36(tgt: str) -> str:
+    """`#36` 对取数 url 目标键的分类：`placeholder` / `framework` / `dangling`。
 
-    返回：`n_files`（扫了多少个 `.xwl`，不含本页）；`calls` = [(调用方相对路径, 传入键 list)]，
+    · `placeholder` —— **显式占位**（`<…>` 角括号 / `…` 省略号 / `__MODULE__`）：有意待定，**永不判红**；
+    · `framework`   —— **框架端点**（首段 `common`）：平台自带、非业务载体；
+    · `dangling`    —— 其余**具体键**：盘上若没这个文件 ⇒ **真·悬空**（整条取数链断掉）。
+    ⭐ 依据（本仓「去项目化」守卫原文）：「`m?xwl=` 后面必须是占位符（`<…>` / `…`），只有框架端点 `common/` 例外」
+    ⇒ 占位 / 框架端点**必须豁免**（否则批量页面对占位写法即大规模误判）。
+    """
+    if "__MODULE__" in tgt or "…" in tgt or "..." in tgt or ("<" in tgt and ">" in tgt):
+        return "placeholder"
+    if tgt.replace("\\", "/").split("/")[0].lower() == "common":
+        return "framework"
+    return "dangling"
+
+
+def _emit_36(args, dangling36, placeholder36) -> None:
+    """`#36` **预告形态**（本段只预告、⛔ 不改退出码）：`--strict` 下才出。
+
+    · `[warn]` —— 真·悬空取数 url（载体文件不存在）；
+    · `[note]` —— 显式占位（`<…>` / `…` / `__MODULE__`），**永不判红**。
+    ⚠️ **预告设时限**：`references/faq.md` 明写"**下个版本将收紧为失败**"，⛔ 不无限期挂预告。
+    两个 `return` 路径（早返「跳过交叉核对」与末尾判定）都调本函数 ⇒ 预告不因分支漏掉。
+    """
+    if not getattr(args, "strict", False):
+        return
+    if dangling36:
+        print("\n  [warn] `#36` 预告：%d 处取数 url 指向的载体**不存在**（整条取数链断掉）：%s"
+              % (len(dangling36), ", ".join(sorted(set(dangling36)))))
+        print("         ⚠️ 本段**只预告、不改退出码**（rc 仍 0）；**下一段**将收紧为失败。")
+    if placeholder36:
+        print("\n  [note] `#36`：%d 处取数 url 为**显式占位**（`<…>` / `…` / `__MODULE__`，有意待定）"
+              "⇒ 只提示、**永不判红**：%s"
+              % (len(placeholder36), ", ".join(sorted(set(placeholder36)))))
+
+
+def _is_sql_carrier(obj) -> bool:
+    """判定文件是否为 **SQL 载体**（`new --kind sql` 骨架形态）。
+
+    判据（**结构**，与 `cmd_sqlrefs` 同源）：**顶层** `children` 里的**根 `module`**，其**直接子节点**里
+    有 `dataprovider`，且**不含** `store` / `grid`（页面/网格的标志）。
+    页面即便内嵌网格，其 `dataprovider` 也挂在**网格子树**里、**不是根 `module` 的直接子**；载体的根 `module`
+    则**直接**托着 `dataprovider`、且**无** store/grid（见 `skeleton_sql`）。⛔ 不靠路径名 / 引用方判 ——
+    载体可能是**孤儿**（无引用可依）。
+    ⚠️ **只看顶层、不再全树递归**：递归到子树里的**任意** `module` ⇒ 会把"网格里嵌套的 `module`
+       及其子 `dataprovider`"误判成载体（页面**假阳性**、进而把普通页面的 `--upstream` 文案错判成载体口径）
+       ⇒ 收窄为**根 `module`**。
+    ⚠️ 直接走节点结构（`type` / `children` 在节点层），**不用 `iter_nodes`** —— 后者吐的是 `configs`、没有 `children`。
+    """
+    if not isinstance(obj, dict):
+        return False
+    for node in obj.get("children") or []:
+        if not isinstance(node, dict) or node.get("type") != "module":
+            continue
+        kids = node.get("children")
+        if not isinstance(kids, list):
+            continue
+        if any(isinstance(x, dict) and x.get("type") in ("store", "grid") for x in kids):
+            continue
+        if any(isinstance(x, dict) and x.get("type") == "dataprovider" for x in kids):
+            return True
+    return False
+
+
+def _scan_upstream(root: str, page_file: str, field_set, target_key: str | None = None,
+                   collect_bare: bool = False) -> dict:
+    """扫**单根**，找所有指向目标（默认＝本页）的上游调用（只读、不写盘）。
+
+    `target_key` ＝ 要被反查的引用键（`m?xwl=<target_key>`）；**默认** ＝ 本文件的键
+    （`_page_ref_key`）—— 目标为**页面**时即"谁调用本页"，目标为**SQL 载体**时即"谁引用本载体"，
+    两者**同一套匹配**（`⛔ 不新增 CLI 参数`）。
+    `collect_bare`：命中本键、但该处**既无字面量 `params` 键、也无 `out:`** 时——默认计入 `n_none`（页面口径，
+    保持既有输出）；置真时**仍把引用方文件列进 `calls`**（键为空 list）—— 载体常经 `store.configs.url` 这类
+    **纯 url 字符串**被引用（`find_transfers` 在该串上取不到键）⇒ 载体口径要把"哪个页面引用了我"列出来。
+
+    返回：`n_files`（扫了多少个 `.xwl`，不含本文件）；`calls` = [(调用方相对路径, 传入键 list)]，
     只含能展开的**字面量** `params` 键；`n_out` / `n_dyn` / `n_none` = 三类“未展开”的处数：
-    `out:` 形态 / url 为运行时拼接 / 命中本页但既无字面量键也无 `out:`。
+    `out:` 形态 / url 为运行时拼接 / 命中目标但既无字面量键也无 `out:`。
     """
     page_abs = os.path.abspath(page_file)
-    page_key = _page_ref_key(page_file, root)
+    page_key = target_key if target_key is not None else _page_ref_key(page_file, root)
     # 引用键可出现在**任意键**下（`url:` / `file:` / store 的 `url` 字符串…）
     # ⇒ 直接按 `m?xwl=<本页键>` 匹配，并卡右边界，免得把更长的路径前缀误当本页。
     _ref_re = re.compile(r"m\?xwl=" + re.escape(page_key) + r"(?![A-Za-z0-9_.\-/])")
@@ -3808,6 +3976,8 @@ def _scan_upstream(root: str, page_file: str, field_set) -> dict:
                     calls.append((caller_rel, sorted(keys)))
                 elif has_out:
                     n_out += 1
+                elif collect_bare:
+                    calls.append((caller_rel, []))   # 载体口径：纯 url 命中（无可展开键）也列出引用方
                 else:
                     n_none += 1
     return {"n_files": n_files, "calls": calls, "n_out": n_out,
@@ -3855,24 +4025,42 @@ def _appearance_url_counts(text: str) -> tuple:
     return n_lit_m, n_lit_other, n_dyn
 
 
-def _print_params_tail(args, root, text, stores, field_set) -> None:
+def _print_params_tail(args, root, text, stores, field_set, target_is_carrier=False) -> None:
     """`params` 末尾两段附加输出（只在开了 `--upstream` 时出现）。
 
-    ① `[外部可传入]` 分组；② 载入侧“未纳入核对”汇总行（**永远是最后一行**）。
+    ① 反查分组（目标为**页面** ⇒ `[外部可传入]`；目标为 **SQL 载体** ⇒ `[引用本载体的页面]`）；
+    ② 载入侧“未纳入核对”汇总行（**永远是最后一行**）。
     默认关 ⇒ 本函数直接 `return`；调用方输出**逐字不变**，而它只对"无 miss 的页面"成立（有 miss 且未开 `--strict` 时，§4.2 的留痕规则本就多一行 `[note]`；保住 `params` 的量级）。
+    ⚠️ 目标是**页面**时，本段输出**逐字节不变**（`_scan_upstream` 目标键参数化、默认 ＝ 本文件键）。
     """
     if not getattr(args, "upstream", False):
         return
     if not root or not os.path.isdir(root):
         print("\n[note] --upstream：未找到模块根（用 --module-root 指定）⇒ 跳过跨页反查")
         return
-    info = _scan_upstream(root, args.file, field_set)
+    # `#53`：目标键**参数化**（默认 ＝ 本文件键）。目标为**页面** ⇒ "谁调用本页"（输出不变）；
+    #   目标为 **SQL 载体** ⇒ "谁引用本载体"（`target_is_carrier` 由 `cmd_params` 按结构判出，文案分场景）。
+    #   ⛔ 不新增 CLI 参数 —— 载体经"页面 ＋ 载体"成对工作流直接把载体文件传给 `params --upstream`。
+    target_key = _page_ref_key(args.file, root)
+    info = _scan_upstream(root, args.file, field_set, target_key=target_key,
+                          collect_bare=target_is_carrier)
     n_all = len(info["calls"]) + info["n_out"] + info["n_dyn"] + info["n_none"]
-    print("\n=== [外部可传入] ===")
-    print("  本页被 %d 处上游调用（只展开 `params: {名:值}` 字面量键；"
-          "`out:` 与运行时拼接的 url 只计数、不展开）" % n_all)
-    for _caller, _keys in info["calls"]:
-        print("    %s  → 传入键 %s" % (_caller, _keys))
+    if target_is_carrier:
+        print("\n=== [引用本载体的页面] ===")
+        print("  本载体被 %d 处引用（列出引用方文件；只展开 `m?xwl=` 命中方，"
+              "`out:` 与运行时拼接的 url 只计数、不展开）" % n_all)
+        _seen53: set = set()
+        for _caller, _keys in info["calls"]:
+            if _caller in _seen53:
+                continue
+            _seen53.add(_caller)
+            print("    %s  → 传入键 %s" % (_caller, _keys or "（无字面量键）"))
+    else:
+        print("\n=== [外部可传入] ===")
+        print("  本页被 %d 处上游调用（只展开 `params: {名:值}` 字面量键；"
+              "`out:` 与运行时拼接的 url 只计数、不展开）" % n_all)
+        for _caller, _keys in info["calls"]:
+            print("    %s  → 传入键 %s" % (_caller, _keys))
     print("  [未展开] `out: app.<容器>` %d 处 / 动态 url %d 处 / 命中但无字面量键 %d 处"
           % (info["n_out"], info["n_dyn"], info["n_none"]))
     print("  （扫描范围：本根 %d 个 .xwl；本工具只判本根，跨工程引用看不到）" % info["n_files"])
@@ -3967,7 +4155,7 @@ def cmd_params(args) -> int:
                 for kind, conts, keys, raw in find_transfers(js, field_set):
                     transfers.append((kind, conts, keys, raw, "/".join(str(x) for x in path)))
                 for m in _REQ_URL_RE.finditer(js):
-                    tgt = m.group(1).split("m?xwl=")[-1].split("&")[0]
+                    tgt = m.group(1).split("m?xwl=")[-1].split("&")[0].strip()   # `#36`：去首尾空白（空目标视为无引用）
                     if tgt and tgt not in direct:
                         direct.append(tgt)
             for k, v in node.items():
@@ -3977,21 +4165,63 @@ def cmd_params(args) -> int:
                 scan(v, path + (i,))
 
     scan(obj)
+    # `#53`：目标为 SQL 载体时，`--upstream` 文案分场景（"引用本载体的页面"）。
+    _target_is_carrier = _is_sql_carrier(obj)
 
     print(f"\n=== store（{len(stores)} 个）===")
+    # `#56`：`sql_files` 驱动下面「SQL 侧」段的打印。**同一载体被多 store 引用**时，若不合并则每 store 各
+    #   `append` 一次 ⇒ 同一段打印 N 次（噪音）。改为**合并**（每载体只留一次、保首现序）＋ 另记
+    #   **引用计数** `sql_ref_count` ⇒ 打印时标 `（同载体 ×N）`。⛔ **不裸去重**（会丢掉"被 N 处引用"
+    #   这个信号）；⚠️ 落默认面 ⇒ 列入本段声明的**默认面变更清单**。
     sql_files: list[tuple[str, str]] = []
+    sql_ref_count: dict[str, int] = {}
+    # `#36`：收集"真·悬空"与"显式占位"的取数 url 目标（预告块在下方；⛔ 不改 rc）。
+    dangling36: list[str] = []
+    placeholder36: list[str] = []
+    # `#56`：`sql_files` 去重键从**原样字符串 `tgt`** 改为**物理文件身份**
+    #   （`os.path.normcase(os.path.abspath(fp))`）—— 同一载体经不同文本形式（`a/b` vs `./a//b`、
+    #   大小写差异）命中时，按原样字符串去重 ⇒ 会**重复登记同一段**、且引用计数**裂成多份**。
+    #   `sql_files` 仍存 `(显示名, fp)`（显示名取**首现文本**，保证输出稳定）；`_phys_display`
+    #   记 物理键 → 显示名，供计数回填。`Wb.request` 侧也走同一收集 ⇒ 修掉"已由 store 登记过就不再
+    #   计数"的漏计（`#56` 引用计数口径）。
+    _phys_display: dict[str, str] = {}
+
+    def _add_carrier(tgt: str, fp: str) -> None:
+        """把一个**存在**的载体纳入 `sql_files`（按物理文件去重）并累计引用计数（store / `Wb.request` 同口径）。"""
+        pk = os.path.normcase(os.path.abspath(fp))
+        disp = _phys_display.get(pk)
+        if disp is None:
+            _phys_display[pk] = tgt
+            sql_files.append((tgt, fp))
+            disp = tgt
+        sql_ref_count[disp] = sql_ref_count.get(disp, 0) + 1
+
     for cfg in stores:
         url, iid = cfg.get("url"), cfg.get("itemId")
         line = f"  itemId={iid!r} autoLoad={cfg.get('autoLoad')!r}"
         if isinstance(cfg.get("params"), (dict, list)) and cfg.get("params"):
             line += f"  自身params配置={cfg['params']!r}(优先级最高)"
         if isinstance(url, str) and "m?xwl=" in url:
-            tgt = url.split("m?xwl=")[-1].split("&")[0]
-            fp = os.path.join(root, tgt.replace("/", os.sep) + ".xwl") if root else None
-            ok = bool(fp and os.path.exists(fp))
-            line += f"\n      url={tgt} → {'存在' if ok else '未找到'}"
-            if ok:
-                sql_files.append((tgt, fp))
+            tgt = url.split("m?xwl=")[-1].split("&")[0].strip()   # `#36`：去首尾空白（空目标视为无引用）
+            if not tgt:
+                # `#36`：`m?xwl=` 目标为空 ⇒ 视为**无引用**（⛔ 不判 `dangling`、不产生假预告）。
+                line += "\n      url=(m?xwl= 目标为空) → 视为无引用，跳过分类"
+            elif not root:
+                # `#36`：**未定位模块根** ⇒ 无从判定载体是否存在 ⇒ ⛔ 不谎报"未找到/不存在"、
+                #   ⛔ 不进 `#36` 分类（若在此 `fp=None ⇒ ok=False` 落 `dangling` ⇒ 全量假 `[warn]`）。
+                line += f"\n      url={tgt} → 未定位模块根，无法判定是否存在（未计入 `#36` 预告）"
+            else:
+                fp = os.path.join(root, tgt.replace("/", os.sep) + ".xwl")
+                ok = os.path.exists(fp)
+                line += f"\n      url={tgt} → {'存在' if ok else '未找到'}"
+                if ok:
+                    _add_carrier(tgt, fp)
+                else:
+                    _k36 = _ref_kind36(tgt)
+                    if _k36 == "placeholder":
+                        placeholder36.append(tgt)
+                    elif _k36 == "dangling":
+                        dangling36.append(tgt)
         else:
             line += (f"\n      url={url!r}（非 m?xwl：可能是 Java bean / 其它数据源，"
                      f"也可能是「捷径 url」—— 框架支持、表在 wb/system/url.json；本工具不解析捷径）")
@@ -4000,11 +4230,23 @@ def cmd_params(args) -> int:
     if direct:
         print(f"\n=== `Wb.request` 直接调用的 m?xwl（{len(direct)} 个）===")
         for tgt in direct:
-            fp = os.path.join(root, tgt.replace("/", os.sep) + ".xwl") if root else None
-            ok = bool(fp and os.path.exists(fp))
+            if not root:
+                # `#36`：未定位模块根 ⇒ 无法判定 ⇒ ⛔ 不谎报"未找到"、⛔ 不进 `#36` 分类。
+                print(f"  {tgt}.xwl → 未定位模块根，无法判定（未计入 `#36` 预告）")
+                continue
+            fp = os.path.join(root, tgt.replace("/", os.sep) + ".xwl")
+            ok = os.path.exists(fp)
             print(f"  {tgt}.xwl → {'存在（纳入核对）' if ok else '未找到（可能是框架端点，如 common/save-all）'}")
-            if ok and all(tgt != t for t, _ in sql_files):
-                sql_files.append((tgt, fp))
+            if ok:
+                # `#56`：走统一收集 ⇒ 已由 store 登记过的载体**也累计**引用计数（若在此 `all(...)`
+                #   为假就整段跳过 ⇒ `（同载体 ×N）` 漏计 `Wb.request` 那一份）。
+                _add_carrier(tgt, fp)
+            else:
+                _k36 = _ref_kind36(tgt)
+                if _k36 == "placeholder":
+                    placeholder36.append(tgt)
+                elif _k36 == "dangling":
+                    dangling36.append(tgt)
 
     n_out = sum(1 for t in transfers if t[0] == "out")
     n_pm = len(transfers) - n_out
@@ -4068,24 +4310,40 @@ def cmd_params(args) -> int:
         except Exception as exc:  # noqa: BLE001
             print(f"\n=== SQL 侧 {tgt}.xwl 读取失败: {exc}")
             continue
-        print(f"\n=== SQL 侧: {tgt}.xwl ===")
+        _n_ref56 = sql_ref_count.get(tgt, 1)
+        _ref56 = ("（同载体 ×%d）" % _n_ref56) if _n_ref56 > 1 else ""
+        print(f"\n=== SQL 侧: {tgt}.xwl{_ref56} ===")
         for t, cfg, _p in iter_nodes(so):
             if t == "module" and isinstance(cfg.get("serverScript"), str):
-                ss = cfg["serverScript"]
+                # `#50`：需求侧提取前**先剥 JS 注释**（`//`）—— 与来源侧同口径，注释里的 `{?名?}`／
+                #   `app.get(名)` 不再计入（不剥时注释里的也计入 ⇒ 假阳性）。
+                ss = strip_js_comments(cfg["serverScript"])
                 g, hs = _APP_REF_GET.findall(ss), _PARAM_RE.findall(ss)
                 print(f"  serverScript: app.get(名)={g or []}  {{?名?}}={hs or []}")
                 need_req |= set(g) | set(hs)
             if t == "dataprovider":
                 for k in ("sql", "totalSql"):
                     if isinstance(cfg.get(k), str):
-                        ps = _PARAM_RE.findall(cfg[k])
+                        # `#50`：SQL 侧提取前**先剥 SQL 注释**（`--` ＋ `/* */`）—— `strip_sql_comments`
+                        #   专门补 `strip_js_comments` 不认 `--` 的缺口；引号内不动（`'http://…'` 不误切）。
+                        ps = _PARAM_RE.findall(strip_sql_comments(cfg[k]))
                         print(f"  {k}: {{?名?}} = {ps or []}")
                         need_sql |= set(ps)
 
     needed = need_sql | need_req
     if not needed:
-        print("\n（SQL 侧没有 {?…?} / app.get，跳过交叉核对）")
-        _print_params_tail(args, root, text, stores, field_set)
+        # `#58`："页面**压根没有 store**"与"**有 store、但 SQL 侧无 `{?名?}`／`app.get`**"是两种
+        #   不同处境，合并成一句 `（SQL 侧没有 {?…?} / app.get，跳过交叉核对）` ⇒ 易被读成
+        #   "已核对完成" ⇒ **拆成两句**（本行属**默认面输出变更**，已列入本段声明的**默认面变更清单**）。
+        # `#51`：这两句**无条件**前置 `[warn] ` 级别前缀 —— 原**无级别前缀** ⇒ 与"已核对完成"肉眼难分。
+        #   ⚠️ `rc` **不变**（本分支恒 `return 0`）：`[warn]` 只作**可见信号**、不进退出码。
+        #   ⭐ 本行**是**默认面输出变更 ⇒ 已列入本段声明的**默认面变更清单**。
+        if stores:
+            print("\n[warn] （有 %d 个 store，但 SQL 侧没有 {?…?} / app.get，跳过交叉核对）" % len(stores))
+        else:
+            print("\n[warn] （未发现 store，跳过交叉核对）")
+        _emit_36(args, dangling36, placeholder36)
+        _print_params_tail(args, root, text, stores, field_set, target_is_carrier=_target_is_carrier)
         return 0
 
     # 真白名单：`sys.*` / `Str.*`（以及工程在 `wb/system/var.json` 里自定义的命名空间）
@@ -4125,7 +4383,9 @@ def cmd_params(args) -> int:
     if extra:
         print(f"  [info] 页面送了但 SQL 未用到: {extra}")
     print("\n  提示：参数名 = 控件 `itemId`；改了 itemId 或把控件移出容器都会**静默失效**（取到空值）。")
-    _print_params_tail(args, root, text, stores, field_set)
+    # `#36` 预告（`--strict` 下；⛔ 不改退出码）。⛔ **下方判定行原样不动**（它被一条注入用例按文本锚住）。
+    _emit_36(args, dangling36, placeholder36)
+    _print_params_tail(args, root, text, stores, field_set, target_is_carrier=_target_is_carrier)
     return 1 if (miss and getattr(args, "strict", False)) else 0
 
 

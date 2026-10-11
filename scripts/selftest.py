@@ -164,6 +164,29 @@ def _run_cli(argv: list) -> tuple:
         return None, "", "（CLI 起不来）%s: %s" % (type(exc).__name__, exc)
 
 
+def _run_cli_env(argv: list, env_extra: dict) -> tuple:
+    """同 `_run_cli`，但把 `env_extra` 叠加进子进程环境（供 `#71` 的 `PYTHONHASHSEED` 比对用）。
+
+    ⚠️ 用 `env=` 会**整体替换**环境 ⇒ 先 `dict(os.environ)` 再 update，别让子进程丢 PATH。
+    """
+    _env = dict(os.environ)
+    _env.update({k: str(v) for k, v in env_extra.items()})
+    try:
+        _pr = subprocess.run(
+            [sys.executable, "-B", os.path.join(HERE, "xwl.py"), *argv],
+            capture_output=True, text=True, encoding="utf-8", errors="replace",
+            timeout=120, env=_env)
+        return _pr.returncode, (_pr.stdout or ""), (_pr.stderr or "")
+    except Exception as exc:      # noqa: BLE001 —— 连 CLI 都起不来也要落成断言，不许炸块
+        return None, "", "（CLI 起不来）%s: %s" % (type(exc).__name__, exc)
+
+
+# `#71`：`node_check` 落盘用的临时文件名形如 `xwl_ev_<随机>.js`（`tempfile` 生成，逐次不同）
+#   ⇒ 「同一输入、换 seed 输出逐字节一致」这条断言必须先把这个**与本条无关的随机名**规范化掉，
+#   否则永远为红（不是 #71 的病灶）。只替换该名本身，不碰其前后内容。
+_TMP_EV_RE = re.compile(r"xwl_ev_[A-Za-z0-9_]+\.js")
+
+
 def _cli_text(out: str, err: str) -> str:
     """把 stdout 与「非空 stderr」拼成**断言文案**用文本（stderr 明确标注，免与 stdout 混淆）。"""
     err = (err or "").strip()
@@ -1552,6 +1575,388 @@ def _check_new_guards(tmp, node, failures, write) -> None:
         print("[ok]  ④ `check --controls`：⑨ 校 configs 键（非法键进 `[warn]`、rc 不变）＋ "
               "⑥ 扩到 configs 内联 `[js]`（语法错进 `[FAIL]`、rc≠0）；不给 `--controls` 时该段不出现")
 
+    # ---- ⑤ `#71`（插队）：`check --controls` 的 ⑥-ext **行序确定**（与 seed 无关）----
+    #   起因（按 `17s`，不这么做会漏什么）：`_scan_configs_js` 迭代 `reg_types[t]["js"]`，而它是
+    #     **`set`** ⇒ 同一节点 **≥2 个坏 `[js]` 键**时，`[FAIL]` 行的**顺序随 `PYTHONHASHSEED` 变**。
+    #     CPython 默认开 str hash 随机化 ⇒ 同一命令跑两次都可能不同 ⇒ **破坏本仓「确定 / 可 diff」命门**
+    #     （多处验收建立在逐字节比对之上）。修法 ＝ 迭代前 `sorted(...)`（一行）。
+    #   判据（先红后绿）：同一输入、换 **≥5 个 `PYTHONHASHSEED`** 跑同一条 `check --controls`，
+    #     **规范化后**输出必须**逐字节一致**。
+    #     ⚠️ 「规范化」= 把 ⑥ 报错里的临时文件名 `xwl_ev_<随机>.js` 换成 `<TMP>`（`_TMP_EV_RE`）——
+    #       该名由 `tempfile` 逐次随机、**与本条无关**，不规范化则「字面逐字节一致」永不成立（不是本条病灶）。
+    #   触发面 narrow（如实记）：需"注册表**同类型**声明 ≥2 个 `js` 键"且"**同节点 ≥2 个都坏**"
+    #     ⇒ 只声明 1 个 `js` 键时**复现不出来**（故夹具**必须** ≥2 个）。
+    hash_fail: list[str] = []
+    reg71 = os.path.join(tmp, "mini_controls_reg71.json")
+    with open(reg71, "w", encoding="utf-8") as f:
+        json.dump({"children": [
+            {"id": "label71", "general": {"design": True},
+             "configs": {"itemId": {"type": "string"},
+                         "renderer": {"type": "js"}, "validator": {"type": "js"},
+                         "formatter": {"type": "js"}, "handler": {"type": "js"}},
+             "events": {}},
+        ]}, f, ensure_ascii=False)
+    _p71 = os.path.join(tmp, "reg71-multi.xwl")
+    with open(_p71, "w", encoding="utf-8", newline="") as f:
+        f.write(xwl.dumps_designer(
+            {"title": "t", "roles": {}, "children": [
+                {"configs": {"itemId": "l1",
+                             "renderer": "function(){ return ; ;;(",
+                             "validator": "function(){ return ; ;;(",
+                             "formatter": "function(){ return ; ;;(",
+                             "handler": "function(){ return ; ;;("},
+                 "type": "label71", "expanded": False, "children": []}]},
+            1, CRLF))
+    if node is None:
+        print("[note] ⑤ `#71` 行序确定：无 node ⇒ 跳过（⑥-ext 需真跑 node；`--only` 不自动找 node ⇒ 加 `--node`）")
+    else:
+        _o71 = []
+        for _sd in ("0", "1", "2", "3", "4"):
+            _cc, _oo, _ee = _run_cli_env(
+                ["check", "--node", node, "--controls", reg71, _p71],
+                {"PYTHONHASHSEED": _sd})
+            _o71.append(_TMP_EV_RE.sub("<TMP>", _oo))
+        # 非空判据：夹具**必须**真产出 ≥2 条 ⑥-ext FAIL，否则本臂是"绿但空"。
+        _nf71 = sum(1 for _l in _o71[0].splitlines() if "[FAIL] ⑥ configs." in _l)
+        if _nf71 < 2:
+            hash_fail.append("⑤ `#71` 前置失败：夹具应产出 ≥2 条 ⑥-ext FAIL，实得 %d 条：\n%s"
+                             % (_nf71, _o71[0]))
+        elif len(set(_o71)) != 1:
+            hash_fail.append("⑤ `#71` ⑥-ext 行序随 `PYTHONHASHSEED` 变（应规范化后逐字节一致）：\n"
+                             + "\n".join("  seed=%s:\n%s" % (i, o) for i, o in enumerate(_o71)))
+        if hash_fail:
+            failures.extend(hash_fail)
+        else:
+            print("[ok]  ⑤ `#71` ⑥-ext：同节点 ≥2 个坏 `[js]` 键时，换 5 个 `PYTHONHASHSEED` 输出规范化后逐字节一致")
+
+    # ---- ⑥ `#72`（插队）：`patch` 覆盖**已存在的容器键**（dict/list）且新值是标量 ⇒ 必须可见 ----
+    #   起因（按 `17s`）：`set`/`insertKey` 的 path 末段命中一个**已存在的容器键**（`configs`／`children`）
+    #     且新值为**标量**时，现行为是**静默把整个容器替换成标量** ⇒ **结构损坏**，却 rc=0、无任何 `[warn]`
+    #     （两组独立复测发现、lead 已复现）。修法 ＝ 该 op **打一条 `[warn]`**（⛔ **不改默认拒绝语义** ——
+    #     "覆盖已存在的键"不是"新建键"，既有 `create`／`--allow-new-key` 闸门一律不碰）。
+    #   判据（先红后绿）：覆盖容器键的 op ⇒ 输出**必须含 `[warn]`**、rc **仍 0**；而"标量→标量"的普通改键
+    #     ⇒ **不得**出现该 `[warn]`（默认面其余行为逐字节不变）。夹具取自 `dumps_designer` 的**规范多行**形态
+    #     ⇒ 不会混入"紧凑单行"那条与 `#72` 无关的 `[warn]`。
+    ov_fail: list[str] = []
+    _ov_base = xwl.dumps_designer(
+        {"title": "t", "roles": {}, "children": [
+            {"configs": {"itemId": "st1", "url": "m?xwl=sub/sel"}, "type": "store",
+             "expanded": False, "children": []}]}, 1, CRLF)
+
+    def _patch72(tag, op):
+        """写一份**新鲜**夹具（cmd_patch 会改文件）＋ ops，跑 `--dry-run`，返回 `(rc, out)`。"""
+        _p = os.path.join(tmp, "reg72_%s.xwl" % tag)
+        with open(_p, "w", encoding="utf-8", newline="") as f:
+            f.write(_ov_base)
+        _ops = os.path.join(tmp, "reg72_ops_%s.json" % tag)
+        with open(_ops, "w", encoding="utf-8") as fh:
+            json.dump([op], fh, ensure_ascii=False)
+        return _run(xwl.cmd_patch, file=_p, ops=_ops, indent=1, eol="auto",
+                    dry_run=True, backup=False, node=None, no_js=True, allow_new_key=False)
+
+    # A/B/C = 三种"容器 → 标量"覆盖（set 打 dict、set 打 list、insertKey 打 dict）：都须 `[warn]` 且 rc 0。
+    for _tag, _op in (
+        ("set_dict", {"op": "set", "path": ["children", 0, "configs"], "value": "1"}),
+        ("set_list", {"op": "set", "path": ["children", 0, "children"], "value": "x"}),
+        ("inkey_dict", {"op": "insertKey", "path": ["children", 0, "configs"], "value": "1"}),
+    ):
+        _rc, _o = _patch72(_tag, _op)
+        if _rc != 0:
+            ov_fail.append("⑥ `#72` %s：覆盖容器键后 rc=%s（应 0 —— 只加信号、不改默认语义）\n%s"
+                           % (_tag, _rc, _o))
+        if "[warn]" not in _o:
+            ov_fail.append("⑥ `#72` %s：覆盖容器键**无 `[warn]`**（静默数据损坏）\n%s" % (_tag, _o))
+    # D = 反面：标量 → 标量（普通改键）⇒ **不得**出现该 `[warn]`（默认面其余行为不变）。
+    _rc, _o = _patch72("scalar", {"op": "set", "path": ["children", 0, "configs", "url"], "value": "u2"})
+    if _rc != 0:
+        ov_fail.append("⑥ `#72` scalar：普通改键 rc=%s（应 0）\n%s" % (_rc, _o))
+    if "[warn]" in _o:
+        ov_fail.append("⑥ `#72` scalar：普通的『标量→标量』改键**误报 `[warn]`**（应静默）\n%s" % _o)
+    # E = 反面（质询 O7）：**容器 → 容器**（dict→dict）⇒ **不得**出现 `[warn]`（防"过度报警"）。
+    _rc, _o = _patch72("cont2cont", {"op": "set", "path": ["children", 0, "configs"], "value": {"url": "u3"}})
+    if _rc != 0:
+        ov_fail.append("⑥ `#72` cont2cont：容器→容器 rc=%s（应 0）\n%s" % (_rc, _o))
+    if "[warn]" in _o:
+        ov_fail.append("⑥ `#72` cont2cont：『容器→容器』改键**误报 `[warn]`**"
+                       "（应静默 —— 过度报警不被挡）\n%s" % _o)
+    # F = 正面（本批补的 list 分支）：**list 分支**下标命中已存在的容器元素、新值为标量 ⇒ 须 `[warn]`
+    #   （list 分支若漏收 `overwrites` ⇒ `#72` 只修了一半）。
+    _rc, _o = _patch72("list_idx", {"op": "set", "path": ["children", 0], "value": "z"})
+    if _rc != 0:
+        ov_fail.append("⑥ `#72` list_idx：数组元素覆盖 rc=%s（应 0）\n%s" % (_rc, _o))
+    if "[warn]" not in _o:
+        ov_fail.append("⑥ `#72` list_idx：**list 分支**下标命中容器元素、新值为标量**无 `[warn]`**"
+                       "（A1：#72 list 分支漏收 ⇒ 结构损坏静默）\n%s" % _o)
+    if ov_fail:
+        failures.extend(ov_fail)
+    else:
+        print("[ok]  ⑥ `#72` 覆盖容器键（dict/list/insertKey 三形态）⇒ `[warn]` 可见且 rc 仍 0；"
+              "标量→标量 与 容器→容器改键均静默")
+
+    # ---- ⑦ `#50`（本段序 1）：`params` 需求侧提取 `{?名?}` **前剥注释**（与来源侧同口径）----
+    #   起因（按 `17s`）：需求侧（`module.serverScript` ＋ `dataprovider.sql/totalSql`）提取 `{?名?}` 时**不剥注释**
+    #     ⇒ 注释里的占位符也计入 ⇒ **假阳性**（来源侧已剥、需求侧未剥 ⇒ 同工具内两套口径）。
+    #   判据（先红后绿）：JS 注释（`//`）与 SQL 行注释（`--`）里的 `{?名?}` **不计入**；代码里的**仍计入**；
+    #     且 SQL 串里 `'http://…'` 的 `//` **不被误切**（本段要求的前置正例）。
+    p50_fail: list[str] = []
+    _r50 = os.path.join(tmp, "pm_p50")
+    _car50 = xwl.skeleton_sql("p50carrier")
+    _mod50 = _car50["children"][0]
+    _mod50["configs"]["serverScript"] = ("// {?ghost?} 这是注释\n"
+                                         "function f(){ return '{?real?}'; }")
+    _mod50["children"][0]["configs"]["sql"] = (
+        "select u from t where u='http://h/x' and a={?real2?} -- {?ghost2?}\n"
+        "/* {?blk?} */ and b=1 # {?hsh?}\n"
+        "and c={?real3?}")
+    _dump(_car50, os.path.join(_r50, "sub", "sel.xwl"))
+    _p50 = os.path.join(_r50, "p50.xwl")
+    _dump({"title": "p50", "children": [
+        {"configs": {"itemId": "viewport"}, "type": "viewport", "expanded": False,
+         "children": [_store("st50", "m?xwl=sub/sel")]}]}, _p50)
+    _rc50, _o50 = _run(xwl.cmd_params, file=_p50, module_root=_r50, controls=None,
+                       list_fields=False, upstream=False)
+    if _rc50 != 0:
+        p50_fail.append("⑦ `#50`：params rc=%s（应 0）\n%s" % (_rc50, _o50))
+    if "ghost" in _o50:
+        p50_fail.append("⑦ `#50`：注释里的 `{?名?}` 仍被计入（需求侧未剥注释 ⇒ 假阳性）\n%s" % _o50)
+    if "real" not in _o50:
+        p50_fail.append("⑦ `#50`：代码里的 `{?名?}` 被误删（应保留）\n%s" % _o50)
+    # `#50`（Q1/Q2/O2）：SQL **块注释** `/* … */` 也要剥 —— ⑦ 只测 `--` 行注释 ⇒ 块注释防线是空的
+    #   （注入"块注释不剥" ⑦ 仍绿）。本条把该臂钉死。
+    if "blk" in _o50:
+        p50_fail.append("⑦ `#50`：SQL **块注释** `/* … */` 里的 `{?名?}` 仍被计入"
+                        "（`strip_sql_comments` 未剥块注释 ⇒ 假阳性）\n%s" % _o50)
+    # `#50`（P3）：SQL **`#` 行注释**（MySQL）也要剥 —— 不剥 `#` ⇒ 被注释掉的引用计入 ⇒ 假阳性。
+    if "hsh" in _o50:
+        p50_fail.append("⑦ `#50`：SQL **`#` 行注释**（MySQL）里的 `{?名?}` 仍被计入"
+                        "（未剥 `#` ⇒ 假阳性）\n%s" % _o50)
+    if "real3" not in _o50:
+        p50_fail.append("⑦ `#50`：`/* */` / `#` 之后的代码里 `{?real3?}` 被误删（应保留）\n%s" % _o50)
+    if p50_fail:
+        failures.extend(p50_fail)
+    else:
+        print("[ok]  ⑦ `#50` 需求侧剥注释：`//` / `--` / `#` / `/* */` 注释里的 `{?名?}` 不计、"
+              "代码里的仍计；`'http://…'` 的 `//` 不误切")
+
+    # ---- ⑧ `#58`（本段序 2）：`params` 「0 个 store」与「有 store 但 SQL 侧无参」**分两句文案** ----
+    #   起因（按 `17s`）：两种**不同处境**（页面压根没有 store ／ 有 store 但 SQL 侧无 `{?名?}`）共用**同一句**
+    #     `（SQL 侧没有 {?…?} / app.get，跳过交叉核对）` ⇒ 易读成"已核对完成"。⚠️ **落点核对已做**：该行在
+    #     `if not needed:` 分支、**不给任何 flag 即达** ⇒ 属**默认面输出变更** ⇒ 已列入本段声明的
+    #     **默认面变更清单**。
+    #   判据（先红后绿）：0 store 与 有 store 两句**必须不同**；0 store 那半须含「未发现 store」。
+    p58_fail: list[str] = []
+    _r58 = os.path.join(tmp, "pm_p58")
+    _dump(xwl.skeleton_sql("c58"), os.path.join(_r58, "sub", "sel58.xwl"))
+    _pa58 = os.path.join(_r58, "p58a.xwl")
+    _dump({"title": "p58a", "children": []}, _pa58)                       # 0 个 store
+    _pb58 = os.path.join(_r58, "p58b.xwl")
+    _dump({"title": "p58b", "children": [                                 # 1 个 store（载体无 {?名?}）
+        {"configs": {"itemId": "viewport"}, "type": "viewport", "expanded": False,
+         "children": [_store("st58", "m?xwl=sub/sel58")]}]}, _pb58)
+    _rca58, _oa58 = _run(xwl.cmd_params, file=_pa58, module_root=_r58, controls=None,
+                         list_fields=False, upstream=False)
+    _rcb58, _ob58 = _run(xwl.cmd_params, file=_pb58, module_root=_r58, controls=None,
+                         list_fields=False, upstream=False)
+    _la58 = [ln for ln in _oa58.splitlines() if "跳过交叉核对" in ln]
+    _lb58 = [ln for ln in _ob58.splitlines() if "跳过交叉核对" in ln]
+    if _rca58 != 0 or _rcb58 != 0:
+        p58_fail.append("⑧ `#58`：rc 应为 0/0，实得 %s/%s" % (_rca58, _rcb58))
+    if len(_la58) != 1 or len(_lb58) != 1:
+        p58_fail.append("⑧ `#58`：应各恰一行「跳过交叉核对」，0 store 得 %d、有 store 得 %d"
+                        % (len(_la58), len(_lb58)))
+    elif _la58 == _lb58:
+        p58_fail.append("⑧ `#58`：0 store 与 有 store（SQL 侧无参）**共用同一句**（应拆两句）\n"
+                        "  0 store: %s\n  有 store: %s" % (_la58[0], _lb58[0]))
+    if "未发现 store" not in _oa58:
+        p58_fail.append("⑧ `#58`：0 store 时未给「未发现 store」文案\n%s" % _oa58)
+    # `#58`/O6（与 ⑩ 同族）：0-store 的「跳过」行既要有「未发现 store」、也要带 `[warn] ` 前缀。
+    if not _la58 or "[warn]" not in _la58[0]:
+        p58_fail.append("⑧ `#58`：0-store 的「跳过」行未带 `[warn] ` 前缀（可见性信号缺失）：%s" % _la58)
+    if p58_fail:
+        failures.extend(p58_fail)
+    else:
+        print("[ok]  ⑧ `#58`：0 store 与「有 store 但 SQL 侧无参」**分两句**"
+              "（前者含「未发现 store」且带 `[warn] ` 前缀）")
+
+    # ---- ⑨ `#56`（本段序 3）：同载体多 store ⇒ 合并同段输出 ＋ **保留引用计数**（⛔ 不裸去重）----
+    #   起因（按 `17s`）：`sql_files` 由 store 循环逐个 append ⇒ **同一载体被多 store 引用**时，
+    #     下游「`=== SQL 侧: xxx.xwl ===`」段重复打印同一段 N 次（噪音）。本段要求的口径：
+    #     **合并 ＋ 保留引用计数**（`（同载体 ×N）`），⛔ **不裸去重** —— 裸去重会把"被 N 处引用"
+    #     这个信号一并删掉。⚠️ 落默认面 ⇒ 已列入本段声明的**默认面变更清单**（行数会变）。
+    #   判据（先红后绿）：3 store 指向同一载体 ⇒ 「SQL 侧」段**只出现 1 次**且**含 `×3`**。
+    p56_fail: list[str] = []
+    _r56 = os.path.join(tmp, "pm_p56")
+    _car56 = xwl.skeleton_sql("c56")
+    _car56["children"][0]["children"][0]["configs"]["sql"] = "select 1 where a={?p?}"
+    _dump(_car56, os.path.join(_r56, "sub", "sel56.xwl"))
+    _p56 = os.path.join(_r56, "p56.xwl")
+    _dump({"title": "p56", "children": [
+        {"configs": {"itemId": "viewport"}, "type": "viewport", "expanded": False,
+         "children": [_store("stA", "m?xwl=sub/sel56"), _store("stB", "m?xwl=sub/sel56"),
+                      _store("stC", "m?xwl=sub/sel56")]}]}, _p56)
+    _rc56, _o56 = _run(xwl.cmd_params, file=_p56, module_root=_r56, controls=None,
+                       list_fields=False, upstream=False)
+    _h56 = [ln for ln in _o56.splitlines() if "=== SQL 侧:" in ln]
+    if _rc56 != 0:
+        p56_fail.append("⑨ `#56`：rc=%s（应 0）" % _rc56)
+    if len(_h56) != 1:
+        p56_fail.append("⑨ `#56`：同载体（3 store）的「SQL 侧」段应合并为 1 次，实得 %d 次\n%s"
+                        % (len(_h56), _o56))
+    if _h56 and "×3" not in _h56[0]:
+        p56_fail.append("⑨ `#56`：合并后未保留引用计数（应含「同载体 ×3」）：%s" % _h56[0])
+    if p56_fail:
+        failures.extend(p56_fail)
+    else:
+        print("[ok]  ⑨ `#56`：同载体多 store ⇒ 「SQL 侧」段**合并为 1 次**并**保留引用计数**（同载体 ×3）")
+
+    # ---- ⑩ `#51`（本段序 4）：`params`「跳过交叉核对」默认面目带 `[warn] ` 前缀 ＋ `--upstream` 不扰动 off-mode ----
+    #   起因（按 `17s`）：该行原**无级别前缀** ⇒ 与"已核对完成"肉眼难分（与 `#58` 同族）；且它是 `M5`
+    #     「静默跳过」的读数点（`M5` 跑**默认面**、首分支就判 `"[warn]" in out`）。本条**无条件**把
+    #     `[warn] ` 前置到「跳过交叉核对」那两句上；⚠️ `rc` **不变**（该分支恒 `return 0`）。
+    #   判据（先红后绿）：
+    #     ① 有 store、SQL 侧无参页的**默认面**输出，该行**含 `[warn] `**（`rc` 仍 0）；
+    #     ② 同页**开 / 不开 `--upstream`**，那行「跳过」文字**逐字一致**（不变式：`--upstream` 是纯加法，
+    #        不得改变 off-mode 输出）。
+    #   夹具：复用 ⑧ 的形态（1 store → 载体无 `{?名?}`）。
+    p51_fail: list[str] = []
+    _r51 = os.path.join(tmp, "pm_p51")
+    _dump(xwl.skeleton_sql("c51"), os.path.join(_r51, "sub", "sel51.xwl"))
+    _p51b = os.path.join(_r51, "p51b.xwl")
+    _dump({"title": "p51b", "children": [                                 # 1 个 store（载体无 {?名?}）
+        {"configs": {"itemId": "viewport"}, "type": "viewport", "expanded": False,
+         "children": [_store("st51", "m?xwl=sub/sel51")]}]}, _p51b)
+    _rc_a51, _o_a51 = _run(xwl.cmd_params, file=_p51b, module_root=_r51, controls=None,
+                           list_fields=False, upstream=False)          # 默认面（off-mode）
+    _rc_b51, _o_b51 = _run(xwl.cmd_params, file=_p51b, module_root=_r51, controls=None,
+                           list_fields=False, upstream=True)           # 开 --upstream
+    _sa51 = [ln for ln in _o_a51.splitlines() if "跳过交叉核对" in ln]
+    _sb51 = [ln for ln in _o_b51.splitlines() if "跳过交叉核对" in ln]
+    if _rc_a51 != 0:
+        p51_fail.append("⑩ `#51`：默认面 rc=%s（应 0）" % _rc_a51)
+    if len(_sa51) != 1 or "[warn]" not in _sa51[0]:
+        p51_fail.append("⑩ `#51`：默认面「跳过」行未带 `[warn] `：%s" % _sa51)
+    if _sa51 != _sb51:
+        p51_fail.append("⑩ `#51`：`--upstream` 扰动了 off-mode 的「跳过」行：\n  关:%s\n  开:%s"
+                        % (_sa51, _sb51))
+    # `#51`/O6：**0-store 行**（`未发现 store`）也要带 `[warn] ` 前缀（⑩ 只测 1-store 行）。
+    _r51z = os.path.join(tmp, "pm_p51z")
+    _p51z = os.path.join(_r51z, "p51z.xwl")
+    _dump({"title": "p51z", "children": [                                 # 0 个 store
+        {"configs": {"itemId": "viewport"}, "type": "viewport", "expanded": False,
+         "children": []}]}, _p51z)
+    _rc_z51, _o_z51 = _run(xwl.cmd_params, file=_p51z, module_root=_r51z, controls=None,
+                           list_fields=False, upstream=False)
+    _sz51 = [ln for ln in _o_z51.splitlines() if "跳过交叉核对" in ln]
+    if _rc_z51 != 0:
+        p51_fail.append("⑩ `#51`：0-store 页 rc=%s（应 0）" % _rc_z51)
+    if len(_sz51) != 1 or "[warn]" not in _sz51[0] or "未发现 store" not in _sz51[0]:
+        p51_fail.append("⑩ `#51`：0-store 页「跳过」行未带 `[warn] ` 或未用「未发现 store」文案：%s" % _sz51)
+    if p51_fail:
+        failures.extend(p51_fail)
+    else:
+        print("[ok]  ⑩ `#51`：「跳过」行默认面带 `[warn] `（1-store 与 0-store 两行都测）、rc 仍 0；"
+              "`--upstream` 不扰动该行")
+
+    # ---- ⑪ `#53`（本段序 5）：`params --upstream` 目标键**参数化** ⇒ 目标为 **SQL 载体** 时文案分场景 ----
+    #   起因（按 `17s`）：`_scan_upstream` 只反查"谁调用本页"，**载体**被谁引用**无反向引用能力**
+    #     ⇒ 孤儿载体静默（`check` / `sqlrefs` 均无根，故落 `params --upstream`）。本条把目标键参数化
+    #     （默认 ＝ 本文件键）：目标为 **页面**时输出**逐字节不变**（承重墙），目标为 **载体**时给
+    #     "引用本载体的页面"。⛔ 不新增 CLI 参数。
+    #   判据（先红后绿）：① 载体目标 ⇒ 段头含「引用本载体的页面」且**列出引用方文件**；
+    #     ② 页面目标 ⇒ 段头仍「外部可传入」、**不含**「引用本载体」（文案分场景）。
+    p53_fail: list[str] = []
+    _r53 = os.path.join(tmp, "pm_p53")
+    _dump(xwl.skeleton_sql("c53"), os.path.join(_r53, "sub", "sel53.xwl"))   # 载体（module→dataprovider）
+    _p53page = os.path.join(_r53, "p53.xwl")
+    _dump({"title": "p53", "children": [                                    # 引用该载体的页面
+        {"configs": {"itemId": "viewport"}, "type": "viewport", "expanded": False,
+         "children": [_store("st53", "m?xwl=sub/sel53")]}]}, _p53page)
+    _rc53c, _o53c = _run(xwl.cmd_params, file=os.path.join(_r53, "sub", "sel53.xwl"),
+                         module_root=_r53, controls=None, list_fields=False, upstream=True)
+    _rc53p, _o53p = _run(xwl.cmd_params, file=_p53page, module_root=_r53, controls=None,
+                         list_fields=False, upstream=True)
+    if _rc53c != 0 or _rc53p != 0:
+        p53_fail.append("⑪ `#53`：rc 应为 0/0，实得 %s/%s" % (_rc53c, _rc53p))
+    if "引用本载体的页面" not in _o53c:
+        p53_fail.append("⑪ `#53`：载体目标的 `--upstream` 未给「引用本载体的页面」段\n%s" % _o53c)
+    if "p53.xwl" not in _o53c:
+        p53_fail.append("⑪ `#53`：载体目标未列出引用方页面（p53.xwl）\n%s" % _o53c)
+    if "引用本载体" in _o53p:
+        p53_fail.append("⑪ `#53`：页面目标误用了载体文案（应「外部可传入」）\n%s" % _o53p)
+    if "外部可传入" not in _o53p:
+        p53_fail.append("⑪ `#53`：页面目标的 `--upstream` 丢了既有「外部可传入」段\n%s" % _o53p)
+    if p53_fail:
+        failures.extend(p53_fail)
+    else:
+        print("[ok]  ⑪ `#53`：`--upstream` 目标为**载体** ⇒ 「引用本载体的页面」并列出引用方；"
+              "目标为**页面** ⇒ 仍「外部可传入」（文案分场景）")
+
+    # ---- ⑫ `#36`（本段序 4）：`params --strict` 下「真·悬空」取数 url 打 `[warn]` 预告、`rc` 不变；显式占位只 `[note]` ----
+    #   起因（按 `17s`）：`params` 对「取数 url 指向的文件不存在」不给信号（加 `--strict` 仍 rc=0）⇒ 与
+    #     「SQL 缺来源判 rc=1」判据不对称。本段只**预告**（⛔ 不改 rc）；显式占位（`<…>` / `…` / `__MODULE__`）
+    #     识别为**有意待定** ⇒ **永不判红**（否则批量页面对占位写法即大规模误判）。⚠️ 预告设时限（文档明写
+    #     "下一段收紧为失败"）。
+    #   判据（先红后绿）：① 悬空页 `--strict` ⇒ 含 `[warn]` ＋ `#36`、`rc` **仍 0**；
+    #     ② 占位页 `--strict` ⇒ 含 `[note]` ＋ `#36`、**无** `#36` 的 `[warn]`、`rc` 仍 0；
+    #     ③ 悬空页**不给** `--strict` ⇒ **无** `#36` 行（默认面不动）。
+    p36_fail: list[str] = []
+    _r36 = os.path.join(tmp, "pm_p36")
+    _p36d = os.path.join(_r36, "p36dang.xwl")
+    _dump({"title": "p36dang", "children": [                               # 悬空（载体不存在）
+        {"configs": {"itemId": "viewport"}, "type": "viewport", "expanded": False,
+         "children": [_store("st36d", "m?xwl=sub/nope36")]}]}, _p36d)
+    _p36p = os.path.join(_r36, "p36ph.xwl")
+    _dump({"title": "p36ph", "children": [                                 # 显式占位
+        {"configs": {"itemId": "viewport"}, "type": "viewport", "expanded": False,
+         "children": [_store("st36p", "m?xwl=<待定>/querySql")]}]}, _p36p)
+    _rc36d, _o36d = _run(xwl.cmd_params, file=_p36d, module_root=_r36, controls=None,
+                         list_fields=False, upstream=False, strict=True)
+    _rc36p, _o36p = _run(xwl.cmd_params, file=_p36p, module_root=_r36, controls=None,
+                         list_fields=False, upstream=False, strict=True)
+    _rc36n, _o36n = _run(xwl.cmd_params, file=_p36d, module_root=_r36, controls=None,
+                         list_fields=False, upstream=False, strict=False)
+    if _rc36d != 0:
+        p36_fail.append("⑫ `#36`：悬空页 `--strict` rc=%s（应 0：预告不改退出码）" % _rc36d)
+    if not any(l.strip().startswith("[warn]") and "#36" in l for l in _o36d.splitlines()):
+        p36_fail.append("⑫ `#36`：悬空页 `--strict` 未打 `[warn]` 预告\n%s" % _o36d)
+    if _rc36p != 0:
+        p36_fail.append("⑫ `#36`：占位页 `--strict` rc=%s（应 0）" % _rc36p)
+    if not any(l.strip().startswith("[note]") and "#36" in l for l in _o36p.splitlines()):
+        p36_fail.append("⑫ `#36`：占位页 `--strict` 未打 `[note]`（豁免未生效）\n%s" % _o36p)
+    if any(l.strip().startswith("[warn]") and "#36" in l for l in _o36p.splitlines()):
+        p36_fail.append("⑫ `#36`：显式占位被误判红（应只 `[note]`）\n%s" % _o36p)
+    if "#36" in _o36n:
+        p36_fail.append("⑫ `#36`：不给 `--strict` 时仍出现 `#36` 行（默认面被动）\n%s" % _o36n)
+    # `#36`/O3：**最终返回路径**（有 `needed` ⇒ 不走早返分支）也要打 `[warn]` 预告 —— ⑫ 只走早返
+    #   ⇒ 撤最终路径那处 `_emit_36` 无人报红（盲点）。夹具须让 SQL 侧有 `{?名?}`（needed 非空 ⇒ 走最终返回）。
+    _p36f = os.path.join(_r36, "p36final.xwl")
+    _car36 = xwl.skeleton_sql("c36final")
+    _car36["children"][0]["children"][0]["configs"]["sql"] = "select a from t where a={?x?}"
+    _dump(_car36, os.path.join(_r36, "sub", "sel36.xwl"))
+    _dump({"title": "p36final", "children": [
+        {"configs": {"itemId": "viewport"}, "type": "viewport", "expanded": False,
+         "children": [_store("st36v", "m?xwl=sub/sel36"),        # 存在 ⇒ needed 非空 ⇒ 走**最终返回**
+                      _store("st36f", "m?xwl=sub/nope36")]}]}, _p36f)   # 悬空
+    _rc36f, _o36f = _run(xwl.cmd_params, file=_p36f, module_root=_r36, controls=None,
+                         list_fields=False, upstream=False, strict=True)
+    if not any(l.strip().startswith("[warn]") and "#36" in l for l in _o36f.splitlines()):
+        p36_fail.append("⑫ `#36`：**最终返回路径**（有 needed）未打 `[warn]` 预告"
+                        "（撤最终路径那处 `_emit_36` 无人报红 ⇒ 盲点）\n%s" % _o36f)
+    # `#36`/O4：`common/` **框架端点**豁免 ⇒ 不打任何 `#36` 行（改成判 dangling 则本条红）。
+    _p36c = os.path.join(_r36, "p36common.xwl")
+    _dump({"title": "p36common", "children": [
+        {"configs": {"itemId": "viewport"}, "type": "viewport", "expanded": False,
+         "children": [_store("st36c", "m?xwl=common/nope36")]}]}, _p36c)
+    _rc36c, _o36c = _run(xwl.cmd_params, file=_p36c, module_root=_r36, controls=None,
+                         list_fields=False, upstream=False, strict=True)
+    if "#36" in _o36c:
+        p36_fail.append("⑫ `#36`：`common/` 框架端点**未被豁免**（不该出任何 `#36` 行）\n%s" % _o36c)
+    if p36_fail:
+        failures.extend(p36_fail)
+    else:
+        print("[ok]  ⑫ `#36`：`--strict` 下悬空取数 url ⇒ `[warn]` 预告、rc 仍 0（早返 ＋ 最终返回两路径都打）；"
+              "显式占位 ⇒ 只 `[note]`；`common/` 端点 ⇒ 不出 `#36`；不给 `--strict` ⇒ 无 `#36` 行（默认面不动）")
+
 
 # ---- 跨守卫分工表（**原寄居 `_check_docs` 函数体**；#15「减负」时移出，函数体只留指向本常量的指针）----
 #   位置口径：移出函数体是为了给 `_check_docs`（曾实测 1337 行）减负（阈值 `>1300 行` 触发，见 `plan/00 §五·11`）。
@@ -2132,6 +2537,146 @@ def _toc_key(_t):
     _s = re.sub(r"[^\w\s\u4e00-\u9fff-]", "", _s)
     return re.sub(r"[-]", "", _s).replace(" ", "")
 
+
+# ---- #15「有界下沉」续 3：`17j-12`／`17j-13`／`17j-14` 三臂（原寄居 `_check_docs` 函数体）----
+#   起因（按 `17s`，不这么做会漏什么）：`_check_docs` 函数体逼近 1300 行阈值（余量只剩 5、
+#     低于「余量 < 20 先下沉」的设计下限）⇒ 再加任何一条文档守卫都会越阈判红。这三臂编号连续、
+#     自成一段（跨文件节号指针 ＋ 目录顺序 ＋ 围栏输出文案），且只依赖 `docs`／`doc_fail`／
+#     `real_out` 三个入参 ＋ 模块级常量与助手 ⇒ 是"漂移为零"的切法（函数体内只留一行调用）。
+#   ⛔ 不许在函数体内再内联回去（那条路会让余量立刻回到危险区）。
+def _doc_guard_xfile_pt(docs, doc_fail, real_out):
+    """17j-12 跨文件节号指针可解析 ＋ 17j-13 目录顺序一致 ＋ 17j-14 围栏输出文案符实。"""
+    # 17j-12 跨文件节号指针必须指向**真实存在**的小节（③ 引用漂移）。
+    #   起因：文档里「见某 references/*.md 的 §九 / §3.3 / 紧贴文件名的「小节名」」这类指针，
+    #     有**两类一直没人守** —— `第N节`（**中文数字**）与紧贴文件名的「小节名」；而 `§N.M` 由
+    #     另一条引用守卫守、`§N`／`§中文数字` 由本函数另一条「节号」臂守（那两条都不跳围栏）。
+    #     没人守的那两类一旦目标小节被改名 / 搬走 / 删掉，指针就成了**死指针**（指向空气）。
+    #   判据：只看**文件与小节标记落在同一格 / 同一句**的指针（同句 = 按 。；！？ 切、同格 = 按表格 | 切）；
+    #     小节标记 = `§N` / `§N.M` / `§中文数字` / `第N节` / **紧贴文件名**的「小节名」。
+    #     ⚠️ `第N章` **不算** —— 那是 SKILL 自身章号：首页「怎么用」索引表把「第五/六/八/九章」
+    #       与同一行的 references 文件名并列，不加这条会把 SKILL 自己的章号误当成指针目标（实测误报 3–4 条）。
+    #   围栏内也纳入（不再跳过代码围栏块）：代码围栏块里同样会写跨文件指针（示例命令、片段引用）。
+    #     ⚠️ 前提如实化（两树对照实测）：`§N.M` 由另一条引用守卫守、`§N`／`§中文数字` 由本函数「节号」臂守
+    #       （两条都与围栏无关）⇒ 本臂的**净增只有两处**：`第N节`（**只认中文数字**，阿拉伯写法不触发）
+    #       与紧贴文件名的「小节名」。实测（副本对照跑）围栏内指针误报面为 0 ⇒ 直接纳入、**不加任何豁免**。
+    #     ⚠️ 别照搬「围栏块输出文案符实」那条守卫的 `[:16]` 前缀法 —— 那条判「文案前缀在源码里存在」，
+    #       本守卫判「节号存在性」，不是同一个面。
+    #   现状全绿（**含围栏内指针在内**全部解析）⇒ 纯**防回归**。
+    #   ⚠️ **围栏四面分工表**（四条与「围栏」沾边的守卫，互不替代；改任一条先核那张表）
+    #     已**移出函数体**（#15 减负）⇒ 见模块级常量 `_FENCE_FOUR_ARM_DIVISION`（本文件 `_check_docs` 之前）。
+    _pt_base = {k.split("/")[-1]: k for k in docs}
+    for _nm, _ls in docs.items():
+        if _nm == "CHANGELOG.md":
+            continue
+        for _i, _l in enumerate(_ls, 1):
+            _segs = _l.split("|") if _l.strip().startswith("|") else re.split(r"[。；！？]", _l)
+            for _seg in _segs:
+                _fils = [(_m.start(), _m.end(), _m.group(1))
+                         for _m in _pt_file.finditer(_seg) if _m.group(1) in _pt_base]
+                if not _fils:
+                    continue
+                _dsg = []
+                for _m in _pt_num.finditer(_seg):
+                    _dsg.append((_m.start(), _m.end(), "num", _m.group(1)))
+                for _m in _pt_cn.finditer(_seg):
+                    _dsg.append((_m.start(), _m.end(), "cn", _m.group(1)))
+                for _m in _pt_jie.finditer(_seg):
+                    _dsg.append((_m.start(), _m.end(), "cn", _m.group(1)))
+                for _ds, _de, _kind, _tok in _dsg:
+                    _fx = min(_fils, key=lambda _f: min(abs(_ds - _f[1]), abs(_f[0] - _de)))
+                    _tg = _pt_base[_fx[2]]
+                    _hs = _pt_heads(docs[_tg])
+                    if _kind == "num":
+                        _hit = re.search(r"^#{1,6}\s*" + re.escape(_tok) + r"(?:[.\s、）)]|$)", _hs, re.M)
+                        _sy = "§"
+                    else:
+                        _hit = re.search(r"^#{1,6}\s*" + re.escape(_tok) + r"(?:[、.\s]|$)", _hs, re.M)
+                        _sy = "§"
+                    if not _hit:
+                        doc_fail.append("17j-12 %s:%d 跨文件指针「%s %s%s」在目标文件 %s 里没有对应小节"
+                                        "（按标题文本匹配，不许按行号）" % (_nm, _i, _fx[2], _sy, _tok, _fx[2]))
+            # 紧贴文件名的「小节名」指针：整行扫描（句读会把「…？」里的标题切断，故不按句切）
+            for _fm in _pt_file.finditer(_l):
+                if _fm.group(1) not in _pt_base:
+                    continue
+                _tm = _pt_tail.match(_l[_fm.end():])
+                if _tm and _pt_norm(_tm.group(1)) not in _pt_norm("\n".join(docs[_pt_base[_fm.group(1)]])):
+                    doc_fail.append("17j-12 %s:%d 跨文件指针「%s「%s」」在目标文件 %s 里找不到"
+                                    % (_nm, _i, _fm.group(1), _tm.group(1)[:20], _fm.group(1)))
+
+    # 17j-13 结构顺序（④）：目录条目顺序与实际小节顺序一致。
+    #   ⚠️「标题不跳级」由 17h 按同一判据守，此处不再重复（曾作冗余双保险，会让**一处缺陷报两行**）。
+    #   目录：带 `## 目录` 的文件，TOC 条目（`- [label](#anchor)`）必须**逐个**对得上正文小节
+    #     （锚点按标题 slug **前缀**匹配 —— 标签可缩写），且顺序与正文出现顺序**单调一致**。
+    #   现状全绿（7 个带目录文件 52 条目录项全部解析且单调）⇒ 纯**防回归**。
+    #     起因：章节被搬动后，目录条目顺序若与正文不一致，读者按目录跳会到错处；此臂只作防回归（现状全绿）。
+    for _nm, _ls in docs.items():
+        _ti = next((_k for _k, _l in enumerate(_ls) if re.match(r"^##\s*目录\s*$", _l)), None)
+        if _ti is None:
+            continue
+        _j = _ti + 1
+        _toc = []
+        while _j < len(_ls) and not re.match(r"^#", _ls[_j]):
+            if _ls[_j].strip():
+                _toc.append(_ls[_j])
+            _j += 1
+        _body = [_toc_key(_hm.group(1)) for _hm in
+                 (re.match(r"^#{1,6}\s*(.+?)\s*$", _x) for _x in _ls[_j:]) if _hm]
+        _idxs = []
+        for _t in _toc:
+            _m = _toc_link(_t)
+            if not _m:
+                continue
+            _anch = _toc_key(_m.group(2))
+            _cand = [_bi for _bi, _s in enumerate(_body) if _s.startswith(_anch)]
+            if not _cand:
+                doc_fail.append("17j-13 %s 目录条目「%s」的锚点 #%s 在正文找不到对应小节"
+                                % (_nm, _m.group(1)[:24], _m.group(2)[:40]))
+            else:
+                _idxs.append(_cand[0])
+        if any(_idxs[_z] >= _idxs[_z + 1] for _z in range(len(_idxs) - 1)):
+            doc_fail.append("17j-13 %s 目录条目顺序与正文小节顺序不一致" % _nm)
+
+    # 17j-14 把 17j-6 扩到**围栏块**：围栏里以 `[note]/[warn]/[FAIL]/[ok]` 开头的**示例输出**，
+    #   其文案前缀也必须在工具**真跑出来的输出**里找得到（oracle 同 17j-6：来自 `_real_out_corpus()`）。
+    #   扫描面 = `docs` 的围栏块（**含** 11 份正文 md，**不含 `CHANGELOG.md`** —— 它是历史记录，
+    #     按写入时的事实记，与全族其它臂的"历史豁免"口径一致；**也不含 `examples/README.md`**）。
+    #     ⚠️ **跳 `CHANGELOG.md`**：本臂若**无**该跳过 ⇒ CHANGELOG 的历史围栏输出会按**当前** `xwl.py`
+    #       校验（历史文案早于现实现的即被误判）。现围栏内标签行实测为 0 ⇒ 属**潜伏误报源**，非现网红。
+    #     ⚠️ 不纳入 `examples/README.md` 是**有意**的：该文件里有**运行期 f-string 拼出来**的示意输出
+    #       （模板形如 `（{why}）—— {stat}`、在 `xwl.py` 一带），其**前缀在真实输出里也拼不出来** ⇒
+    #       纳入会**误报**（QA 实测：那一行在真跑语料里找不到、而同文件别的 tag 行找得到）。
+    #   起因：17j-6 只扫 SKILL 的**行内反引号**、且不扫 faq.md ⇒ 写在 ``` 块里的输出文案对它
+    #     **零覆盖**（绿但空）⇒ 本臂补上"围栏块"这一面。
+    #   误报控制：围栏示例可能是**示意**（占位符 `<path>` / `…` / `%s` / `%d`）⇒ 含这类占位符的行
+    #     **跳过**（不判），避免把"示例"当成"承诺文案"。实测：3 条围栏输出行，1 条含占位符被跳过、
+    #     2 条被检查且都在真实输出里 ⇒ 全绿（这档 = 加白名单）。
+    #   ⚠️ 边界：本臂用**前缀匹配**（`_nf[:16]`），**验不了运行期拼接**出来的文案 —— 拼接结果在真跑
+    #     语料里没有字面前缀，所以这类**不是漏扫、是扫了会错**（故排除）。
+    for _nm, _ls in docs.items():
+        if _nm == "CHANGELOG.md":       # 历史记录：按写入时的事实记，不按当前 xwl.py 校验
+            continue
+        _fence = 0
+        for _i, _l in enumerate(_ls, 1):
+            if _l.strip().startswith("```"):
+                _fence += 1
+                continue
+            if _fence % 2 == 0:
+                continue
+            _st = _l.strip()
+            _tag = next((_t for _t in ("[note]", "[warn]", "[FAIL]", "[ok]") if _st.startswith(_t)), None)
+            if not _tag:
+                continue
+            _body2 = _st[len(_tag):].strip()
+            if _fence_ph.search(_body2):
+                continue
+            _nf = re.sub(r"\s+", "", _body2)
+            if len(_nf) < 8:
+                continue
+            if _nf[:16] not in real_out:
+                doc_fail.append("17j-14 %s:%d 围栏块输出文案 `%s…` 在工具的**真实输出**里找不到"
+                                "（若确为工具会打印的新文案，请在 `_real_out_corpus()` 里补一次真实调用）"
+                                % (_nm, _i, (_tag + _body2)[:34]))
 
 
 def _q_scan(_lines):
@@ -2992,142 +3537,10 @@ def _check_docs(tmp, node, failures, write) -> None:
                                 "（若确为工具会打印的新文案，请在 `_real_out_corpus()` 里补一次真实调用）"
                                 % (_i, (_m.group(1) + _body)[:34]))
 
-    # 17j-12 跨文件节号指针必须指向**真实存在**的小节（③ 引用漂移）。
-    #   起因：文档里「见某 references/*.md 的 §九 / §3.3 / 紧贴文件名的「小节名」」这类指针，
-    #     有**两类一直没人守** —— `第N节`（**中文数字**）与紧贴文件名的「小节名」；而 `§N.M` 由
-    #     另一条引用守卫守、`§N`／`§中文数字` 由本函数另一条「节号」臂守（那两条都不跳围栏）。
-    #     没人守的那两类一旦目标小节被改名 / 搬走 / 删掉，指针就成了**死指针**（指向空气）。
-    #   判据：只看**文件与小节标记落在同一格 / 同一句**的指针（同句 = 按 。；！？ 切、同格 = 按表格 | 切）；
-    #     小节标记 = `§N` / `§N.M` / `§中文数字` / `第N节` / **紧贴文件名**的「小节名」。
-    #     ⚠️ `第N章` **不算** —— 那是 SKILL 自身章号：首页「怎么用」索引表把「第五/六/八/九章」
-    #       与同一行的 references 文件名并列，不加这条会把 SKILL 自己的章号误当成指针目标（实测误报 3–4 条）。
-    #   围栏内也纳入（不再跳过代码围栏块）：代码围栏块里同样会写跨文件指针（示例命令、片段引用）。
-    #     ⚠️ 前提如实化（两树对照实测）：`§N.M` 由另一条引用守卫守、`§N`／`§中文数字` 由本函数「节号」臂守
-    #       （两条都与围栏无关）⇒ 本臂的**净增只有两处**：`第N节`（**只认中文数字**，阿拉伯写法不触发）
-    #       与紧贴文件名的「小节名」。实测（副本对照跑）围栏内指针误报面为 0 ⇒ 直接纳入、**不加任何豁免**。
-    #     ⚠️ 别照搬「围栏块输出文案符实」那条守卫的 `[:16]` 前缀法 —— 那条判「文案前缀在源码里存在」，
-    #       本守卫判「节号存在性」，不是同一个面。
-    #   现状全绿（**含围栏内指针在内**全部解析）⇒ 纯**防回归**。
-    #   ⚠️ **围栏四面分工表**（四条与「围栏」沾边的守卫，互不替代；改任一条先核那张表）
-    #     已**移出函数体**（#15 减负）⇒ 见模块级常量 `_FENCE_FOUR_ARM_DIVISION`（本文件 `_check_docs` 之前）。
-    # 有界下沉：正则组（`_pt_file` / `_pt_num` / `_pt_cn` / `_pt_jie` / `_pt_tail`）已移出函数体 ⇒ 见模块级同名常量。
-    _pt_base = {k.split("/")[-1]: k for k in docs}
-
-    # 有界下沉：`_pt_heads` / `_pt_norm`（纯助手）已移出函数体 ⇒ 见模块级同名函数。
-    for _nm, _ls in docs.items():
-        if _nm == "CHANGELOG.md":
-            continue
-        for _i, _l in enumerate(_ls, 1):
-            _segs = _l.split("|") if _l.strip().startswith("|") else re.split(r"[。；！？]", _l)
-            for _seg in _segs:
-                _fils = [(_m.start(), _m.end(), _m.group(1))
-                         for _m in _pt_file.finditer(_seg) if _m.group(1) in _pt_base]
-                if not _fils:
-                    continue
-                _dsg = []
-                for _m in _pt_num.finditer(_seg):
-                    _dsg.append((_m.start(), _m.end(), "num", _m.group(1)))
-                for _m in _pt_cn.finditer(_seg):
-                    _dsg.append((_m.start(), _m.end(), "cn", _m.group(1)))
-                for _m in _pt_jie.finditer(_seg):
-                    _dsg.append((_m.start(), _m.end(), "cn", _m.group(1)))
-                for _ds, _de, _kind, _tok in _dsg:
-                    _fx = min(_fils, key=lambda _f: min(abs(_ds - _f[1]), abs(_f[0] - _de)))
-                    _tg = _pt_base[_fx[2]]
-                    _hs = _pt_heads(docs[_tg])
-                    if _kind == "num":
-                        _hit = re.search(r"^#{1,6}\s*" + re.escape(_tok) + r"(?:[.\s、）)]|$)", _hs, re.M)
-                        _sy = "§"
-                    else:
-                        _hit = re.search(r"^#{1,6}\s*" + re.escape(_tok) + r"(?:[、.\s]|$)", _hs, re.M)
-                        _sy = "§"
-                    if not _hit:
-                        doc_fail.append("17j-12 %s:%d 跨文件指针「%s %s%s」在目标文件 %s 里没有对应小节"
-                                        "（按标题文本匹配，不许按行号）" % (_nm, _i, _fx[2], _sy, _tok, _fx[2]))
-            # 紧贴文件名的「小节名」指针：整行扫描（句读会把「…？」里的标题切断，故不按句切）
-            for _fm in _pt_file.finditer(_l):
-                if _fm.group(1) not in _pt_base:
-                    continue
-                _tm = _pt_tail.match(_l[_fm.end():])
-                if _tm and _pt_norm(_tm.group(1)) not in _pt_norm("\n".join(docs[_pt_base[_fm.group(1)]])):
-                    doc_fail.append("17j-12 %s:%d 跨文件指针「%s「%s」」在目标文件 %s 里找不到"
-                                    % (_nm, _i, _fm.group(1), _tm.group(1)[:20], _fm.group(1)))
-
-    # 17j-13 结构顺序（④）：目录条目顺序与实际小节顺序一致。
-    #   ⚠️「标题不跳级」由 17h 按同一判据守，此处不再重复（曾作冗余双保险，会让**一处缺陷报两行**）。
-    #   目录：带 `## 目录` 的文件，TOC 条目（`- [label](#anchor)`）必须**逐个**对得上正文小节
-    #     （锚点按标题 slug **前缀**匹配 —— 标签可缩写），且顺序与正文出现顺序**单调一致**。
-    #   现状全绿（7 个带目录文件 52 条目录项全部解析且单调）⇒ 纯**防回归**。
-    #     起因：章节被搬动后，目录条目顺序若与正文不一致，读者按目录跳会到错处；此臂只作防回归（现状全绿）。
-
-    # 有界下沉：`_toc_link` / `_toc_key`（纯助手）已移出函数体 ⇒ 见模块级同名函数。
-    for _nm, _ls in docs.items():
-        _ti = next((_k for _k, _l in enumerate(_ls) if re.match(r"^##\s*目录\s*$", _l)), None)
-        if _ti is None:
-            continue
-        _j = _ti + 1
-        _toc = []
-        while _j < len(_ls) and not re.match(r"^#", _ls[_j]):
-            if _ls[_j].strip():
-                _toc.append(_ls[_j])
-            _j += 1
-        _body = [_toc_key(_hm.group(1)) for _hm in
-                 (re.match(r"^#{1,6}\s*(.+?)\s*$", _x) for _x in _ls[_j:]) if _hm]
-        _idxs = []
-        for _t in _toc:
-            _m = _toc_link(_t)
-            if not _m:
-                continue
-            _anch = _toc_key(_m.group(2))
-            _cand = [_bi for _bi, _s in enumerate(_body) if _s.startswith(_anch)]
-            if not _cand:
-                doc_fail.append("17j-13 %s 目录条目「%s」的锚点 #%s 在正文找不到对应小节"
-                                % (_nm, _m.group(1)[:24], _m.group(2)[:40]))
-            else:
-                _idxs.append(_cand[0])
-        if any(_idxs[_z] >= _idxs[_z + 1] for _z in range(len(_idxs) - 1)):
-            doc_fail.append("17j-13 %s 目录条目顺序与正文小节顺序不一致" % _nm)
-
-    # 17j-14 把 17j-6 扩到**围栏块**：围栏里以 `[note]/[warn]/[FAIL]/[ok]` 开头的**示例输出**，
-    #   其文案前缀也必须在工具**真跑出来的输出**里找得到（oracle 同 17j-6：来自 `_real_out_corpus()`）。
-    #   扫描面 = `docs` 的围栏块（**含** 11 份正文 md，**不含 `CHANGELOG.md`** —— 它是历史记录，
-    #     按写入时的事实记，与全族其它臂的"历史豁免"口径一致；**也不含 `examples/README.md`**）。
-    #     ⚠️ **跳 `CHANGELOG.md`**：本臂若**无**该跳过 ⇒ CHANGELOG 的历史围栏输出会按**当前** `xwl.py`
-    #       校验（历史文案早于现实现的即被误判）。现围栏内标签行实测为 0 ⇒ 属**潜伏误报源**，非现网红。
-    #     ⚠️ 不纳入 `examples/README.md` 是**有意**的：该文件里有**运行期 f-string 拼出来**的示意输出
-    #       （模板形如 `（{why}）—— {stat}`、在 `xwl.py` 一带），其**前缀在真实输出里也拼不出来** ⇒
-    #       纳入会**误报**（QA 实测：那一行在真跑语料里找不到、而同文件别的 tag 行找得到）。
-    #   起因：17j-6 只扫 SKILL 的**行内反引号**、且不扫 faq.md ⇒ 写在 ``` 块里的输出文案对它
-    #     **零覆盖**（绿但空）⇒ 本臂补上"围栏块"这一面。
-    #   误报控制：围栏示例可能是**示意**（占位符 `<path>` / `…` / `%s` / `%d`）⇒ 含这类占位符的行
-    #     **跳过**（不判），避免把"示例"当成"承诺文案"。实测：3 条围栏输出行，1 条含占位符被跳过、
-    #     2 条被检查且都在真实输出里 ⇒ 全绿（这档 = 加白名单）。
-    #   ⚠️ 边界：本臂用**前缀匹配**（`_nf[:16]`），**验不了运行期拼接**出来的文案 —— 拼接结果在真跑
-    #     语料里没有字面前缀，所以这类**不是漏扫、是扫了会错**（故排除）。
-    for _nm, _ls in docs.items():
-        if _nm == "CHANGELOG.md":       # 历史记录：按写入时的事实记，不按当前 xwl.py 校验
-            continue
-        _fence = 0
-        for _i, _l in enumerate(_ls, 1):
-            if _l.strip().startswith("```"):
-                _fence += 1
-                continue
-            if _fence % 2 == 0:
-                continue
-            _st = _l.strip()
-            _tag = next((_t for _t in ("[note]", "[warn]", "[FAIL]", "[ok]") if _st.startswith(_t)), None)
-            if not _tag:
-                continue
-            _body2 = _st[len(_tag):].strip()
-            if _fence_ph.search(_body2):
-                continue
-            _nf = re.sub(r"\s+", "", _body2)
-            if len(_nf) < 8:
-                continue
-            if _nf[:16] not in _real_out:
-                doc_fail.append("17j-14 %s:%d 围栏块输出文案 `%s…` 在工具的**真实输出**里找不到"
-                                "（若确为工具会打印的新文案，请在 `_real_out_corpus()` 里补一次真实调用）"
-                                % (_nm, _i, (_tag + _body2)[:34]))
+    # 跨文件节号指针／目录顺序／围栏输出文案三臂**已移出函数体**（#15 有界下沉）——
+    #   函数体逼近 1300 行阈值（余量只剩 5、低于设计下限 20）⇒ 三臂编号连续、自成一段，
+    #   只依赖 `docs`／`doc_fail`／`_real_out` 三个入参 ⇒ 是「漂移为零」的切法。见模块级同名函数。
+    _doc_guard_xfile_pt(docs, doc_fail, _real_out)
 
     # 17l 编年纪律（三条臂）：非编年文件里不得出现"哪天 / 哪一版发生过什么"。
     #     分工与豁免面的完整说明在 `references/workflow-notes.md` 第一节 —— 改词表或豁免面前先读它。

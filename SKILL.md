@@ -412,7 +412,7 @@ python scripts/xwl.py diffguard <改过的文件或目录> --strict    # CI / pr
 | `diffguard` | **相对 git 基线**检测「多行内容被压平」 |
 | `itemids` | 注册键重名报告 + 建议改名（只读） |
 | `paths` | 列出 `sql` / `totalSql` / `serverScript` / `url` 四类字段的位置 |
-| `params` | 核对「页面 → store → SQL」传参链路（缺来源**默认只告警**、`--strict` 才判失败；`--upstream` 追加「谁在调用本页」的上游扫描） |
+| `params` | 核对「页面 → store → SQL」传参链路（缺来源**默认只告警**、`--strict` 才判失败；`--upstream` 追加「谁在调用本页 / 谁引用本载体」的上游扫描） |
 | `sqlrefs` | 校验 `{#名字#}` ↔ `serverScript` 是否自洽 |
 | `folders` | `folder.json`（设计器导航树索引）一致性检查 / 登记 |
 | `schema` | 查设计器控件注册表（合法 `configs` / `events` / 骨架） |
@@ -511,7 +511,7 @@ python scripts/xwl.py diffguard <改过的文件或目录> --strict    # CI / pr
 
 > 其余全部展开在 [`references/sql-fragments.md`](references/sql-fragments.md)：三条最易错规则、serverScript 的源码硬规则与常用 API、三种占位符（`{#sys.*#}` / `{#任意名#}` / `{?名字?}`）、`out` / `params` 两条通路（含同名谁赢、命名契约），以及 `paths` / `sqlrefs` / `params` 三个检查工具。
 
-**`params --upstream`（可选能力，默认关）**：核对「**谁在调用本页**」—— 在 `--module-root` 内**单根全扫**一遍，
+**`params --upstream`（可选能力，默认关）**：核对「**谁在调用本页**」（目标为 **SQL 载体**时文案分场景为「**谁引用本载体**」）—— 在 `--module-root` 内**单根全扫**一遍，
 末尾加独立分组 `[外部可传入]`（各上游调用方与传入键），再给一行**载入侧汇总**（节点级「同根命中 / 本根未找到 / 非 m?xwl 的 url」＋
 出现级「动态写法 / 非 `m?xwl` 字面量」；**两种量纲分开标**；节点级三数**之和 = 本页 store.url 数**）。**默认关 ⇒ 零成本**（不开时**不出现**这两段；**唯一例外**见 §4.2 的留痕规则 —— 缺来源时本就有一行 `[note]` 预告）；
 开了才单根全扫一遍（≈5 秒量级）。它只认 `params: {名:值}` **字面量键**，`out: app.<容器>` 与运行时拼接的 url **只计数**；
