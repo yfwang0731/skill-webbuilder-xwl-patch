@@ -2,7 +2,7 @@
 name: webbuilder-xwl-patch
 slug: skill-webbuilder-xwl-patch
 displayName: webbuilder-xwl-patch
-version: 1.6.1
+version: 1.6.2
 license: MIT
 metadata:
   category: development-tools
@@ -281,7 +281,7 @@ python scripts/xwl.py new wb/modules/<模块>/xxxSql/queryXxx.xwl --kind sql --t
 
 `ops.json` 是操作数组，`path` 是「键 / 数组下标」的列表。**节点请用设计器的标准形态**（见 [`references/controls.md`](references/controls.md) §4.2 典型骨架）：
 
-> `ops.json` 的四种 op（`set` / `insert` / `append` / `delete`）示例见 `xwl.py patch --help`（`epilog`）。
+> `ops.json` 的五种 op（`set` / `insertKey` / `insert` / `append` / `delete`）示例见 `xwl.py patch --help`（`epilog`）。
 
 > `path` 里对象键的 `@itemId` 写法与**不猜顺序**的三种出路（`@名字#N`、串联 `@`）见 `xwl.py patch --help`；重名处置见第七章。
 
@@ -312,7 +312,7 @@ python scripts/xwl.py new wb/modules/<模块>/xxxSql/queryXxx.xwl --kind sql --t
    必须手写下标时，先用 `dump` 确认那一层**确实有**那个元素。
    > `paths` 的「原路径」**已经带 `configs` 一层**（`["children",0,"configs","serverScript"]`），照抄即可。
    > 手写时**别漏这一层** —— 漏了 `patch` **不会报错**，而是把字段写到节点根上（静默语义损坏，`check` 不拦）。
-2. 写 `ops.json`（`set` / `insert` / `append` / `delete`）。
+2. 写 `ops.json`（`set` / `insertKey` / `insert` / `append` / `delete`）。
 3. **`--dry-run` 是硬闸门，不是建议** —— **没看过 diff 就不许真跑**。
    工具**不会**替你拦这一步（它没法知道你脑子里确认过没有），所以这条靠自律；
    `--backup` 是**兜底**，不是"跳过 dry-run 的理由"。
@@ -511,7 +511,7 @@ python scripts/xwl.py diffguard <改过的文件或目录> --strict    # CI / pr
 
 > 其余全部展开在 [`references/sql-fragments.md`](references/sql-fragments.md)：三条最易错规则、serverScript 的源码硬规则与常用 API、三种占位符（`{#sys.*#}` / `{#任意名#}` / `{?名字?}`）、`out` / `params` 两条通路（含同名谁赢、命名契约），以及 `paths` / `sqlrefs` / `params` 三个检查工具。
 
-**`params --upstream`（可选能力，默认关）**：核对「**谁在调用本页**」（目标为 **SQL 载体**时文案分场景为「**谁引用本载体**」）—— 在 `--module-root` 内**单根全扫**一遍，
+**`params --upstream`（可选能力，默认关）**：核对「**谁在调用本页**」（目标为 **SQL 载体**时**段头为** `=== [引用本载体的页面] ===`）—— 在 `--module-root` 内**单根全扫**一遍，
 末尾加独立分组 `[外部可传入]`（各上游调用方与传入键），再给一行**载入侧汇总**（节点级「同根命中 / 本根未找到 / 非 m?xwl 的 url」＋
 出现级「动态写法 / 非 `m?xwl` 字面量」；**两种量纲分开标**；节点级三数**之和 = 本页 store.url 数**）。**默认关 ⇒ 零成本**（不开时**不出现**这两段；**唯一例外**见 §4.2 的留痕规则 —— 缺来源时本就有一行 `[note]` 预告）；
 开了才单根全扫一遍（≈5 秒量级）。它只认 `params: {名:值}` **字面量键**，`out: app.<容器>` 与运行时拼接的 url **只计数**；

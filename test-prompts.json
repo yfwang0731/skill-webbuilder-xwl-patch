@@ -83,5 +83,30 @@
     "id": 17,
     "prompt": "我在 CI 里用 xwl.py params 核对页面传参，预期缺来源时返回非零退出码让流水线失败，可现在它返回 0 了，是不是坏了？",
     "expected": "不应答成坏了。`params` 缺来源**默认只告警（rc=0）**，要让它阻塞须显式加**逃生开关 `--strict`**（rc=1）—— 与 `diffguard --strict` 同名同义。所以 CI 里应显式加 `--strict`（如 `xwl.py params <页面> --strict`，令其缺来源即返回非零）：缺来源的判定本身没变，只是**默认退出码翻到了宽松侧**。同时说明缺来源时输出末尾会多一行 `[note]` 留痕（不加 `--strict` 时提示怎么改成阻塞、加了则提示已按失败处理）；这条翻转是**有意**的（默认放宽、收紧靠显式开关），不是静默失效。另注意 `--strict` 只影响退出码、不改输出里的逐条比对结果。"
+  },
+  {
+    "id": 18,
+    "prompt": "我有一份从设计器导出的 controls.json，想让 xwl.py check 顺手核一下页面里各控件节点的 configs 键对不对（有没有用这个控件类型不认的键）。它支持吗？",
+    "expected": "用 `xwl.py check <file> --controls <controls.json>`（⚠️ **必须显式给 `--controls`**，缺省不跑、也不自动找注册表）：此时**另校两件事** —— ⑨ `configs` 键合法性（按 controls.json 逐键核对该控件类型认得的键，违规打 `[warn]`、**不进退出码**）＋ ⑥ 扩到 `configs` 里标 `[js]` 的键（renderer/validator/handler…，提取后交 node --check，语法错打 `[FAIL]`、**进退出码**）。⚠️ 不给 `--controls` 时输出与判定**逐字节不变**，且这两项**不计入** check 原有八项（check 的稳定面仍是八项，`--controls` 是可选附加面）。"
+  },
+  {
+    "id": 19,
+    "prompt": "我想把 xwl.py schema 的输出喂给脚本消费、而不是去解析给人看的表格；另外还想统计某个控件类型在实际工程里用过哪些 configs 键、和注册表差多少。有机器可读的输出吗？",
+    "expected": "有。用 `xwl.py schema <type> --controls <controls.json> --json` 出**机器可读**形态（单个对象给对象、`schema --list --controls <controls.json> --json` 给数组），别用正则去抠人看的表格；另用 `schema <type> --controls <controls.json> --observed [ROOT]` 统计该控件类型在**语料里实测用过的 `configs` 键 ＋ 频次**（＝含该键的节点数），并与注册表**给差集**。要点：① ⚠️ **`schema` 的 `--controls` 是必填参数**（与 `check` 的可选不同！缺了报 `error: the following arguments are required: --controls`、rc=2）⇒ 上面三条命令都要带；② `--json` 与 `--observed` **同用**时输出含实测段；③ `--json` 与 `--tree` **不能同用**；④ `--observed` 默认扫 `<工程>/wb/modules/**/*.xwl`（大仓会慢，用 ROOT 限定范围）、针对**一个**控件类型、不与 `--list`/`--tree` 同用。"
+  },
+  {
+    "id": 20,
+    "prompt": "我要把一个新键插到某个已存在对象的**中间**位置（比如把 configs 的 itemId 插到 hidden 前面），set 只能补在末尾，有办法定位插吗？",
+    "expected": "用 `xwl.py patch` 的 `insertKey` op：把对象键**插到指定位置**（`before` / `after` / `index` 三选一，缺省末尾）—— 键已存在则改值并移到该位置，键不存在则建在该位置；这是补 `set`（`set` + `create` 只能把新建键放**路径末端**）的缺口。⚠️ `insertKey` 的**新建键自授权**（op 名即已声明意图、无 `create` 闸门），但**必须可见**：新建的键以一行 `[note]` 列出。⚠️ 拼块（多条 `insertKey`）用 `before:<固定兄弟>`（正序）或 `index` 递增；**别**共用 `after:` / 同一 `index`（会逆序）。⚠️ 它是**对象键**操作，与 `insert` / `append` / `delete`（**数组元素**）是两回事 —— `\"create\"` 只用于 `set`、用到 `insertKey` 等上属**用法错误**（rc=2）。照例先 `--dry-run` 看 diff 再落盘。"
+  },
+  {
+    "id": 21,
+    "prompt": "我页面里有个 store 的 url 指向了一个根本不存在（或者名字写错）的 xwl 文件，可 check 是全绿的、params 也没报，是不是工具漏了？",
+    "expected": "先说清这是**能力边界 ＋ 预告阶段**，不是漏。**完整命令**：`xwl.py params <页面.xwl> --module-root <工程>/wb/modules --strict`（`--module-root` 缺省从文件位置向上找）。取数链（`store.url` 指向不存在的文件）当前在 `params --strict` 下**先 `[warn]` 预告**（悬空取数 url 打 `[warn]`、**`rc` 仍 0**；早返与最终返回两条路径都打）；**显式占位**（`<…>` 形如 `<容器>`、或含 `__MODULE__`）只 `[note]` 豁免、不判悬空。⚠️ **不给 `--strict` 时不出这些 `#36` 行**（默认面不动）。⚠️ 能力边界：url 含 `__MODULE__` 时即便**真悬空**也按显式占位**豁免**为 `[note]` ⇒ 那类工程里真悬空**不出 `[warn]`**。⚠️ 这是**预告**性质：**下个版本将收紧为失败**。而 `check` 不判悬空取数 url，属它八项之外的既有边界 —— 两面都别指望一条命令全覆盖。"
+  },
+  {
+    "id": 22,
+    "prompt": "我要改一个被好几个页面用 store.url 引用的 SQL 载体文件，改之前想先知道到底有哪些页面在引用它、别改坏别人。能查引用方吗？",
+    "expected": "用 `xwl.py params <SQL 载体文件> --upstream` 反查引用方：当 `--upstream` 的目标是 **SQL 载体**时，段头文案**分场景**为 **`=== [引用本载体的页面] ===`** 并列出引用它的页面（目标为**页面**时段头为 **`=== [外部可传入] ===`**）。⚠️ 判据是**结构级**的：载体 ＝ **根 `module` 直接托 `dataprovider`、且不含 `store`/`grid`** —— 页面即便内嵌网格，其 `dataprovider` 也挂在**网格子树**里、**不是**根 `module` 的直接子，故不会被误判成载体。`--upstream` **默认关**（不开时不出这两段、零成本），只认 `params: {名: 值}` **字面量键**，`out: app.<容器>` 与运行时拼接的 url **只计数**、不改退出码。"
   }
 ]

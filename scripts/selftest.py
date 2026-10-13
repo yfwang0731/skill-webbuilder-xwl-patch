@@ -186,6 +186,11 @@ def _run_cli_env(argv: list, env_extra: dict) -> tuple:
 #   否则永远为红（不是 #71 的病灶）。只替换该名本身，不碰其前后内容。
 _TMP_EV_RE = re.compile(r"xwl_ev_[A-Za-z0-9_]+\.js")
 
+#: `#77` 的 **op 权威清单**（**含顺序**）—— `patch` 的 5 处 op 清单（`patch` epilog ／ `--ops` help ／
+#:   `README.md` ／ `SKILL.md`×2 ／ `references/sql-fragments.md`）都须与它**逐处**一致。
+#:   写死在此 ＝ 把「**与事实相符**」独立于「**两侧互恰**」（后者两侧同改仍绿 ⇒ 抓不到）。
+_OPS_AUTH = ["set", "insertKey", "insert", "append", "delete"]
+
 
 def _cli_text(out: str, err: str) -> str:
     """把 stdout 与「非空 stderr」拼成**断言文案**用文本（stderr 明确标注，免与 stdout 混淆）。"""
@@ -245,7 +250,13 @@ def _check_basics(tmp, node, failures, write) -> None:
         ("反斜杠+空格", VALID.replace(";\\" + CRLF, ";\\  " + CRLF, 1), "反斜杠+空白", False),
         ("JSON破坏", VALID.replace("]", "", 1), "加载器等价解析失败", False),
         ("带BOM", VALID, "BOM", True),
-        ("末行带续行符", VALID[:-2] + "\\", "末行", False),
+        # ⚠️ 关键词**不能用 `末行`** —— `check` 输出首行含**文件名** `bad_末行带续行符….xwl`，
+        #   用它当关键词会恒真（旧用例即此弊、形同虚设）⇒ 改钉 ⑤ 自己的句子。
+        ("末行带续行符", VALID[:-2] + "\\", "末行以反斜杠结尾", False),
+        # `#79`：**同内容、末尾带换行** ⇒ ⑤ 也必须判到（原来 `lines[-1] == ""` 把真末行遮掉 ⇒ 漏判）。
+        ("末行带续行符+换行", VALID[:-2] + "\\" + CRLF, "末行以反斜杠结尾", False),
+        # `#79`：**末尾还有空行**（≥1 层）也必须判到 —— 「只剥一层」的旧修法对 +1/+2 尾空行漏判。
+        ("末行带续行符+尾空行", VALID[:-2] + "\\" + CRLF + CRLF, "末行以反斜杠结尾", False),
     ]
     for name, text, keyword, bom in cases:
         p = write(f"bad_{name}.xwl", text, bom=bom)
@@ -1221,10 +1232,30 @@ def _check_subcommands(tmp, node, failures, write) -> None:
     code, out = _run(xwl.cmd_folders, path=fd, register=None, dry_run=False)
     if "悬空" not in out:
         fl_fail.append("folders 未检出 index 悬空项: %s" % out)
+    # `#57`：建议行须按「目录有没有 folder.json」分岔 —— 缺 folder.json 时**不得**直接建议
+    #   `--register`（该建议必 rc=2）⇒ 改提示"先在设计器里建这个目录/补 folder.json"；有则照旧。
+    fdn = os.path.join(tmp, "folder_nofj")
+    os.makedirs(fdn, exist_ok=True)
+    with open(os.path.join(fdn, "c.xwl"), "w", encoding="utf-8", newline="") as f:
+        f.write('{"hidden":false,"children":[],"roles":{},"title":"t","iconCls":""}')
+    code, out = _run(xwl.cmd_folders, path=os.path.join(fdn, "c.xwl"), register=None, dry_run=False)
+    if "还没有 folder.json" not in out:
+        fl_fail.append("`#57`：缺 folder.json 时未给「先建 folder.json」提示: %s" % out)
+    if "登记：xwl.py folders" in out:
+        fl_fail.append("`#57`：缺 folder.json 时仍直接建议 `--register`（必 rc=2）: %s" % out)
+    fdy = os.path.join(tmp, "folder_yesfj")
+    os.makedirs(fdy, exist_ok=True)
+    with open(os.path.join(fdy, "folder.json"), "w", encoding="utf-8", newline="") as f:
+        f.write('{"hidden":false,"index":[],"title":"t","iconCls":""}')
+    with open(os.path.join(fdy, "d.xwl"), "w", encoding="utf-8", newline="") as f:
+        f.write('{"hidden":false,"children":[],"roles":{},"title":"t","iconCls":""}')
+    code, out = _run(xwl.cmd_folders, path=os.path.join(fdy, "d.xwl"), register=None, dry_run=False)
+    if "登记：xwl.py folders" not in out or "--register" not in out:
+        fl_fail.append("`#57`：有 folder.json 时未直接建议 `--register`（误伤正路）: %s" % out)
     if fl_fail:
         failures.extend(fl_fail)
     else:
-        print("[ok]  folders：未登记/悬空检出、register 幂等且保键序保单行形态")
+        print("[ok]  folders：未登记/悬空检出、register 幂等且保键序保单行形态；缺 folder.json 时提示先建而非直接 --register")
 
     # ---- 15. paths 的「原路径」必须带 configs 层，照抄就该改对地方 ----
     # 经 `_run_cli`（子进程真 CLI）取值：同 12b 的起因 —— 直调时被测行为一旦抛异常会把整块打崩、
@@ -1546,17 +1577,28 @@ def _check_new_guards(tmp, node, failures, write) -> None:
                                                       "flex": "1"})], node)
     if "⑨" not in _o9b or "flex" not in _o9b:
         reg_fail.append("④ ⑨ 真阳性：含非法键 `grid.flex` 的文件没被 `[warn]` 报出：\n%s" % _o9b)
-    # ⚠️ 判**明细行**（带具体键名）而非只看 "⑨" —— 运行级汇总行（`[warn] ⑨ … N 处`）由
-    #   `_check_registry_dims` 返回的计数驱动，即使"明细被弱化"它**照旧打印** ⇒ 只判 "⑨ 出现过"
+    # ⚠️ 判**明细行**（带具体键名）而非只看 "⑨" —— 运行级汇总行（`[warn] ⑨ … N 个节点（涉及 M 个文件）`）
+    #   由 `_check_registry_dims` 返回的计数驱动，即使"明细被弱化"它**照旧打印** ⇒ 只判 "⑨ 出现过"
     #   会被它兜住（**注入实测**：把 `warns.extend(bad_keys)` 改成 `pass`、断言仍绿）。故此处钉
     #   "文件名段里那行明细"（`⑨ grid 的 configs 键不在注册表：flex`）。
     if not any(l.strip().startswith("[warn] ⑨") and "flex" in l for l in _o9b.splitlines()):
         reg_fail.append("④ ⑨ 明细行缺失（只有汇总行 ⇒ 弱化 `warns.extend(bad_keys)` 会逃逸）：\n%s" % _o9b)
     if _rc9b != 0:
         reg_fail.append("④ ⑨ 是 `[warn]` 级（不进 rc），但含非法键时 rc=%s（应为 0）" % _rc9b)
-    # ④-2 假阳性守卫（⑨）：只含注册表内合法键 ⇒ 应打 `[ok] ⑨ … 0 处非法键`、不进 warn
+    # ④-2 假阳性守卫（⑨）：只含注册表内合法键 ⇒ 应打 `[ok] ⑨ … 0 个非法键`、不进 warn
     if "[warn]" in _o9 and "⑨" in _o9:
         reg_fail.append("④ ⑨ 假阳性：全合法键的文件仍被 warn：\n%s" % _o9)
+    # ④-2b（`#76`·⑨`[ok]` 量纲）`#76` 的**第二半**在 ⑨ 的 `[ok]` 明细行（`0 个非法键`）——
+    #   既有断言只锚了运行级汇总行「N 个节点」；把这里的 `个` 改回 `处` **三块仍全绿**（复核实测）
+    #   ⇒ 补钉该量纲词（与汇总行同一立意：**统一量纲为「个」**）。
+    _ok9 = [l.strip() for l in _o9.splitlines() if "⑨ configs 键合法性" in l]
+    if not _ok9:
+        reg_fail.append("④ ⑨（`#76`）全合法键时未见 `[ok] ⑨ configs 键合法性` 行：\n%s" % _o9)
+    else:
+        if "个非法键" not in _ok9[0]:
+            reg_fail.append("④ ⑨（`#76`）`[ok]` 行未用量纲词「个非法键」：%s" % _ok9[0])
+        if "处非法键" in _ok9[0]:
+            reg_fail.append("④ ⑨（`#76`）`[ok]` 行仍用「处非法键」：%s" % _ok9[0])
     # ④-3 真阳性（⑥-ext）：`configs.renderer`（注册表标 `[js]`）写入语法错 ⇒ 应 `[FAIL]` 且 rc≠0
     if node is not None:
         _rcj, _oj = _run_check_ctl([_mkreg("badjs", {"itemId": "l1",
@@ -1565,10 +1607,47 @@ def _check_new_guards(tmp, node, failures, write) -> None:
             reg_fail.append("④ ⑥-ext 真阳性：`configs.renderer` 语法错没被 ⑥ 报出：\n%s" % _oj)
         if _rcj == 0:
             reg_fail.append("④ ⑥-ext 是 `[FAIL]` 级（进 rc），语法错时 rc 仍 0")
+        # ④-3b（`#78`）⑥-ext 报错正文须是**真诊断**（含 `Error`），⛔ 不是「已删除的临时文件路径」死链。
+        _fl8 = [l.strip() for l in _oj.splitlines() if l.strip().startswith("[FAIL] ⑥ configs.")]
+        if not _fl8:
+            reg_fail.append("④ ⑥-ext（`#78`）未找到 `[FAIL] ⑥ configs.` 行：\n%s" % _oj)
+        elif "Error" not in _fl8[0]:
+            reg_fail.append("④ ⑥-ext（`#78`）报错正文不含真诊断（`Error`）—— 疑似临时文件路径死链：\n%s" % _oj)
+        if "xwl_ev_" in _oj:
+            reg_fail.append("④ ⑥-ext（`#78`）输出含随机临时文件名（`xwl_ev_`）—— 应只给真诊断：\n%s" % _oj)
+        # ④-3c（`#78`·⑥events 调用点）`_js_err_head` 有**两处调用点**：⑥-ext（`% (loc, _js_err_head(err))`，
+        #   `p78` 的 `find` 只锚这处）与 ⑥ **events**（`head = _js_err_head(err)`）。把 events 那处退回
+        #   `err.splitlines()[0]`（＝临时文件路径死链）**三块全绿**（复核实测）⇒ 补：事件 JS 语法错时，
+        #   `[FAIL] ⑥ events.<名>` 的正文须含真诊断、⛔ 不含随机临时名。
+        _pev = os.path.join(tmp, "reg-events-badjs.xwl")
+        with io.open(_pev, "w", encoding="utf-8", newline="") as _fevw:
+            _fevw.write(xwl.dumps_designer(
+                {"title": "t", "roles": {}, "children": [
+                    {"configs": {"itemId": "l1"},
+                     "events": {"click": "function(){ return ; ;;("},
+                     "type": "label", "expanded": False, "children": []}]},
+                1, CRLF))
+        _rcev, _oev = _run_check_ctl([_pev], node)
+        _fev = [l.strip() for l in _oev.splitlines() if l.strip().startswith("[FAIL] ⑥ events.")]
+        if not _fev:
+            reg_fail.append("④ ⑥-events（`#78`）事件 JS 语法错没被 ⑥ 报出：\n%s" % _oev)
+        elif "Error" not in _fev[0]:
+            reg_fail.append("④ ⑥-events（`#78`）报错正文不含真诊断（`Error`）—— 疑似临时文件路径死链：\n%s" % _oev)
+        if "xwl_ev_" in _oev:
+            reg_fail.append("④ ⑥-events（`#78`）输出含随机临时文件名（`xwl_ev_`）—— 应只给真诊断：\n%s" % _oev)
     # ④-4 默认面（承重墙）：不给 `--controls` ⇒ ⑨/⑥-ext 一行都不出现
     _rc0, _o0 = _run_check([_mkreg("def", {"itemId": "g1", "flex": "1"})], node)
     if "⑨" in _o0 or "configs 内联" in _o0:
         reg_fail.append("④ 默认面：不给 `--controls` 时仍打了 ⑨/⑥-ext 的行（承重墙破）：\n%s" % _o0)
+    # ④-5（`#76`）⑨ 运行级汇总的**量纲**须与明细一致 —— 用「N 个节点」而非「N 处」
+    #   （明细是"按节点一行、列该节点**全部**非法键" ⇒ 汇总若按"处"数会与明细的键数对不上：
+    #    一节点 3 非法键时明细 3 键、汇总却报"1 处"）。
+    _rc9c, _o9c = _run_check_ctl([_mkreg("threebad", {"itemId": "m1", "aaa": "1",
+                                                      "bbb": "2", "ccc": "3"})], node)
+    if "个节点（涉及" not in _o9c:
+        reg_fail.append("④ ⑨（`#76`）运行级汇总未用「N 个节点（涉及 M 个文件）」量纲：\n%s" % _o9c)
+    if _rc9c != 0:
+        reg_fail.append("④ ⑨（`#76`）量纲修正不应改 rc，实得 rc=%s" % _rc9c)
     if reg_fail:
         failures.extend(reg_fail)
     else:
@@ -1583,7 +1662,9 @@ def _check_new_guards(tmp, node, failures, write) -> None:
     #   判据（先红后绿）：同一输入、换 **≥5 个 `PYTHONHASHSEED`** 跑同一条 `check --controls`，
     #     **规范化后**输出必须**逐字节一致**。
     #     ⚠️ 「规范化」= 把 ⑥ 报错里的临时文件名 `xwl_ev_<随机>.js` 换成 `<TMP>`（`_TMP_EV_RE`）——
-    #       该名由 `tempfile` 逐次随机、**与本条无关**，不规范化则「字面逐字节一致」永不成立（不是本条病灶）。
+    #       该名由 `tempfile` 逐次随机、**与本条无关**。
+    #       ⚠️ `#78` 后 ⑥-ext 报错正文已**不再含临时名**（改取真 `SyntaxError` 行）⇒ 该 `sub`
+    #       现为 **no-op**（保留不删：防将来又引入随机名；届时它仍是必需的归一化）。
     #   触发面 narrow（如实记）：需"注册表**同类型**声明 ≥2 个 `js` 键"且"**同节点 ≥2 个都坏**"
     #     ⇒ 只声明 1 个 `js` 键时**复现不出来**（故夹具**必须** ≥2 个）。
     hash_fail: list[str] = []
@@ -1628,6 +1709,83 @@ def _check_new_guards(tmp, node, failures, write) -> None:
             failures.extend(hash_fail)
         else:
             print("[ok]  ⑤ `#71` ⑥-ext：同节点 ≥2 个坏 `[js]` 键时，换 5 个 `PYTHONHASHSEED` 输出规范化后逐字节一致")
+
+    # ---- ⑬ `#77`：op 清单**逐处**都须对齐写死的权威清单 `_OPS_AUTH`（不只是「两侧互恰」）----
+    #   起因（按 `17s`，不这么做会漏什么）：`insertKey` 落地后 5 处 op 清单各自漂移；首版判据只比
+    #     「epilog 计数 vs `--ops` help 清单」⇒ **两侧同改（都退成 4 个）仍绿**（互恰 ≠ 符实），
+    #     且只覆盖第 1 处。现改为对**权威清单**（含顺序）逐处比对：
+    #     ① `--ops` help 的清单；② epilog 的「<N> 种 op」计数；③ 3 份文档（`SKILL.md` 有 2 处）。
+    _c5_fail: list[str] = []
+    _CN = {"一": 1, "二": 2, "三": 3, "四": 4, "五": 5, "六": 6, "七": 7, "八": 8, "九": 9, "十": 10}
+    _repo = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))   # `scripts/` 的上一级 = 仓根
+
+    def _ops_lists(text):
+        """抽「反引号包裹的 op 名、以 ` / ` 相连」的序列，只留含 `insertKey` 的（＝ op 清单）。"""
+        out = []
+        for _m in re.finditer(r"(?:`[A-Za-z]+`(?: / `[A-Za-z]+`)+)", text):
+            _lst = re.findall(r"`([A-Za-z]+)`", _m.group(0))
+            if "insertKey" in _lst:
+                out.append(_lst)
+        return out
+
+    try:
+        _pp = None
+        for _a in xwl.build_parser()._actions:
+            if getattr(_a, "choices", None) and "patch" in _a.choices:
+                _pp = _a.choices["patch"]
+                break
+        _epi = (_pp.epilog or "") if _pp is not None else ""
+        _oh = next(((_a.help or "") for _a in (_pp._actions if _pp is not None else [])
+                    if _a.dest == "ops"), "")
+        # ① `--ops` help（斜杠分隔、无引号）
+        _ml = re.search(r"[A-Za-z]+(?:/[A-Za-z]+)+", _oh)
+        _help_ops = _ml.group(0).split("/") if _ml else []
+        if _help_ops != _OPS_AUTH:
+            _c5_fail.append("⑬ `#77`「① `--ops` help」清单 %s != 权威 %s" % (_help_ops, _OPS_AUTH))
+        # ② epilog 的「<N> 种 op」计数
+        _mw = re.search(r"([一二三四五六七八九十]+)\s*种\s*op", _epi)
+        _n_w = _CN.get(_mw.group(1)) if _mw else None
+        if _n_w != len(_OPS_AUTH):
+            _c5_fail.append("⑬ `#77`「② epilog」的「%s种 op」!= 权威长度 %d"
+                            % (_mw.group(1) if _mw else "<缺计数词>", len(_OPS_AUTH)))
+        # ③ 文档侧：每处清单都须 == 权威；处数下限＝**本仓实测**（`README.md` 1 处／`SKILL.md` **2 处**——「N 种 op（…）」示例 ＋ 「写 ops.json（…）」步骤／`references/sql-fragments.md` 1 处）。⚠️ 这 3 个数是**魔法数**：改本仓文档结构（如把 `SKILL.md` 两处合并成一处）时**必须同步这里**，否则 ⑬ 对合法合并会**假阳性**。
+        for _rel, _min in (("README.md", 1), ("SKILL.md", 2), ("references/sql-fragments.md", 1)):
+            _fp = os.path.join(_repo, _rel.replace("/", os.sep))
+            _txt = io.open(_fp, encoding="utf-8", newline="").read()
+            _ls = _ops_lists(_txt)
+            if len(_ls) < _min:
+                _c5_fail.append("⑬ `#77`「③ %s」op 清单处数 %d < %d" % (_rel, len(_ls), _min))
+            for _lst in _ls:
+                if _lst != _OPS_AUTH:
+                    _c5_fail.append("⑬ `#77`「③ %s」op 清单 %s != 权威 %s" % (_rel, _lst, _OPS_AUTH))
+    except Exception as _e:  # noqa: BLE001
+        _c5_fail.append("⑬ `#77` 机械一致性检查自身出错：%r" % _e)
+    if _c5_fail:
+        failures.extend(_c5_fail)
+    else:
+        print("[ok]  ⑬ `#77`：`--ops` help ＋ epilog 计数 ＋ README／SKILL×2／sql-fragments 的 op 清单均 == 权威（%s）"
+              % "/".join(_OPS_AUTH))
+
+    # ---- ⑭ `#78`：`_js_err_head` 的**内部判据**（路径行 vs 真诊断）单元级 ----
+    #   起因（按 `17s`，不这么做会漏什么）：`p78` 的 `find` 锚的是**调用点**（`% (loc, _js_err_head(err))`）
+    #     ⇒ 它只守「必须经 `_js_err_head`」；把函数**内部**第一臂退回「含 `Error`」（**路径**含 `Error`
+    #     的行被误当诊断），`p78` **仍绿** ⇒ 防路径误判的核心价值无守卫。故补**单元级**断言。
+    _j78_fail: list[str] = []
+    for _in, _want, _why in (
+        ("C:\\Error\\xwl_ev_ab.js:1\nSyntaxError: Unexpected token )\n    at x\n",
+         "SyntaxError: Unexpected token )", "① 路径行**含 Error** 时须取真诊断、不得取路径"),
+        ("C:\\Error\\xwl_ev_ab.js:1\n", "C:\\Error\\xwl_ev_ab.js:1",
+         "② 反向臂：只有路径行（无真诊断）⇒ 按现实现返回该行（次臂「含 Error」）"),
+        ("C:\\tmp\\xwl_ev_ab.js:1\n", "语法错误", "③ 无 Error 的路径行 ⇒ 退化为「语法错误」"),
+        ("", "语法错误", "④ 空输入 ⇒ 「语法错误」"),
+    ):
+        _got = xwl._js_err_head(_in)
+        if _got != _want:
+            _j78_fail.append("⑭ `#78` %s：`_js_err_head(%r)` = %r（应 %r）" % (_why, _in, _got, _want))
+    if _j78_fail:
+        failures.extend(_j78_fail)
+    else:
+        print("[ok]  ⑭ `#78`：`_js_err_head` 单元级 —— 路径含 Error 时取真诊断、无诊断／空输入退化正确")
 
     # ---- ⑥ `#72`（插队）：`patch` 覆盖**已存在的容器键**（dict/list）且新值是标量 ⇒ 必须可见 ----
     #   起因（按 `17s`）：`set`/`insertKey` 的 path 末段命中一个**已存在的容器键**（`configs`／`children`）
@@ -1707,6 +1865,7 @@ def _check_new_guards(tmp, node, failures, write) -> None:
     _mod50["children"][0]["configs"]["sql"] = (
         "select u from t where u='http://h/x' and a={?real2?} -- {?ghost2?}\n"
         "/* {?blk?} */ and b=1 # {?hsh?}\n"
+        "and d={#cols#} and e={?real4?}\n"
         "and c={?real3?}")
     _dump(_car50, os.path.join(_r50, "sub", "sel.xwl"))
     _p50 = os.path.join(_r50, "p50.xwl")
@@ -1732,6 +1891,12 @@ def _check_new_guards(tmp, node, failures, write) -> None:
                         "（未剥 `#` ⇒ 假阳性）\n%s" % _o50)
     if "real3" not in _o50:
         p50_fail.append("⑦ `#50`：`/* */` / `#` 之后的代码里 `{?real3?}` 被误删（应保留）\n%s" % _o50)
+    # `#83`：平台 SQL 的 `{#…#}` 是**模板定界符**（不是注释）—— **同行** `{#…#}` 之后紧跟的
+    #   `{?名?}` **必须仍被识别**。⛔ 旧剥离器把 `#` 无条件当行注释 ⇒ 吞掉同行其后的 `{?名?}`
+    #   ⇒ 假阴性（⑦ 原夹具把 `# {?hsh?}` 放**行尾**、`{?real3?}` 放**下一行** ⇒ 恰好绕开该形态）。
+    if "real4" not in _o50:
+        p50_fail.append("⑦ `#83`：**同行** `{#…#}` 之后的 `{?real4?}` 被吞"
+                        "（`{#…#}` 是模板定界符、非注释）\n%s" % _o50)
     if p50_fail:
         failures.extend(p50_fail)
     else:
@@ -2042,7 +2207,7 @@ _splits = [
     ("七 7.3 重名建议", "SKILL.md", "references/measured-data-addressing.md",
      ["不猜顺序", "能用 normalName 就用", "必须同步改 JS", "tbarGrid"], "### 7.3 遇到重名"),
     ("1.2 控件骨架", "SKILL.md", "references/controls.md",
-     ["必须唯一", "会与设计器产物不一致"], "### 1.2 控件节点的标准形态"),
+     ["必须唯一", "会与设计器产物不一致", "取值相反"], "### 1.2 控件节点的标准形态"),
     ("三第3步 ops 示例", "SKILL.md", "references/sql-fragments.md",
      ["insert", "append", "delete", "按顺序执行"], "## 六、SQL 片段"),
     ("三第3步 @itemId", "SKILL.md", "references/sql-fragments.md",
@@ -4999,6 +5164,33 @@ def _check_patch_contract(tmp, node, failures, write) -> None:
     if n12m <= 1:
         f12.append("多行源 diff 段落行数 = %d（应 >1 = 逐行 diff）" % n12m)
     _ok("5-12", f12, "单行源打一行摘要、多行源仍逐行 diff（判据 = diff 段落行数）")
+
+    # ---- `#54`：`--dry-run` **不再按 40 行截断** ⇒ 大 diff 也全量（无「（略）」、段落 >40 行）----
+    _big = [{"configs": {"itemId": "bb%d" % i, "text": "x"}, "type": "button",
+             "expanded": False, "children": []} for i in range(30)]
+    _big2 = [{"configs": {"itemId": "bb%d" % i, "text": "y"}, "type": "button",
+              "expanded": False, "children": []} for i in range(30)]
+    p12b = write("pc_5_12b.xwl", _page(children=_big))
+    rc12b, o12b = _patch(p12b, "pc_5_12b_ops.json",
+                         [{"op": "set", "path": ["children"], "value": _big2}], dry_run=True)
+    _n12b = sum(1 for ln in o12b.splitlines() if ln.startswith("  "))
+    # `#54`：**行宽也不静默截断** —— 超长单行须**整行**出现在 diff 里（原 `line[:200]` 会砍）。
+    _long54 = "L" * 300
+    p12c = write("pc_5_12c.xwl", _page())
+    rc12c, o12c = _patch(p12c, "pc_5_12c_ops.json",
+                         [{"op": "set", "path": ["title"], "value": _long54}], dry_run=True)
+    f12b = []
+    if rc12b != 0:
+        f12b.append("大 diff 的 --dry-run rc=%d（应 0）" % rc12b)
+    if "（略）" in o12b:
+        f12b.append("`--dry-run` 仍截断 diff（出现「（略）」）—— `#54` 未生效")
+    if _n12b <= 40:
+        f12b.append("大 diff 段落行数 = %d（应 >40 = 未截断）" % _n12b)
+    if rc12c != 0:
+        f12b.append("超长值 dry-run rc=%d（应 0）" % rc12c)
+    if _long54 not in o12c:
+        f12b.append("`#54`：超长单行（%d 字符）未整行出现 ⇒ 行宽被静默截断" % len(_long54))
+    _ok("5-12b", f12b, "`--dry-run` 不截断：大 diff 全量（无「（略）」、段落 >40 行）＋ 超长单行整行出现")
 
     # ---- `set` 末段数组下标越界 ⇒ rc=2 ----
     f13 = []

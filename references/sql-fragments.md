@@ -281,7 +281,7 @@ python scripts/xwl.py params  <page.xwl> [--controls …]   # 页面 → store �
   > 少量告警是「由调用方传入」的正常场景，或 serverScript 误用 `{#…#}`。
   > 这类告警要**结合调用方判断**，不要一律当成错误。
 
-- **`patch`** —— 改 SQL / 结构走 `ops.json`（操作数组），四种 `op`：`set` / `insert` / `append` / `delete`；**`ops` 按顺序执行**，`path` 按执行到那一步时的结构解释。对象键优先用 `@itemId`，重名时**不猜顺序**（用 `@名字#N` 点名第 N 个、或**串联 `@`** 缩小范围）。
+- **`patch`** —— 改 SQL / 结构走 `ops.json`（操作数组），五种 `op`：`set` / `insertKey` / `insert` / `append` / `delete`；**`ops` 按顺序执行**，`path` 按执行到那一步时的结构解释。对象键优先用 `@itemId`，重名时**不猜顺序**（用 `@名字#N` 点名第 N 个、或**串联 `@`** 缩小范围）。
   值里的 JS / SQL 用**单引号**；完整示例见 `xwl.py patch --help`。
 
 - **`params`** —— 自动做四件事：

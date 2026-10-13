@@ -835,6 +835,31 @@ def _load_chain_issues(obj) -> list:
     return issues
 
 
+def _js_err_head(err: str) -> str:
+    """从 node `--check` 的 stderr 里取**真正的诊断行**（供 ⑥ / ⑥-ext 报错正文用）。
+
+    ⚠️（`#78`）stderr 首行形如 `<临时文件>:<行>` —— 那临时文件由本工具写、跑完即删
+    ⇒ 它是**死链、无信息量**，真正的 `SyntaxError: …` 在后面。
+    ⚠️（批 C·C3）取「**行首**是错误类名」的那一行 —— ⛔ 不能只判「含 `Error`」，否则**路径**里带
+    `Error` 的行（如 `C:\\Error\\xwl_ev_ab.js:1`）会被误当诊断；「含 `Error`」降为**次级**判据；
+    再取不到 ⇒ 退化为「去掉首行后的首个非空行」；仍取不到 ⇒ `语法错误`。
+    ⛔ 调用方**必须保留** `[FAIL] ⑥ … JS 语法错误: ` 前缀（守卫 ⑤ 按 `[FAIL] ⑥ configs.` 计条数）。
+    """
+    lines = (err or "").splitlines()
+    for ln in lines:
+        s = ln.strip()
+        if re.match(r"^[A-Za-z_$][\w$]*Error\b", s):
+            return s
+    for ln in lines:
+        s = ln.strip()
+        if "Error" in s:
+            return s
+    for ln in lines[1:]:
+        if ln.strip():
+            return ln.strip()
+    return "语法错误"
+
+
 def cmd_check(args) -> int:
     node = find_node(args.node)
     if node is None and not args.no_js:
@@ -914,8 +939,12 @@ def cmd_check(args) -> int:
                 f"③ 第 {bad_ws[:10]} 行以「反斜杠+空白」结尾（续行符后不能有空格/Tab）"
             )
 
-        # ⑤ 末行不得以续行符结尾
-        if lines and lines[-1].endswith("\\"):
+        # ⑤ 末行不得以续行符结尾。⚠️（`#79`）先**剥净尾空**再判 —— `ANY_EOL_RE.split` 对「以换行
+        #   结尾」的文本**每多一个尾空行就多切出一个空串** ⇒ **只剥一层仍会漏判**（+1 / +2 尾空行
+        #   都不命中）⇒ 改「去掉末尾换行后取最后一段」。
+        _txt = text.rstrip("\r\n")
+        _last = ANY_EOL_RE.split(_txt)[-1] if _txt else ""
+        if _last.endswith("\\"):
             errors.append("⑤ 末行以反斜杠结尾（最后一行不能加续行符）")
 
         # ④ 加载器等价解析 —— 三类「不能加载」分开说：空文件 / 设计器模板 / 真坏。
@@ -941,7 +970,7 @@ def cmd_check(args) -> int:
             results = node_check_many(node, [code for _name, code in events])
             for (name, _code), (ok, err) in zip(events, results):
                 if not ok:
-                    head = err.splitlines()[0] if err else "语法错误"
+                    head = _js_err_head(err)
                     errors.append(f"⑥ events.{name} JS 语法错误: {head}")
 
         # ⑦ 注册键重名（分级）—— 按 `normalName || itemId` 分组；只有「重名 **且** 已被
@@ -1037,7 +1066,7 @@ def cmd_check(args) -> int:
     # ⑨「键不在注册表」的**运行级一行汇总**（warn、不进 rc）—— 明细已随各文件段打印。
     #    独立成行是为便于人读（一次 `check` 可能带多个文件 ⇒ 需要跨文件总数）。
     if reg_hits_all:
-        print(f"  [warn] ⑨ configs 键不在注册表：{reg_hits_all} 处（涉及 {reg_files_all} 个文件）"
+        print(f"  [warn] ⑨ configs 键不在注册表：{reg_hits_all} 个节点（涉及 {reg_files_all} 个文件）"
               " —— 明细见上方各文件段")
     print("=== 结果:", "FAIL" if failed else "ALL OK")
     return 1 if failed else 0
@@ -1136,7 +1165,7 @@ def _check_registry_dims(obj, controls: str, node, no_js: bool):
     · `fail_bodies` —— 进 rc 的失败正文（**仅 ⑥-ext 的语法错**；调用方以 `[FAIL] ` 前缀并入 `errors`）；
     · `show_lines` —— 成功/跳过的展示行（含 `[ok]`/`[note]` 标记，调用方原样打印）；
     · `warn_bodies` —— 只告警项（含 ⑨「键不在注册表」**明细**；调用方以 `[warn] ` 前缀打印）；
-    · `n_key_hits` —— 本文件 ⑨「键不在注册表」命中**处**数（供调用方打**运行级**汇总行）。
+    · `n_key_hits` —— 本文件 ⑨「键不在注册表」命中的**节点数**（供调用方打**运行级**汇总行）。
 
     ⚠️ ⑨「键不在注册表」取 **warn（⛔ 不进 rc）** —— 实测存量语料里这类命中**几乎都是
        「注册表未收录的既有键」**（`column.keyNameExp` 576／`array.height/width/x/y` 316／
@@ -1161,13 +1190,13 @@ def _check_registry_dims(obj, controls: str, node, no_js: bool):
         warns.extend(bad_keys)          # 明细（运行级汇总行由调用方打）
     else:
         tail = f"，跳过 {n_unknown} 个未登记类型" if n_unknown else ""
-        show.append(f"[ok]   ⑨ configs 键合法性：{n_nodes} 个节点、0 处非法键{tail}")
+        show.append(f"[ok]   ⑨ configs 键合法性：{n_nodes} 个节点、0 个非法键{tail}")
     job = _scan_configs_js(obj, reg)
     if job:
         if node and not no_js:
             res = node_check_many(node, [code for _loc, code in job])
             js_fail = ["⑥ configs.%s JS 语法错误: %s"
-                       % (loc, (err.splitlines()[0] if err else "语法错误"))
+                       % (loc, _js_err_head(err))
                        for (loc, _code), (ok, err) in zip(job, res) if not ok]
             if js_fail:
                 fails.extend(js_fail)
@@ -2367,17 +2396,19 @@ def cmd_patch(args) -> int:
             # ⇒ 改打**一行摘要**，跳过逐行 diff（判据 = stdout 里 diff 段落行数）。
             print("  （单行源：整份重排为多行，diff = 整个文件）")
         else:
+            # `#54`：**不再按 40 行截断**（原 `if shown >= 40: print("  ...（略）"); break`）。
+            #   起因：`--dry-run` 是「先看 diff 再落盘」的**硬闸门**；截断它 ⇒ 整树 `set` 时
+            #   看不到全量 diff ⇒ 闸门形同虚设（见 `#54` 台账注记）。放开后 diff 段行数＝全量。
+            #   ⚠️ 只改**多行源**这条分支；单行源那条不受影响、仍恰 1 行摘要
+            #   （`patch_contract` 5-12 的判据＝「单行源 diff 段落恰 1 行 / 多行源 > 1 行」）。
             a = text.splitlines()
             b = out.splitlines()
-            shown = 0
             for line in difflib.unified_diff(a, b, "before", "after", lineterm="", n=1):
                 if line.startswith(("---", "+++", "@@")):
                     continue
-                print("  " + line[:200])
-                shown += 1
-                if shown >= 40:
-                    print("  ...（略）")
-                    break
+                # `#54`：**行宽也不再静默截断**（原 `line[:200]`）—— 与「行数放开」同理：
+                #   闸门要能看全量；半行且无 `…` 标记 ＝ **静默失真**。整行原样打印。
+                print("  " + line)
         if created:
             # 只列**带 create** 的新建键；不带 create 的那类走上面的 `[warn]` 预告（两条不混）。
             print('[new-key] 本次将新建 %d 个键（带 "create": true）：%s'
@@ -3005,6 +3036,7 @@ def cmd_folders(args) -> int:
     n_dir = n_unreg = n_dangling = n_bad = 0
     detail: list = []
     registered_at = None
+    _has_fj = False   # `#57`：本轮是否见过「有效 folder.json」（决定建议 `--register` 还是「先建 folder.json」）
     for d, names in sorted(jobs):
         n_dir += 1
         rel = safe_relpath(d, base) if recursive else os.path.basename(d)
@@ -3017,6 +3049,7 @@ def cmd_folders(args) -> int:
             n_bad += 1
             detail.append(("folder.json 损坏", rel, os.path.basename(jp)))
             continue
+        _has_fj = True   # `#57`：该目录有可用的 folder.json ⇒ `--register` 才可能成功
         idx = data.get("index") if isinstance(data.get("index"), list) else []
         miss = [x for x in names if x not in idx]
         if miss:
@@ -3048,7 +3081,10 @@ def cmd_folders(args) -> int:
     else:
         print("[ok]   index 与实际文件一致。")
     if n_unreg and not recursive:
-        print(f"\n登记：xwl.py folders {safe_relpath(target)} --register {os.path.basename(target)}")
+        if _has_fj:
+            print(f"\n登记：xwl.py folders {safe_relpath(target)} --register {os.path.basename(target)}")
+        else:
+            print(f"\n登记：该目录还没有 {_FOLDER_NAME} —— 请先在**设计器里建这个目录**（或手动补 {_FOLDER_NAME}），再跑 `xwl.py folders {safe_relpath(target)} --register`。")
     if n_unreg:
         print("\n> index 里带 `.xwl` 的是文件、不带后缀的是子目录；顺序 = 导航树显示顺序。")
     return 0
@@ -3646,6 +3682,9 @@ def strip_sql_comments(sql: str) -> str:
     ⚠️ **`#` 是 MySQL 行注释**（本后端确为 MySQL）—— 从 `#` 到行尾整段剥除（引号内不动）。
       ⛔ **不剥会导致误报**：`# {?x?}` 一类被注释掉的引用会残留 `{?x?}` ⇒ 被 `find_sql_refs`
       当成真实引用计入。
+    ⚠️ `#83`：**`{#…#}` 是模板定界符、不是注释** ⇒ 遇 `{#` 先**整块保留**（跳到配对的 `#}`）、
+      再走 `#` 行注释分支。⛔ 否则 `select {#cols#} … {?real?}` 同行里的 `{?real?}` 会被吞
+      ⇒ `params` 假阴性（本条修的就是「同行 `{#…#}` 在 `{?…?}` **之前**」这一形态）。
     ⚠️ 本函数**自实现** `/* */` 块注释（SQL 标准块注释、**不嵌套**）——⛔ **不再委托
       `strip_js_comments`**：那是 **JS 口径**，会把 `//` 也当行注释切掉（SQL 里 `//` 不是注释）
       ⇒ 委托等于把 JS 语义偷带进 SQL、口径不纯。
@@ -3672,6 +3711,17 @@ def strip_sql_comments(sql: str) -> str:
         if ch == "-" and i + 1 < n and sql[i + 1] == "-":
             while i < n and sql[i] != "\n":
                 i += 1
+            continue
+        if ch == "{" and i + 1 < n and sql[i + 1] == "#":
+            # `#83`：平台 SQL ＝ MySQL **＋ `{#…#}` 模板语法** —— 此处 `#` 是**定界符、不是注释**
+            #   ⇒ 整个 `{# … #}` **原样保留**。⛔ 不保护的话 `#` 会被当行注释、**吞掉同行其后的
+            #   `{?名?}`** ⇒ `params` 假阴性（漏报绑定参数）。未闭合 `{#` ⇒ 余下原样（不吞）。
+            _j = sql.find("#}", i + 2)
+            if _j < 0:
+                out.append(sql[i:])
+                break
+            out.append(sql[i:_j + 2])
+            i = _j + 2
             continue
         if ch == "#":
             # MySQL `#` 行注释：从 `#` 到行尾（不含换行，换行保留 ⇒ 原样交给后续按行处理）。
@@ -4483,7 +4533,7 @@ def build_parser() -> argparse.ArgumentParser:
     pt = sub.add_parser("patch", help="结构级编辑：改对象 + 按设计器规则整份重建（推荐）。"
                                       "产出**永远是设计器原样**（所以没有 --safe）",
                         formatter_class=argparse.RawDescriptionHelpFormatter,
-                        epilog="ops.json 是操作数组，path 是「键 / 数组下标」的列表，四种 op：\n"
+                        epilog="ops.json 是操作数组，path 是「键 / 数组下标」的列表，五种 op：\n"
                                "  [\n"
                                "    {\"op\": \"set\", \"path\": [\"title\"], \"value\": \"新标题\"},\n"
                                "    {\"op\": \"set\", \"path\": [\"@dataprovider\", \"configs\", \"sql\"],\n"

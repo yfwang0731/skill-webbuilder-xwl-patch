@@ -41,7 +41,7 @@ python scripts/xwl.py patch page.xwl --ops ops.json --backup    # 确认后落�
 `path` 段以 `@` 开头时按控件的 `configs.itemId` 寻址（`["@dataprovider","configs","sql"]`），
 **不用关心嵌套层级**（但要求 `itemId` 唯一：重名时工具**拒绝执行**、不替你猜，
 改用 `paths` 给出的原路径即可）；`xwl.py paths <file>` 会直接列出可改字段的两种写法
-（`op` 支持 `set` / `insert` / `append` / `delete`）。
+（`op` 支持 `set` / `insertKey` / `insert` / `append` / `delete`）。
 
 ### 为什么这条路可靠
 
