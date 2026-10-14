@@ -5776,12 +5776,18 @@ def _run_serial(blocks, node) -> list[str]:
 def _run_parallel(blocks, node, jobs: int) -> list[str]:
     """并发（`--jobs N`）：每块在**独立子进程**里跑（各自 mkdtemp、失败写 JSON）。
 
-    子进程把 `[ok]` / `[note]` **直接打到自己继承的 stdout**（行缓冲 ⇒ 每行一次原子写，
-    **不会交错成半行**）—— ⚠️ 但这**只保证「不交错」、不保证「不丢」**：多个子进程并发写
-    **同一继承句柄**时，整行**可能丢失**（实测并行档的 `[ok]` 计数会低于 `--jobs 1`，
-    差的正是展示行；`rc` 与 `ALL OK` 不受影响）。失败（`[FAIL]`）走"每块 JSON 文件、
-    父进程回收"⇒ **失败永不丢**，只可能丢展示行；故并行档在汇总处打一行 `[note]`
-    提示"要精确计数请 `--jobs 1`"。父进程收齐后只按**固定块顺序**汇总打印 `[FAIL]`。
+    ⭐ 子进程的 stdout / stderr **一律落「每块独立临时文件」，不再继承 selftest 自己的句柄**。
+    起因：继承会让「worker 的**后代**」也持着 selftest 的 stdout/stderr —— 一旦 selftest 的
+    stdout 被外层以**管道**收（注入门禁 / CI 都会），外层「杀掉 selftest 直子后等管道 EOF」就
+    会**永久卡死**（后代不退 ⇒ 管道永不 EOF）。改为落文件后，**整条「后代持外管道」的链被切断**
+    （与门禁侧「输出落临时文件、不靠管道」是同一条结构性思路）。
+    父进程收齐后按**固定块顺序**把各块捕获的 stdout 原样回放到 stdout、stderr 原样回放到 stderr
+    （两路**不合并**：合并会改变 stdout 的判据语义 —— 错误流里恰好含期望串就会误判通过）。
+
+    ⇒ 并行档的**展示行不再丢失**（每块独占一个文件、无「多进程并发写同一句柄」的整行丢失），
+    且**顺序固定为块定义序** ⇒ 展示部分与 `--jobs 1` **逐字同序**（非并发交错、逐次不同）。
+    失败（`[FAIL]`）仍走"每块 JSON 文件、父进程回收"⇒ **失败永不丢**。父进程收齐后只按
+    **固定块顺序**汇总打印 `[FAIL]`。
     """
     rdir = tempfile.mkdtemp(prefix="xwl_selftest_res_")
     procs: dict[str, tuple] = {}
@@ -5795,8 +5801,23 @@ def _run_parallel(blocks, node, jobs: int) -> list[str]:
                     "--only", name, "--result", result, "--node", node or ""]
             if ALLOW_NOGIT:   # 子进程各自解析开关 ⇒ 必须透传
                 _cmd.append("--allow-nogit")
-            proc = subprocess.Popen(_cmd, env={**os.environ, "PYTHONIOENCODING": "utf-8"})
-            procs[name] = (proc, result)
+            # ⭐ 诱因侧修复：worker 的 stdout/stderr 落**每块独立临时文件**（不继承 selftest 句柄，
+            #   切断"worker 的后代持外管道"；详见本函数 docstring）。
+            outlog = os.path.join(rdir, name + ".out")
+            errlog = os.path.join(rdir, name + ".err")
+            fout = open(outlog, "w", encoding="utf-8")
+            ferr = open(errlog, "w", encoding="utf-8")
+            # ⭐ 诱因侧加固（批2b·P1）：子进程编码**不带 strict** —— 显式 `utf-8:backslashreplace`。
+            #   真实生效路径：`xwl.ensure_utf8_stdio()` 会对 stdout/stderr 做
+            #   `reconfigure(errors="replace")` ⇒ **在它生效的路径上，本环境变量里的 `errors` 会被它覆盖**。
+            #   ⇒ 所以这一行是**兜底（belt）**、**不是**修复一个可复现的崩溃：复验已实测，夹具（某块打印
+            #   孤立 surrogate）下本块 `rc` 恒为 0、代理项一律变 `?`，**并不会崩**。
+            #   保留理由：**万一某条路径没走到 `ensure_utf8_stdio()`**，这一行仍能避免"编码把块搞崩"。
+            #   backslashreplace 只把**个别**字符转义，**能打印的照旧能打印**。
+            proc = subprocess.Popen(
+                _cmd, env={**os.environ, "PYTHONIOENCODING": "utf-8:backslashreplace"},
+                stdout=fout, stderr=ferr)
+            procs[name] = (proc, result, fout, ferr, outlog, errlog)
             active.append(name)
         time.sleep(0.1)
         for name in list(active):
@@ -5805,7 +5826,41 @@ def _run_parallel(blocks, node, jobs: int) -> list[str]:
 
     failures: list[str] = []
     for name, _fn in blocks:
-        proc, result = procs[name]
+        proc, result, fout, ferr, outlog, errlog = procs[name]
+        fout.close()
+        ferr.close()
+        # ⭐ 按**块定义序**回放：stdout → stdout、stderr → stderr（两路**不合并**）。
+        # ⭐ 回放**绝不静默丢弃**（批2b·P2）：按**字节**读，先**严格**解一次（仅用于探测）；
+        #   解不动 ⇒ 用 `errors="replace"` **照常回放**，并**打印一行可见提示**点名是哪块、发生了什么。
+        #   起因：worker 可能被信号杀在**半个多字节字符中间**，捕获文件尾部即为非法 UTF-8；
+        #   原实现是 strict 读 ＋ `except: pass` ⇒ **整块的展示输出被静默丢弃**。
+        #   ⚠️ 等价性：数据合法时 `errors="replace"` 与 strict **同一条解码路径**，且仍走**通用换行**
+        #   （`newline=None`）⇒ 展示输出与改前**逐字节一致**。判据不受影响（failures 仍**只**据 JSON）。
+        for path, sink, _lbl in ((outlog, sys.stdout, "stdout"), (errlog, sys.stderr, "stderr")):
+            try:
+                with open(path, "rb") as fh:
+                    _raw = fh.read()
+            except OSError as exc:
+                print("[note] 块 %s 的 %s 展示输出读不到（%s）：%s"
+                      % (name, _lbl, os.path.basename(path), exc))
+                continue
+            if not _raw:
+                continue
+            try:
+                _raw.decode("utf-8")
+                _undecodable = None
+            except UnicodeDecodeError as exc:
+                _undecodable = exc
+            text = io.TextIOWrapper(io.BytesIO(_raw), encoding="utf-8",
+                                    errors="replace").read()
+            if _undecodable is not None:
+                print("[note] 块 %s 的 %s 展示输出含非法/被截断的 UTF-8（%s）"
+                      "⇒ 已按 U+FFFD 替换后照常回放；判据不受影响（failures 仍据 JSON）"
+                      % (name, _lbl, _undecodable))
+            try:
+                sink.write(text)
+            except Exception as exc:  # noqa: BLE001 —— 回放失败不得影响判据（failures 仍据 JSON 定）
+                print("[note] 块 %s 的 %s 展示输出写不到目标流：%s" % (name, _lbl, exc))
         if proc.returncode != 0:
             failures.append("块 %s 的子进程异常退出（rc=%s）" % (name, proc.returncode))
         try:
@@ -5903,8 +5958,6 @@ def main(argv: list[str] | None = None) -> int:
 
     jobs = args.jobs if args.jobs is not None else min(6, os.cpu_count() or 4)
     failures = _run_serial(blocks, node) if jobs <= 1 else _run_parallel(blocks, node, jobs)
-    if jobs > 1:
-        print(f"[note] 并行档（--jobs {jobs}）：展示行可能丢失；要精确计数请 `--jobs 1`")
 
     print()
     if failures:
