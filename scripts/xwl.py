@@ -1235,10 +1235,18 @@ def cmd_edit(args) -> int:
         print(f"[warn] 目标文件换行混用（{n_crlf} 个 CRLF + {n_lf} 个裸 LF + {n_cr} 个裸 CR）："
               f"锚点按 {eol_name(eol)} 归一化；若匹配不到，先修文件换行（`check` 第 ② 项）")
 
-    with open(args.old_file, "r", encoding="utf-8", newline="") as f:
-        old = normalize_eol(f.read(), eol)
-    with open(args.new_file, "r", encoding="utf-8", newline="") as f:
-        new = normalize_eol(f.read(), eol)
+    # `#73`：两个 `--*-file` 的**值**指向不存在（或不可读）的文件时，直接 `open()` ⇒ **裸 traceback**、
+    #   `rc=1`；而 `patch --ops`／`new --from-json` 对同族情形是"**可读 `[FAIL]` ＋ `rc=2`**" ⇒ 口径不一。
+    #   ⚠️ 缺 **flag** 本就是 argparse `rc=2`（两参数 `required=True`，`xwl.py:4613-4614`）⇒ 本条只管
+    #   「**值**指向不存在文件」这一路。形态照 `cmd_patch` 的「读 ops 失败」。
+    try:
+        with open(args.old_file, "r", encoding="utf-8", newline="") as f:
+            old = normalize_eol(f.read(), eol)
+        with open(args.new_file, "r", encoding="utf-8", newline="") as f:
+            new = normalize_eol(f.read(), eol)
+    except Exception as exc:  # noqa: BLE001
+        print(f"[FAIL] 读锚点/替换文件失败: {exc}")
+        return 2
 
     count = text.count(old)
     print(f"锚点出现次数: {count} (期望 {args.expect})")
@@ -2194,7 +2202,12 @@ def cmd_itemids(args) -> int:
         print(f"[FAIL] {exc}")
         return 2
 
-    ctl = getattr(args, "controls", None) or discover_controls(args.file)
+    # `#74`（`itemids` 侧）：给了 `--controls` 但**读不动 / 不是注册表** ⇒ ⛔ 不再**静默**回退、
+    #   且来源行**不再打印用户给的坏路径**（形态与 `params` 侧同一口径）。
+    #   ⚠️ 只改调用方 —— `controls_source_line`（`:1433`）三处复用，⛔ 不动它（否则连带 `check ⑦`）。
+    _i_ctl = getattr(args, "controls", None)
+    ctl = _i_ctl or discover_controls(args.file)
+    _ctl_bad = bool(_i_ctl) and _registry_configs(_i_ctl) is None
     rep = audit_itemids(obj, controls_path=ctl)
     groups = rep["groups"]
     counts = {lv: sum(1 for g in groups if g["level"] == lv) for lv in ("error", "warn", "benign")}
@@ -2252,7 +2265,9 @@ def cmd_itemids(args) -> int:
     print(f"含注册键的控件 {len(rep['nodes'])} 个 / 去重注册键 {len(names)} 个；"
           f"重名组 {len(groups)} 组 —— error {counts['error']} / benign {counts['benign']}")
     print(f"事件 JS 引用的名字 {len(rep['js_refs'])} 个")
-    print(controls_source_line(ctl))
+    if _ctl_bad:
+        print(f"[warn] 读注册表失败：{_i_ctl}（按**未找到**处理；已回退内置兜底）")
+    print(controls_source_line(None if _ctl_bad else ctl))
 
     cols = [(n, cfg) for n, t, cfg, *_ in rep["nodes"] if t in _IID_COL_TYPES]
     if cols:
@@ -3925,20 +3940,47 @@ def _ref_kind36(tgt: str) -> str:
     return "dangling"
 
 
-def _emit_36(args, dangling36, placeholder36) -> None:
-    """`#36` **预告形态**（本段只预告、⛔ 不改退出码）：`--strict` 下才出。
+def _module_root_state(root) -> str:
+    """`#75`：`--module-root` 的状态 —— `"missing"`（未给 / 不存在）/ `"suspect"`（存在但**不像**模块根）/ `"ok"`。
 
-    · `[warn]` —— 真·悬空取数 url（载体文件不存在）；
+    ⚠️ **只用于"避免谎报"**：`"suspect"` 时 `store.url` / `direct` 两处打「**未核对**」＋原因，
+    ⛔ **不进 `#36` 分类**（否则把"根给错"误报成"载体悬空"⇒ `--strict` 下冤枉判红）。
+    判据（**保守**）：目录名为 `modules`，**或**浅层（≤300 个条目）能找到 ≥1 个 `.xwl`。
+    ⚠️ 本函数返回 `"missing"` 的两支**在 `params` 路径上不可达**（如实拆分；原「既有实现已覆盖」
+      的表述不实 —— `elif not root:` 只覆盖「**没给**」、不覆盖「**给了但路径不可用**」）：
+        · **未给**（`root is None`）⇒ 由 `cmd_params` 的 `if not root:` 分支接走（⇒「未定位模块根」）；
+        · **给了但不可用**（非目录）⇒ 由 `cmd_params` 开头的**用法错守卫**接走（⇒ `rc=2`）。
+      ⟹ `"missing"` 只对**直接调用本函数**可达；⛔ 两个 `return "missing"` 分支**保留**、⛔ 不改行为。
+    """
+    if not root or not os.path.isdir(root):
+        return "missing"
+    if os.path.basename(os.path.normpath(root)).lower() == "modules":
+        return "ok"
+    seen = 0
+    for _dp, _dn, _fns in os.walk(root):
+        for _f in _fns:
+            seen += 1
+            if _f.endswith(".xwl"):
+                return "ok"
+            if seen >= 300:
+                return "suspect"
+    return "suspect"
+
+
+def _emit_36(args, dangling36, placeholder36) -> None:
+    """`#36` 判失败形态（`--strict` 下才出）：真·悬空取数 url **单列为失败项**。
+
+    · `[warn]` —— 真·悬空取数 url（载体文件不存在）⇒ ⭐ **`--strict` 下判失败（rc=1）**；
     · `[note]` —— 显式占位（`<…>` / `…` / `__MODULE__`），**永不判红**。
-    ⚠️ **预告设时限**：`references/faq.md` 明写"**下个版本将收紧为失败**"，⛔ 不无限期挂预告。
-    两个 `return` 路径（早返「跳过交叉核对」与末尾判定）都调本函数 ⇒ 预告不因分支漏掉。
+    ⚠️ 本函数只负责**打印**；把 rc 抬到 1 的是两个出口（末行 ＋ 早返各一处）——
+      两个 `return` 路径都调本函数 ⇒ 信号不因分支漏掉（⛔ 但 rc 必须在**出口**处理）。
     """
     if not getattr(args, "strict", False):
         return
     if dangling36:
-        print("\n  [warn] `#36` 预告：%d 处取数 url 指向的载体**不存在**（整条取数链断掉）：%s"
+        print("\n  [warn] `#36`：%d 处取数 url 指向的载体**不存在**（整条取数链断掉）：%s"
               % (len(dangling36), ", ".join(sorted(set(dangling36)))))
-        print("         ⚠️ 本段**只预告、不改退出码**（rc 仍 0）；**下一段**将收紧为失败。")
+        print("         ⚠️ `--strict` 下**判失败**（rc=1）；不加 `--strict` 仍只告警（rc 不变）。")
     if placeholder36:
         print("\n  [note] `#36`：%d 处取数 url 为**显式占位**（`<…>` / `…` / `__MODULE__`，有意待定）"
               "⇒ 只提示、**永不判红**：%s"
@@ -4176,6 +4218,17 @@ def cmd_params(args) -> int:
         return 2
 
     root = args.module_root
+    # `#75`／**用法错**（本批唯一行为变更）：给了 `--module-root` 但**指向不存在的路径 /
+    #   不是目录** ⇒ 直接判**用法错** `rc=2`，⛔ **不受 `--strict` 影响**（给不给 `--strict` 都 `rc=2`）。
+    #   ⭐ 有了这条守卫，`_module_root_state()` 返回 `"missing"` 的情形**只剩** `root is None`
+    #   （未给且推导不到）；而 `root is None` 已被下方 `if not root:` 的分支接走 ⟹ `#75` 的
+    #   `== "suspect"` 两处（store 支 / direct 支）**不必**改。
+    #   ⚠️ **边界**：本守卫落在 `--list-fields` 早返**之后** ⇒ `params --list-fields --module-root <坏路径>`
+    #      **不触发**（该模式不使用模块根 ⇒ 故不校验；实测 `rc=0`）。⛔ **不把守卫前移** —— 那会新增一个
+    #      "校验一个未被使用的参数"的失败面。
+    if root and not os.path.isdir(root):
+        print(f"[FAIL] --module-root 指向的路径不存在或不是目录：{root}")
+        return 2
     if not root:
         d = os.path.dirname(os.path.abspath(args.file))
         while d and os.path.basename(d).lower() != "modules":
@@ -4190,7 +4243,14 @@ def cmd_params(args) -> int:
     print(f"模块根: {root or '（未找到 modules 目录，请用 --module-root 指定）'}")
     print(f"取值控件类型（{len(field_set)} 种）: {', '.join(field_set)}")
     # 注册表来源 —— 与 `itemids` / `check ⑦` 逐字同一句（三处复用 controls_source_line）
-    print(controls_source_line(getattr(args, "controls", None)))
+    # `#74`：给了 `--controls` 但**读不动/不是注册表**时，⛔ **不再把用户给的坏路径当"来源"打印**
+    #   （那读起来像"真的读到了它"、且是**静默回退**）；对齐 `check` 的诚实做法：先说读失败、来源按「**未找到**」。
+    #   ⚠️ 只改**调用方**（`controls_source_line` 三处复用，⛔ 不动它，否则连带 `check ⑦`）。
+    _p_ctl = getattr(args, "controls", None)
+    if _p_ctl and _registry_configs(_p_ctl) is None:
+        print(f"[warn] 读注册表失败：{_p_ctl}（按**未找到**处理；已回退内置兜底）")
+        _p_ctl = None
+    print(controls_source_line(_p_ctl))
 
     stores: list[dict] = []
     transfers: list[tuple] = []   # (通路, 容器列表, 键列表, 原文, 来源文件相对路径)
@@ -4246,6 +4306,8 @@ def cmd_params(args) -> int:
             disp = tgt
         sql_ref_count[disp] = sql_ref_count.get(disp, 0) + 1
 
+    # `#75`：模块根状态**只算一次**（`missing` / `suspect` / `ok`）—— `suspect` 时下面两处改「未核对」。
+    _root_state36 = _module_root_state(root)
     for cfg in stores:
         url, iid = cfg.get("url"), cfg.get("itemId")
         line = f"  itemId={iid!r} autoLoad={cfg.get('autoLoad')!r}"
@@ -4260,6 +4322,12 @@ def cmd_params(args) -> int:
                 # `#36`：**未定位模块根** ⇒ 无从判定载体是否存在 ⇒ ⛔ 不谎报"未找到/不存在"、
                 #   ⛔ 不进 `#36` 分类（若在此 `fp=None ⇒ ok=False` 落 `dangling` ⇒ 全量假 `[warn]`）。
                 line += f"\n      url={tgt} → 未定位模块根，无法判定是否存在（未计入 `#36` 预告）"
+            elif _root_state36 == "suspect" and not os.path.exists(
+                    os.path.join(root, tgt.replace("/", os.sep) + ".xwl")):
+                # `#75`：模块根**存在但不像模块根**（如误指向 webapp 根而非 `…/wb/modules`）⇒
+                #   ⛔ **不谎报「未找到」**（那是"载体悬空"的意思、还会在 `--strict` 下冤枉判红）
+                #   ⇒ 改「**未核对**」＋原因；⛔ 不进 `#36` 分类。
+                line += f"\n      url={tgt} → **未核对**（模块根不像模块根：{root}）"
             else:
                 fp = os.path.join(root, tgt.replace("/", os.sep) + ".xwl")
                 ok = os.path.exists(fp)
@@ -4278,7 +4346,12 @@ def cmd_params(args) -> int:
         print(line)
 
     if direct:
-        print(f"\n=== `Wb.request` 直接调用的 m?xwl（{len(direct)} 个）===")
+        # `#80`：**名不再误标** —— 该清单由 `_REQ_URL_RE`（`:3599`，只看 `url:` ＋ `m?xwl=`、
+        #   **不区分调用方**）喂 ⇒ 里面 `Wb.request` / `Wb.open` / `store.load` 三处**都有**。
+        #   ⚠️ ⛔ **不含** store 的 `configs.url` 键 —— 该正则要求 `url` 后**直接**接 `:`，
+        #   而 store 的 JSON 键形态 `"url":` **不匹配**（store 配置的 url 走另一条收集路径）。
+        #   ⛔ 本段**只承诺"名不再误标"**、⛔ **不承诺"来源可分"**（那需要引入"调用方判定"＝结构改造）。
+        print(f"\n=== `url:'m?xwl=…'` 引用的 m?xwl（{len(direct)} 个；**不区分调用方**）===")
         for tgt in direct:
             if not root:
                 # `#36`：未定位模块根 ⇒ 无法判定 ⇒ ⛔ 不谎报"未找到"、⛔ 不进 `#36` 分类。
@@ -4286,6 +4359,10 @@ def cmd_params(args) -> int:
                 continue
             fp = os.path.join(root, tgt.replace("/", os.sep) + ".xwl")
             ok = os.path.exists(fp)
+            if _root_state36 == "suspect" and not ok:
+                # `#75`（`direct` 支，与 `store` 支**同口径**）：模块根**存在但不像模块根** ⇒ ⛔ 不谎报「未找到」。
+                print(f"  {tgt}.xwl → **未核对**（模块根不像模块根：{root}）")
+                continue
             print(f"  {tgt}.xwl → {'存在（纳入核对）' if ok else '未找到（可能是框架端点，如 common/save-all）'}")
             if ok:
                 # `#56`：走统一收集 ⇒ 已由 store 登记过的载体**也累计**引用计数（若在此 `all(...)`
@@ -4386,7 +4463,8 @@ def cmd_params(args) -> int:
         #   不同处境，合并成一句 `（SQL 侧没有 {?…?} / app.get，跳过交叉核对）` ⇒ 易被读成
         #   "已核对完成" ⇒ **拆成两句**（本行属**默认面输出变更**，已列入本段声明的**默认面变更清单**）。
         # `#51`：这两句**无条件**前置 `[warn] ` 级别前缀 —— 原**无级别前缀** ⇒ 与"已核对完成"肉眼难分。
-        #   ⚠️ `rc` **不变**（本分支恒 `return 0`）：`[warn]` 只作**可见信号**、不进退出码。
+        #   ⚠️ `rc` 在**默认面**不变（不给 `--strict` 时本分支恒 `return 0`）；⭐ **但给了 `--strict`
+        #     且确悬空时**，本分支会由下方早返出口 `return 1`（原写「恒 `return 0`」与 `:4481` 矛盾，已改正）。
         #   ⭐ 本行**是**默认面输出变更 ⇒ 已列入本段声明的**默认面变更清单**。
         if stores:
             print("\n[warn] （有 %d 个 store，但 SQL 侧没有 {?…?} / app.get，跳过交叉核对）" % len(stores))
@@ -4394,6 +4472,13 @@ def cmd_params(args) -> int:
             print("\n[warn] （未发现 store，跳过交叉核对）")
         _emit_36(args, dangling36, placeholder36)
         _print_params_tail(args, root, text, stores, field_set, target_is_carrier=_target_is_carrier)
+        # `#36` 判失败（⭐ **早返出口**）：**"悬空-only"页**（页面无参数需求、只悬空）走的正是本出口
+        #   ⇒ ⛔ 只改末行 ⇒ 该形态仍 `rc=0`。⚠️ 上方那两条「跳过交叉核对」的 `[warn]` **原文案一字不动**
+        #   （它们是**默认面**）⇒ 本出口只在 `--strict` 且**确悬空**时**追加一句**、并把 rc 抬到 1。
+        if dangling36 and getattr(args, "strict", False):
+            print("         ⚠️ 已跳过交叉核对，**但存在 %d 处悬空取数 url**，按 `--strict` 判失败（rc=1）。"
+                  % len(dangling36))
+            return 1
         return 0
 
     # 真白名单：`sys.*` / `Str.*`（以及工程在 `wb/system/var.json` 里自定义的命名空间）
@@ -4433,10 +4518,14 @@ def cmd_params(args) -> int:
     if extra:
         print(f"  [info] 页面送了但 SQL 未用到: {extra}")
     print("\n  提示：参数名 = 控件 `itemId`；改了 itemId 或把控件移出容器都会**静默失效**（取到空值）。")
-    # `#36` 预告（`--strict` 下；⛔ 不改退出码）。⛔ **下方判定行原样不动**（它被一条注入用例按文本锚住）。
+    # `#36` 判失败（`--strict` 下；真·悬空单列为失败项）。⭐ **下方判定行已按本段"翻脸"改写** ——
+    #   段 2 曾在此留「下方判定行**原样不动**」的注释（那是**预告期**的约定），本段正是要动它
+    #   ⇒ 该旧注释**已同步作废**（⛔ 不要再按"原样不动"理解本行）。
     _emit_36(args, dangling36, placeholder36)
     _print_params_tail(args, root, text, stores, field_set, target_is_carrier=_target_is_carrier)
-    return 1 if (miss and getattr(args, "strict", False)) else 0
+    # `#36` 判失败（⭐ **末行出口**）：原有「SQL 缺来源（`miss`）」＋ 本段新增「真·悬空取数 url」；
+    #   ⛔ **显式占位不计入 `dangling36`**（分类见 `_ref_kind36`）⇒ 占位豁免继续生效。
+    return 1 if ((miss or dangling36) and getattr(args, "strict", False)) else 0
 
 
 # --------------------------------------------------------------------------- #

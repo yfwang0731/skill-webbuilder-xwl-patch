@@ -2056,14 +2056,16 @@ def _check_new_guards(tmp, node, failures, write) -> None:
         print("[ok]  ⑪ `#53`：`--upstream` 目标为**载体** ⇒ 「引用本载体的页面」并列出引用方；"
               "目标为**页面** ⇒ 仍「外部可传入」（文案分场景）")
 
-    # ---- ⑫ `#36`（本段序 4）：`params --strict` 下「真·悬空」取数 url 打 `[warn]` 预告、`rc` 不变；显式占位只 `[note]` ----
+    # ---- ⑫ `#36`（本段序 4）：`params --strict` 下「真·悬空」取数 url **判失败（rc=1）**；显式占位只 `[note]` ----
     #   起因（按 `17s`）：`params` 对「取数 url 指向的文件不存在」不给信号（加 `--strict` 仍 rc=0）⇒ 与
-    #     「SQL 缺来源判 rc=1」判据不对称。本段只**预告**（⛔ 不改 rc）；显式占位（`<…>` / `…` / `__MODULE__`）
-    #     识别为**有意待定** ⇒ **永不判红**（否则批量页面对占位写法即大规模误判）。⚠️ 预告设时限（文档明写
-    #     "下一段收紧为失败"）。
-    #   判据（先红后绿）：① 悬空页 `--strict` ⇒ 含 `[warn]` ＋ `#36`、`rc` **仍 0**；
+    #     「SQL 缺来源判 rc=1」判据不对称。⭐ **本段"翻脸"**：真·悬空 ⇒ `--strict` 下**单列为失败项**；
+    #     显式占位（`<…>` / `…` / `__MODULE__`）识别为**有意待定** ⇒ **永不判红**（否则批量页面对占位写法即大规模误判）。
+    #   ⭐ **两条出口都要承载**：末行判定 ＋ **早返出口**（"悬空-only"页走的正是早返）——
+    #     下面 ①（`p36dang`，悬空-only ⇒ 早返）与 ④（`p36final`，有 needed ⇒ 末行）**各钉一条**，⛔ 缺一即漏。
+    #   判据（先红后绿）：① 悬空页 `--strict` ⇒ 含 `[warn]` ＋ `#36`、`rc` **＝ 1**；
     #     ② 占位页 `--strict` ⇒ 含 `[note]` ＋ `#36`、**无** `#36` 的 `[warn]`、`rc` 仍 0；
-    #     ③ 悬空页**不给** `--strict` ⇒ **无** `#36` 行（默认面不动）。
+    #     ③ 悬空页**不给** `--strict` ⇒ **无** `#36` 行 ＋ `rc` **仍 0**（**默认面不动**）；
+    #     ④ 有 needed ＋ 悬空（走末行）⇒ `[warn]` ＋ `rc` **＝ 1**。
     p36_fail: list[str] = []
     _r36 = os.path.join(tmp, "pm_p36")
     _p36d = os.path.join(_r36, "p36dang.xwl")
@@ -2080,10 +2082,10 @@ def _check_new_guards(tmp, node, failures, write) -> None:
                          list_fields=False, upstream=False, strict=True)
     _rc36n, _o36n = _run(xwl.cmd_params, file=_p36d, module_root=_r36, controls=None,
                          list_fields=False, upstream=False, strict=False)
-    if _rc36d != 0:
-        p36_fail.append("⑫ `#36`：悬空页 `--strict` rc=%s（应 0：预告不改退出码）" % _rc36d)
+    if _rc36d != 1:
+        p36_fail.append("⑫ `#36`：悬空页 `--strict` rc=%s（应 1：真·悬空按 `--strict` 判失败）" % _rc36d)
     if not any(l.strip().startswith("[warn]") and "#36" in l for l in _o36d.splitlines()):
-        p36_fail.append("⑫ `#36`：悬空页 `--strict` 未打 `[warn]` 预告\n%s" % _o36d)
+        p36_fail.append("⑫ `#36`：悬空页 `--strict` 未打 `[warn]`（`#36` 失败信号）\n%s" % _o36d)
     if _rc36p != 0:
         p36_fail.append("⑫ `#36`：占位页 `--strict` rc=%s（应 0）" % _rc36p)
     if not any(l.strip().startswith("[note]") and "#36" in l for l in _o36p.splitlines()):
@@ -2092,6 +2094,9 @@ def _check_new_guards(tmp, node, failures, write) -> None:
         p36_fail.append("⑫ `#36`：显式占位被误判红（应只 `[note]`）\n%s" % _o36p)
     if "#36" in _o36n:
         p36_fail.append("⑫ `#36`：不给 `--strict` 时仍出现 `#36` 行（默认面被动）\n%s" % _o36n)
+    if _rc36n != 0:
+        p36_fail.append("⑫ `#36`：悬空页**不给 `--strict`** 时 rc=%s（应 0 —— 翻脸只发生在 `--strict` 下，"
+                        "**默认面必须不动**）" % _rc36n)
     # `#36`/O3：**最终返回路径**（有 `needed` ⇒ 不走早返分支）也要打 `[warn]` 预告 —— ⑫ 只走早返
     #   ⇒ 撤最终路径那处 `_emit_36` 无人报红（盲点）。夹具须让 SQL 侧有 `{?名?}`（needed 非空 ⇒ 走最终返回）。
     _p36f = os.path.join(_r36, "p36final.xwl")
@@ -2100,13 +2105,21 @@ def _check_new_guards(tmp, node, failures, write) -> None:
     _dump(_car36, os.path.join(_r36, "sub", "sel36.xwl"))
     _dump({"title": "p36final", "children": [
         {"configs": {"itemId": "viewport"}, "type": "viewport", "expanded": False,
-         "children": [_store("st36v", "m?xwl=sub/sel36"),        # 存在 ⇒ needed 非空 ⇒ 走**最终返回**
+         # ⭐ 末行出口的判据必须**只由 dangling 决定** ⇒ 该 store 用**字符串**形态的 `params`
+         #   （`xwl.py:4418`：只认字符串）把 SQL 侧的 `x` **给出来** ⇒ `miss` 为空。
+         #   ⛔ 不给来源的话 `miss` 也会把 rc 顶到 1，那样"取消 dangling 判定"**测不出来**。
+         "children": [{"configs": {"itemId": "st36v", "url": "m?xwl=sub/sel36",
+                                   "params": "{x: 1}"},
+                       "type": "store", "expanded": False, "children": []},
                       _store("st36f", "m?xwl=sub/nope36")]}]}, _p36f)   # 悬空
     _rc36f, _o36f = _run(xwl.cmd_params, file=_p36f, module_root=_r36, controls=None,
                          list_fields=False, upstream=False, strict=True)
     if not any(l.strip().startswith("[warn]") and "#36" in l for l in _o36f.splitlines()):
-        p36_fail.append("⑫ `#36`：**最终返回路径**（有 needed）未打 `[warn]` 预告"
+        p36_fail.append("⑫ `#36`：**最终返回路径**（有 needed）未打 `[warn]`"
                         "（撤最终路径那处 `_emit_36` 无人报红 ⇒ 盲点）\n%s" % _o36f)
+    if _rc36f != 1:
+        p36_fail.append("⑫ `#36`：**最终返回路径**（有 needed ＋ 悬空）`--strict` rc=%s"
+                        "（应 1 —— 末行判定必须把 `dangling36` 一并计入）" % _rc36f)
     # `#36`/O4：`common/` **框架端点**豁免 ⇒ 不打任何 `#36` 行（改成判 dangling 则本条红）。
     _p36c = os.path.join(_r36, "p36common.xwl")
     _dump({"title": "p36common", "children": [
@@ -2119,8 +2132,112 @@ def _check_new_guards(tmp, node, failures, write) -> None:
     if p36_fail:
         failures.extend(p36_fail)
     else:
-        print("[ok]  ⑫ `#36`：`--strict` 下悬空取数 url ⇒ `[warn]` 预告、rc 仍 0（早返 ＋ 最终返回两路径都打）；"
-              "显式占位 ⇒ 只 `[note]`；`common/` 端点 ⇒ 不出 `#36`；不给 `--strict` ⇒ 无 `#36` 行（默认面不动）")
+        print("[ok]  ⑫ `#36`：`--strict` 下真·悬空取数 url ⇒ `[warn]` ＋ **rc=1**"
+              "（⭐ **早返 ＋ 末行两出口都承载**）；显式占位 ⇒ 只 `[note]`、rc 仍 0；"
+              "`common/` 端点 ⇒ 不出 `#36`；不给 `--strict` ⇒ 无 `#36` 行、**rc 仍 0（默认面不动）**")
+
+    # ---- ⑮ `#75`（本段序）：模块根「**存在但不像模块根**」⇒ store 支 / direct 支**两站点**都改「未核对」----
+    #   起因（按 `17s`）：`--module-root` 误指向（如 webapp 根而非 `…/wb/modules`）时，`#75` 判据随**目录规模**
+    #     变（实测：1 文件 ⇒ `suspect`；400 文件 ⇒ `suspect`；放 1 个 `.xwl` ⇒ 翻 `ok`）—— 若仍按
+    #     `os.path.exists` 判 ⇒ 会**谎报「未找到」**（那是"载体悬空"的意思、`--strict` 下还冤枉判红）。
+    #   ⭐ **两站点各一条**：store 支（`xwl.py:4325`）与 direct 支（`xwl.py:4362`）**独立** ⇒ 缺一即漏（故两处都造）。
+    #   判据（先红后绿）：① 坏 root（非 `modules` 名、且**零 `.xwl`**）⇒ 两站点都出「未核对」＋原因；
+    #     ② 正确 `modules` 根 ⇒ 两处**均无**「未核对」（防「永远未核对」）。
+    #   ⚠️ 用 `_run` **直调**（实测 +0.02s；走 `_run_cli` 会 +1.0s 子进程启动）；本块不验异常隔离 ⇒ 直调可。
+    p75_fail: list[str] = []
+    _r75 = os.path.join(tmp, "pm_p75")
+    _r75bad = os.path.join(_r75, "notmodules")      # 非 `modules` 名
+    _r75ok = os.path.join(_r75, "modules")          # 正确模块根（判据直接认名）
+    os.makedirs(_r75bad, exist_ok=True)
+    os.makedirs(_r75ok, exist_ok=True)
+    # ⭐ **规模自检（必须有）**：本守卫的判据随目录规模翻转 ⇒ 夹具**自带不变式** ——
+    #   坏 root 下必须是**零 `.xwl`**（哪怕只塞进 1 个 `.xwl`，`_module_root_state` 就翻 `ok`、
+    #   两站点断言全部落空却仍"绿"）⇒ 先断言该不变式、再谈行为断言。
+    _x75 = [_f for _dp, _dn, _fs in os.walk(_r75bad) for _f in _fs if _f.endswith(".xwl")]
+    if _x75:
+        p75_fail.append("⑮ `#75` 夹具不变式破坏：坏 root %s 下应**零 `.xwl`**（否则判据翻 `ok`），实得 %s"
+                        % (_r75bad, _x75))
+    _p75 = os.path.join(_r75, "p75.xwl")
+    _dump({"title": "p75", "children": [
+        {"configs": {"itemId": "viewport",
+                     "events": {"click": "Wb.request({url:'m?xwl=sub/d1'},function(){});"}},
+         "type": "viewport", "expanded": False,
+         "children": [_store("st75", "m?xwl=sub/missing")]}]}, _p75)
+    _rc75b, _o75b = _run(xwl.cmd_params, file=_p75, module_root=_r75bad, controls=None,
+                         list_fields=False, upstream=False)
+    # ⚠️ 断言 A 必须用 **store 专属前缀** `url=sub/missing → …` —— 两支的**尾部**逐字相同
+    #   （都是 `→ **未核对**（模块根不像模块根：`）⇒ 若 A 只用那段公共尾，撤 store 支后仍会被
+    #   **direct 支那行**满足（假绿，与"先红后绿"要求冲突）。B 用 `sub/d1.xwl` 前缀，天然只命中 direct 支。
+    if "url=sub/missing → **未核对**（模块根不像模块根：" not in _o75b:
+        p75_fail.append("⑮ `#75`：坏 root 下 **store 支**未改「未核对」（`xwl.py:4325` 支失效）\n%s" % _o75b)
+    if "sub/d1.xwl → **未核对**（模块根不像模块根：" not in _o75b:
+        p75_fail.append("⑮ `#75`：坏 root 下 **direct 支**未改「未核对」（`xwl.py:4362` 支失效）\n%s" % _o75b)
+    _rc75g, _o75g = _run(xwl.cmd_params, file=_p75, module_root=_r75ok, controls=None,
+                         list_fields=False, upstream=False)
+    if "未核对" in _o75g:
+        p75_fail.append("⑮ `#75`：正确 `modules` 根下仍出现「未核对」（防「永远未核对」失效）\n%s" % _o75g)
+    if p75_fail:
+        failures.extend(p75_fail)
+    else:
+        print("[ok]  ⑮ `#75`：模块根存在但不像模块根 ⇒ store / direct **两站点**都改「未核对」＋原因；"
+              "正确 `modules` 根 ⇒ 两处均无「未核对」；夹具自带「坏 root 零 `.xwl`」规模不变式")
+
+    # ---- ⑯ `#74`（本段序）：**坏 `--controls`** 的诚实化行为（两站点各一条）----
+    #   起因：给了 `--controls` 但**读不动（不是注册表）**时，`params` / `itemids` 曾把用户给的**坏路径**
+    #     当"来源"打印（读起来像"真的读到了它"）、且是**静默回退** ⇒ 对齐 `check` 的诚实做法：
+    #     先说读失败、来源按「**未找到**」。
+    #   ⭐ 本守卫**只钉"坏 `--controls` 的行为"**：① 输出含 `[warn] 读注册表失败：`；
+    #     ② **来源行 == 手写「未找到」文案**、且**不含**那个坏路径（⛔ 不再回退后仍打用户给的坏路径）。
+    #   ⛔ 不重复 `f11`（`selftest.py:5559` 一带）已钉的**文案字面** —— 直接引用**手写**常量
+    #      `_REG_SRC_LINE_UNFOUND`（`:5343`）；⛔ 不改 `controls_source_line`（`xwl.py:1433`，三处复用）。
+    #   ⚠️ 坏 `--controls` 必须是**读不动**的：`_registry_configs` 只在 `json.load` 抛异常时返回 `None`；
+    #      **合法 JSON 但非注册表** ⇒ 返回空 dict、**不触发** warn ⇒ 夹具用**非 JSON**内容。
+    p74_fail: list[str] = []
+    _bad74 = os.path.join(_r75, "bad-registry.json")   # 存在、但**不是**能解析的注册表
+
+    def _src74(_o):
+        for _ln in _o.splitlines():
+            if "控件注册表:" in _ln:
+                return _ln.strip()
+        return None
+
+    with open(_bad74, "w", encoding="utf-8") as _fh:
+        _fh.write("这不是一份能解析的注册表 <<< >>>")
+    _rc74p, _o74p = _run(xwl.cmd_params, file=_p75, module_root=_r75ok, controls=_bad74,
+                         list_fields=False, upstream=False)
+    _rc74i, _o74i = _run(xwl.cmd_itemids, file=_p75, controls=_bad74, name=None, suggest=False,
+                         fix="auto", json=False, dups_only=False)
+    for _site74, _o74 in (("params", _o74p), ("itemids", _o74i)):
+        if "[warn] 读注册表失败：" not in _o74:
+            p74_fail.append("⑯ `#74`（%s 站）：坏 `--controls` 未打 `[warn] 读注册表失败：`\n%s"
+                            % (_site74, _o74))
+        _sl74 = _src74(_o74)
+        if _sl74 != _REG_SRC_LINE_UNFOUND:
+            p74_fail.append("⑯ `#74`（%s 站）：来源行非**手写**「未找到」文案（应 %r，实 %r）"
+                            % (_site74, _REG_SRC_LINE_UNFOUND, _sl74))
+        if _bad74 in (_sl74 or ""):
+            p74_fail.append("⑯ `#74`（%s 站）：来源行**仍打用户给的坏路径**：%r" % (_site74, _sl74))
+    if p74_fail:
+        failures.extend(p74_fail)
+    else:
+        print("[ok]  ⑯ `#74`：坏 `--controls` ⇒ `params` / `itemids` **两站点**都先给"
+              "`[warn] 读注册表失败：`、来源行按**手写**「未找到」文案、⛔ 不再打那个坏路径")
+
+    # ---- ⑰ `#80`（本段序）：**默认面**分组名不再误标「`Wb.request` 直接调用」（⛔ 不加任何开关）----
+    #   起因：该清单由 `_REQ_URL_RE`（只看 `url:` ＋ `m?xwl=`）喂，里面 `Wb.request` / `Wb.open` /
+    #     `store.load` **都有** ⇒ 旧组名「`Wb.request` 直接调用的 m?xwl」**以偏概全**（来源标签失真）。
+    #   ⭐ 判据＝**默认面**（⛔ 不加 `--strict` / `--upstream` 等任何开关）输出含**手写**新组名逐字串。
+    p80_fail: list[str] = []
+    _rc80, _o80 = _run(xwl.cmd_params, file=_p75, module_root=_r75ok, controls=None,
+                       list_fields=False, upstream=False)
+    _want80 = "=== `url:'m?xwl=…'` 引用的 m?xwl（1 个；**不区分调用方**）==="
+    if _want80 not in _o80:
+        p80_fail.append("⑰ `#80`：默认面未出现**手写**新组名 %r\n%s" % (_want80, _o80))
+    if p80_fail:
+        failures.extend(p80_fail)
+    else:
+        print("[ok]  ⑰ `#80`：默认面 `params` 的 `m?xwl` 分组名 = **手写**"
+              "「`url:'m?xwl=…'` 引用的 m?xwl（1 个；**不区分调用方**）」（⛔ 不加任何开关）")
 
 
 # ---- 跨守卫分工表（**原寄居 `_check_docs` 函数体**；#15「减负」时移出，函数体只留指向本常量的指针）----
