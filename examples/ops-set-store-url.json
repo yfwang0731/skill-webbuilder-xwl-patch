@@ -5,7 +5,7 @@
      "configs": {"itemId": "grid1"},
      "expanded": false,
      "children": [
-       {"configs": {"itemId": "store1", "autoLoad": true, "url": "m?xwl=<模块>/xxxSql/queryDemo"},
+       {"configs": {"itemId": "store1", "autoLoad": "true", "url": "m?xwl=<模块>/xxxSql/queryDemo"},
         "expanded": false,
         "children": [],
         "type": "store"}
