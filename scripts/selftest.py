@@ -139,6 +139,49 @@ def _run(fn, **kw):
     return code, buf.getvalue()
 
 
+# ⭐ 同形面收口：`_cap_run` 的返回值 —— 只暴露调用点用到的四属性（`subprocess.run` 的最小替身）。
+_Cap = collections.namedtuple("_Cap", ("returncode", "stdout", "stderr", "timed_out"))
+
+
+def _cap_run(cmd, *, cwd=None, timeout=None, env=None, input=None, binary=False):
+    """跑子进程：`stdout`/`stderr` 落**临时文件**（⛔ 不是管道）＋ `timeout` ⇒ **有界返回**。
+
+    ⭐ 为什么弃 `capture_output=True`（本仓"同形面"病灶）：管道下**后代进程**可能一直持着写端
+      ⇒ 收尾等 EOF **永不返回** —— 连 `timeout` 都卡在"等管道"那一步（对照实测：`capture_output`
+      被阻塞时**不返回**）。改落临时文件后只等**直子**退出，后代持不持都不阻塞 ⇒ `timeout` 到即返回。
+    ⭐ 超时 ⇒ `subprocess.run` 杀掉子进程、`timed_out=True`、`returncode=None`，并把原因**显式**
+      写进 `.stderr` 开头（⛔ 不静默降级 —— 本仓判据：静默一律算缺陷）。
+    ⚠️ `stdout`/`stderr` **两路分开**（⛔ 不合并）：合并会污染 `stdout` 上的判据（如
+      `stdout.strip() == "true"` 一类），与 `_run_cli` 的"断言只看 stdout"同源。
+    返回 `_Cap(returncode, stdout, stderr, timed_out)`：`binary=False` ⇒ 二者为 `str`
+      （`utf-8` ＋ `errors="replace"` ＋ 通用换行，与 `text=True` **同口径**）；`binary=True` ⇒ `bytes`。
+    """
+    with tempfile.TemporaryFile() as _fo, tempfile.TemporaryFile() as _fe:
+        _kw = {"cwd": cwd, "env": env, "stdout": _fo, "stderr": _fe, "timeout": timeout}
+        if input is not None:      # `input` ⇒ `subprocess.run` 自会置 `stdin=PIPE`（此处别显式传 stdin）
+            _kw["input"] = input.encode("utf-8") if isinstance(input, str) else input
+        try:
+            _rc, _to = subprocess.run(cmd, **_kw).returncode, False
+        except subprocess.TimeoutExpired:
+            _rc, _to = None, True
+        _fo.seek(0)
+        _out = _fo.read()
+        _fe.seek(0)
+        _err = _fe.read()
+    if not binary:
+        _out = _out.decode("utf-8", "replace").replace("\r\n", "\n").replace("\r", "\n")
+        _err = _err.decode("utf-8", "replace").replace("\r\n", "\n").replace("\r", "\n")
+    if _to:
+        _m = "[TIMEOUT] 子进程超过 %ss 未退出，已终止" % timeout
+        if binary:      # ⛔ binary 档 `_err` 仍为 bytes：超时提示也须编码成 bytes（str＋bytes ⇒ TypeError 崩块）
+            _m = _m.encode("utf-8")
+            _nl = b"\n"
+        else:
+            _nl = "\n"
+        _err = (_m + _nl + _err) if _err else _m
+    return _Cap(_rc, _out, _err, _to)
+
+
 def _run_cli(argv: list) -> tuple:
     """把命令经**真实 CLI**（子进程跑 `xwl.py`）执行，返回 `(rc, stdout, stderr)`。
 
@@ -156,9 +199,8 @@ def _run_cli(argv: list) -> tuple:
     （⚠️ **不改 `_run` 本身**：`_check_write_failures` 等块**就是要看异常**，改它会破坏那些断言。）
     """
     try:
-        _pr = subprocess.run(
-            [sys.executable, "-B", os.path.join(HERE, "xwl.py"), *argv],
-            capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=120)
+        _pr = _cap_run(
+            [sys.executable, "-B", os.path.join(HERE, "xwl.py"), *argv], timeout=120)
         return _pr.returncode, (_pr.stdout or ""), (_pr.stderr or "")
     except Exception as exc:      # noqa: BLE001 —— 连 CLI 都起不来也要落成断言，不许炸块
         return None, "", "（CLI 起不来）%s: %s" % (type(exc).__name__, exc)
@@ -172,9 +214,8 @@ def _run_cli_env(argv: list, env_extra: dict) -> tuple:
     _env = dict(os.environ)
     _env.update({k: str(v) for k, v in env_extra.items()})
     try:
-        _pr = subprocess.run(
+        _pr = _cap_run(
             [sys.executable, "-B", os.path.join(HERE, "xwl.py"), *argv],
-            capture_output=True, text=True, encoding="utf-8", errors="replace",
             timeout=120, env=_env)
         return _pr.returncode, (_pr.stdout or ""), (_pr.stderr or "")
     except Exception as exc:      # noqa: BLE001 —— 连 CLI 都起不来也要落成断言，不许炸块
@@ -513,8 +554,7 @@ def _check_basics(tmp, node, failures, write) -> None:
     #    那样"另外两个入口仍在甩 Python codec 原文"会被放过（实测过）。
     _k14: dict = {}
     for _sub in ("check", "dump", "params", "itemids"):
-        _r = subprocess.run([sys.executable, os.path.join(HERE, "xwl.py"), _sub, _gbk],
-                            capture_output=True, text=True, encoding="utf-8", errors="replace")
+        _r = _cap_run([sys.executable, os.path.join(HERE, "xwl.py"), _sub, _gbk], timeout=120)
         _k14[_sub] = (_r.stdout or "") + (_r.stderr or "")
     _k14_bad = [k for k, v in _k14.items()
                 if "不是 UTF-8 文本" not in v or "工具不猜编码" not in v]
@@ -580,12 +620,11 @@ def _check_basics(tmp, node, failures, write) -> None:
     _b2 = os.path.join(tmp, "k15nul.xwl")
     with open(_b2, "wb") as _f:
         _f.write(b'{"x":"a\x00b"}')
-    _r2 = subprocess.run([sys.executable, os.path.join(HERE, "xwl.py"), "check",
-                          _b2, "--no-js"],
-                         capture_output=True, text=True, encoding="utf-8", errors="replace")
+    _r2 = _cap_run([sys.executable, os.path.join(HERE, "xwl.py"), "check",
+                    _b2, "--no-js"], timeout=120)
     _o2 = (_r2.stdout or "") + (_r2.stderr or "")
     if _r2.returncode != 0 or "裸 NUL" not in _o2:
-        failures.append("check 未在集成面报出裸 NUL：rc=%d、含「裸 NUL」=%s"
+        failures.append("check 未在集成面报出裸 NUL：rc=%s、含「裸 NUL」=%s"
                         "（删掉 cmd_check 里那段裸 NUL 逻辑应让它红）"
                         % (_r2.returncode, "裸 NUL" in _o2))
     else:
@@ -601,9 +640,8 @@ def _check_basics(tmp, node, failures, write) -> None:
                  '"children":[],"type":"button"},{"configs":{"itemId":"dup","text":"b"},'
                  '"expanded":false,"children":[],"type":"button"}],"type":"panel"}],'
                  '"roles":{},"title":"t","iconCls":"","inframe":false,"pageLink":""}')
-    _r3 = subprocess.run([sys.executable, os.path.join(HERE, "xwl.py"), "itemids",
-                          _a1, "--name", "dup"], capture_output=True, text=True,
-                         encoding="utf-8", errors="replace")
+    _r3 = _cap_run([sys.executable, os.path.join(HERE, "xwl.py"), "itemids",
+                    _a1, "--name", "dup"], timeout=120)
     _ops = [l.strip() for l in (_r3.stdout or "").splitlines() if '{"op":"set"' in l]
     try:
         for _l in _ops:
@@ -621,12 +659,11 @@ def _check_basics(tmp, node, failures, write) -> None:
     _a2 = os.path.join(tmp, "a2nan.xwl")
     with open(_a2, "w", encoding="utf-8", newline="") as _f:
         _f.write('{"n": NaN}')
-    _r4 = subprocess.run([sys.executable, os.path.join(HERE, "xwl.py"), "check",
-                          _a2, "--no-js"], capture_output=True, text=True,
-                         encoding="utf-8", errors="replace")
+    _r4 = _cap_run([sys.executable, os.path.join(HERE, "xwl.py"), "check",
+                    _a2, "--no-js"], timeout=120)
     _o4 = (_r4.stdout or "") + (_r4.stderr or "")
     if _r4.returncode != 1 or "④" not in _o4:
-        failures.append("含 NaN 的样本 check 应为 rc=1 且报 ④，实得 rc=%d"
+        failures.append("含 NaN 的样本 check 应为 rc=1 且报 ④，实得 rc=%s"
                         "（去掉 parse_constant 会让它 rc=0）" % _r4.returncode)
     else:
         print("[ok]  非有限值被判 check ④ 失败（rc=1）")
@@ -635,11 +672,10 @@ def _check_basics(tmp, node, failures, write) -> None:
     _a3 = os.path.join(tmp, "a3negzero.xwl")
     with open(_a3, "w", encoding="utf-8", newline="") as _f:
         _f.write('{"n": -0.0}')
-    _r5 = subprocess.run([sys.executable, os.path.join(HERE, "xwl.py"), "expand",
-                          _a3, "--dry-run"], capture_output=True, text=True,
-                         encoding="utf-8", errors="replace")
+    _r5 = _cap_run([sys.executable, os.path.join(HERE, "xwl.py"), "expand",
+                    _a3, "--dry-run"], timeout=120)
     if _r5.returncode != 0:
-        failures.append("含 -0.0 的样本 expand 应 rc=0（往返一致），实得 %d"
+        failures.append("含 -0.0 的样本 expand 应 rc=0（往返一致），实得 %s"
                         "（把 _number 改回折叠 `-0`/写 `0` 应让它红）" % _r5.returncode)
     else:
         print("[ok]  含 -0.0 的样本 expand rc=0（往返判定一致）")
@@ -1120,7 +1156,7 @@ def _check_subcommands(tmp, node, failures, write) -> None:
         f.write(xwl.dumps_designer(_ce_obj, 1, CRLF))
     _rc_s, _out_s, _err_s = _run_cli(["sql", _ce_page])
     if _rc_s != 0:
-        ce_fail.append("sql 对含 2 条 SQL 的页面 rc=%d（应 0）：\n%s" % (_rc_s, _cli_text(_out_s, _err_s)))
+        ce_fail.append("sql 对含 2 条 SQL 的页面 rc=%s（应 0）：\n%s" % (_rc_s, _cli_text(_out_s, _err_s)))
     if "[1/2]" not in _out_s or "[2/2]" not in _out_s:
         ce_fail.append("sql 未把两条 SQL 都抽出（应见 [1/2] 与 [2/2]）：\n%s" % _out_s)
     if "totalSql" not in _out_s or "select count(1) from dual" not in _out_s:
@@ -1128,7 +1164,7 @@ def _check_subcommands(tmp, node, failures, write) -> None:
     _ev_new = os.path.join(tmp, "ce_events_out")     # 故意指向**不存在**的新目录
     _rc_e, _out_e, _err_e = _run_cli(["events", _ce_page, "--outdir", _ev_new])
     if _rc_e != 0:
-        ce_fail.append("events --outdir 指向新目录 rc=%d（应 0：工具须自建目录）：\n%s"
+        ce_fail.append("events --outdir 指向新目录 rc=%s（应 0：工具须自建目录）：\n%s"
                        % (_rc_e, _cli_text(_out_e, _err_e)))
     if not os.path.isdir(_ev_new):
         ce_fail.append("events --outdir 未创建导出目录")
@@ -1136,7 +1172,7 @@ def _check_subcommands(tmp, node, failures, write) -> None:
         ce_fail.append("events --outdir 目录里没有导出任何 .js")
     _rc_d, _out_d, _err_d = _run_cli(["dump", _ce_page])
     if _rc_d != 0:
-        ce_fail.append("dump rc=%d（应 0）" % _rc_d)
+        ce_fail.append("dump rc=%s（应 0）" % _rc_d)
     if len(_out_d.splitlines()) <= 1:
         ce_fail.append("dump 输出只有 %d 行（应 >1：dump 的用途是**美化**输出）" % len(_out_d.splitlines()))
     if ce_fail:
@@ -1302,7 +1338,7 @@ def _check_subcommands(tmp, node, failures, write) -> None:
         f.write(xwl.dumps_designer(_dup_obj, 1, CRLF))
     _rc_pd, _out_pd, _err_pd = _run_cli(["paths", _dup_page])
     if _rc_pd != 0:
-        dup_fail.append("paths 对重名页 rc=%d（应 0）：\n%s" % (_rc_pd, _cli_text(_out_pd, _err_pd)))
+        dup_fail.append("paths 对重名页 rc=%s（应 0）：\n%s" % (_rc_pd, _cli_text(_out_pd, _err_pd)))
     if "⚠ @写法" not in _out_pd or "出现 2 次" not in _out_pd:
         dup_fail.append("paths 对「恰好 2 个同名 itemId」未给 ⚠ 点名告警：\n%s" % _out_pd)
     if "推荐" in _out_pd:
@@ -2596,12 +2632,13 @@ def _git_scan_scope(root: str):
     _seen: set = set()
     for _c in (["ls-files"], ["ls-files", "--others", "--exclude-standard"]):
         try:
-            _pr = subprocess.run(["git", "-C", root, *_c], capture_output=True, text=True,
-                                 encoding="utf-8", errors="replace", env=dict(os.environ))
+            _pr = _cap_run(["git", "-C", root, *_c], timeout=120, env=dict(os.environ))
         except (OSError, ValueError) as _exc:
             return None, "%s: %s" % (type(_exc).__name__, _exc)
+        if _pr.timed_out:
+            return None, "`git %s` 超时未返回" % " ".join(_c)
         if _pr.returncode != 0:
-            return None, "`git %s` 返回 %d" % (" ".join(_c), _pr.returncode)
+            return None, "`git %s` 返回 %s" % (" ".join(_c), _pr.returncode)
         for _x in _pr.stdout.splitlines():
             _x = _x.strip()
             if _x and _x not in _seen:
@@ -4345,15 +4382,15 @@ def _check_platform(tmp, node, failures, write) -> None:
     xwl_py = os.path.join(HERE, "xwl.py")
     for args in (["--help"], ["check", "--help"], ["folders", "--help"]):
         try:
-            pr = subprocess.run([sys.executable, xwl_py] + args, capture_output=True,
-                                env=env_cp, timeout=90)
+            pr = _cap_run([sys.executable, xwl_py] + args, env=env_cp, timeout=90,
+                          binary=True)
         except Exception as exc:  # noqa: BLE001
             e_fail.append("PYTHONIOENCODING=cp1252 下跑 `xwl.py %s` 抛异常：%s"
                           % (" ".join(args), exc))
             continue
         if pr.returncode != 0:
             tail = (pr.stderr or b"").decode("utf-8", "replace").strip().splitlines()
-            e_fail.append("PYTHONIOENCODING=cp1252 下 `xwl.py %s` 退出 %d：%s"
+            e_fail.append("PYTHONIOENCODING=cp1252 下 `xwl.py %s` 退出 %s：%s"
                           % (" ".join(args), pr.returncode,
                              (tail[-1] if tail else "")[:80]))
     if e_fail:
@@ -4427,8 +4464,7 @@ def _check_write_failures(tmp, node, failures, write) -> None:
     nodir = os.path.join(tmp, "wf_nodir")
 
     def _cli(argv):
-        pr = subprocess.run([sys.executable, xwl_py] + argv, capture_output=True,
-                            text=True, encoding="utf-8", errors="replace", timeout=180)
+        pr = _cap_run([sys.executable, xwl_py] + argv, timeout=180)
         return pr.returncode, (pr.stdout or "") + (pr.stderr or "")
 
     wf: list[str] = []
@@ -4446,7 +4482,7 @@ def _check_write_failures(tmp, node, failures, write) -> None:
             if "Traceback" in out:
                 wf.append("%s：抛了 Python traceback（应给 [FAIL] + rc=2）" % label)
             elif rc != 2:
-                wf.append("%s：退出码 %d（应为 2）" % (label, rc))
+                wf.append("%s：退出码 %s（应为 2）" % (label, rc))
             elif "[FAIL]" not in out:
                 wf.append("%s：没有 [FAIL] 提示" % label)
     finally:
@@ -4476,8 +4512,7 @@ def _check_edit_eol(tmp, node, failures, write) -> None:
     xwl_py = os.path.join(os.path.dirname(os.path.abspath(__file__)), "xwl.py")
 
     def _cli(argv):
-        pr = subprocess.run([sys.executable, xwl_py] + argv, capture_output=True,
-                            text=True, encoding="utf-8", errors="replace", timeout=180)
+        pr = _cap_run([sys.executable, xwl_py] + argv, timeout=180)
         return pr.returncode, (pr.stdout or "") + (pr.stderr or "")
 
     def _mk(name, text):
@@ -4502,7 +4537,7 @@ def _check_edit_eol(tmp, node, failures, write) -> None:
     n = _mk("ee_n1.txt", '"roles": {},\n "title": "ZZZ"')
     rc, out = _cli(["edit", t, "--old-file", o, "--new-file", n])
     if rc != 0 or "锚点出现次数: 0" in out:
-        ee.append("LF 文件上跨行锚点应能匹配（归一化写死换行时会报「锚点出现次数: 0」）：rc=%d" % rc)
+        ee.append("LF 文件上跨行锚点应能匹配（归一化写死换行时会报「锚点出现次数: 0」）：rc=%s" % rc)
     elif _eol_of(t)[0]:
         ee.append("LF 文件写入后被混入 CRLF：CRLF=%d LF=%d" % _eol_of(t))
 
@@ -4512,7 +4547,7 @@ def _check_edit_eol(tmp, node, failures, write) -> None:
     n = _mk("ee_n2.txt", '"roles": {\n  "default": 1\n}')
     rc, out = _cli(["edit", t, "--old-file", o, "--new-file", n])
     if rc != 0:
-        ee.append("LF 文件 + 多行 new 应成功：rc=%d" % rc)
+        ee.append("LF 文件 + 多行 new 应成功：rc=%s" % rc)
     elif _eol_of(t)[0]:
         ee.append("LF 文件 + 多行 new 后混入 CRLF（CRLF=%d LF=%d），应保持全 LF" % _eol_of(t))
 
@@ -4522,7 +4557,7 @@ def _check_edit_eol(tmp, node, failures, write) -> None:
     n = _mk("ee_n3.txt", '"roles": {},\n "title": "ZZZ"')
     rc, out = _cli(["edit", t, "--old-file", o, "--new-file", n])
     if rc != 0:
-        ee.append("CRLF 文件 + 跨行锚点应成功：rc=%d" % rc)
+        ee.append("CRLF 文件 + 跨行锚点应成功：rc=%s" % rc)
     elif _eol_of(t)[1]:
         ee.append("CRLF 文件写入后被混入 LF：CRLF=%d LF=%d" % _eol_of(t))
 
@@ -4574,8 +4609,7 @@ def _check_eol_and_guards(tmp, node, failures, write) -> None:
     xwl_py = os.path.join(os.path.dirname(os.path.abspath(__file__)), "xwl.py")
 
     def _cli(argv):
-        pr = subprocess.run([sys.executable, xwl_py] + argv, capture_output=True,
-                            text=True, encoding="utf-8", errors="replace", timeout=180)
+        pr = _cap_run([sys.executable, xwl_py] + argv, timeout=180)
         return pr.returncode, (pr.stdout or "") + (pr.stderr or "")
 
     def _mk(name, text):
@@ -4662,7 +4696,7 @@ def _check_eol_and_guards(tmp, node, failures, write) -> None:
     if "Traceback" in out:
         ge.append("值含孤立代理项时抛了 Python traceback（应给可读结果）")
     elif rc != 0:
-        ge.append("值含孤立代理项时应能写完（rc=0），实得 rc=%d" % rc)
+        ge.append("值含孤立代理项时应能写完（rc=0），实得 rc=%s" % rc)
     else:
         raw = open(f, "rb").read()
         if b"\\ud800" not in raw:
@@ -4707,13 +4741,10 @@ def _check_diffguard(tmp, node, failures, write) -> None:
     BS = chr(92)
 
     def _git(*a):
-        return subprocess.run(["git", *a], cwd=repo, capture_output=True,
-                              text=True, encoding="utf-8", errors="replace")
+        return _cap_run(["git", *a], cwd=repo, timeout=120)
 
     def _cli(*a, cwd=None):
-        pr = subprocess.run([sys.executable, xwl_py, *a], cwd=cwd or repo,
-                            capture_output=True, text=True, encoding="utf-8",
-                            errors="replace", timeout=180)
+        pr = _cap_run([sys.executable, xwl_py, *a], cwd=cwd or repo, timeout=180)
         return pr.returncode, (pr.stdout or "") + (pr.stderr or "")
 
     def _mk(name, text):
@@ -4740,10 +4771,19 @@ def _check_diffguard(tmp, node, failures, write) -> None:
     # `_mk` 写回（省掉 8 次 `git checkout -- dg.xwl`）—— 语义等价：`checkout` 本来也只是
     # 把文件恢复成基线内容。
     GIT_ID = ("-c", "user.email=selftest@local", "-c", "user.name=selftest")
-    _git("init", "-q")
+    # ⭐ `_git` 的超时**显式收口**（起因：本批给 `_git` 加了 `timeout=120` 后，超时 ⇒ `returncode`
+    #   为 `None`，会被下面那条 `!= 0` 判**误读成「无法建立仓库」**并**静默跳过 ⇒ 整块判绿**）。
+    #   ⇒ 建库三步（`init`/`add`/`commit`）任一 `timed_out` ⇒ **显式判红**（与「无法建立仓库」区分开）。
+    _g_init = _git("init", "-q")
     _mk("dg.xwl", SRC)                          # 新文件 ⇒ 首次入库仍须 `git add`
-    _git("add", "-A")
-    if _git(*GIT_ID, "commit", "-q", "-m", "base").returncode != 0:
+    _g_add = _git("add", "-A")
+    _g_commit = _git(*GIT_ID, "commit", "-q", "-m", "base")
+    if _g_init.timed_out or _g_add.timed_out or _g_commit.timed_out:
+        failures.append("diffguard 夹具：`git` 调用超时（已终止，timeout=120s）—— "
+                        "≠「无法建立临时 git 仓库」；超时**不得静默跳过**"
+                        "（diffguard 断言未执行 ⇒ 判红）")
+        return
+    if _g_commit.returncode != 0:
         print("[note] 无法建立临时 git 仓库，跳过 diffguard 断言")
         return
     BASE = SRC                                  # dg.xwl 的当前基线（= 最近一次提交的内容）
@@ -4767,7 +4807,7 @@ def _check_diffguard(tmp, node, failures, write) -> None:
     # ① 未改动 → 不能报
     rc, out = _cli("diffguard", "dg.xwl")
     if rc != 0 or "[warn]" in out:
-        dg.append("diffguard 对未改动文件应 rc=0 且无告警（rc=%d）" % rc)
+        dg.append("diffguard 对未改动文件应 rc=0 且无告警（rc=%s）" % rc)
 
     # ② 压平（删掉续行符把 4 行挤成 1 行）→ 必须报；默认 rc=0，--strict 下 rc=1
     _mk("dg.xwl", _flat(SRC))
@@ -4775,10 +4815,10 @@ def _check_diffguard(tmp, node, failures, write) -> None:
     if "[warn]" not in out or "压平" not in out:
         dg.append("diffguard 没报出被压平的文件（反向退化 ⇒ 这个能力等于没有）")
     if rc != 0:
-        dg.append("diffguard 默认应只告警（rc=0），实得 rc=%d" % rc)
+        dg.append("diffguard 默认应只告警（rc=0），实得 rc=%s" % rc)
     rc, out = _cli("diffguard", "dg.xwl", "--strict")
     if rc != 1:
-        dg.append("diffguard --strict 下疑似压平应 rc=1，实得 rc=%d" % rc)
+        dg.append("diffguard --strict 下疑似压平应 rc=1，实得 rc=%s" % rc)
 
     # ③ 反面对照：合法删掉两行多行 JS → 续行符也净减少，但**不得**报（否则天天误报）
     _mk("dg.xwl", BASE)
@@ -4790,7 +4830,7 @@ def _check_diffguard(tmp, node, failures, write) -> None:
     if "[warn]" in out:
         dg.append("diffguard 把「合法删除一段多行 JS」误报成压平（续行符净减少≠压平）")
     if rc != 0:
-        dg.append("diffguard 对合法删减应 rc=0，实得 rc=%d" % rc)
+        dg.append("diffguard 对合法删减应 rc=0，实得 rc=%s" % rc)
 
     # ④ 反面对照：只在同一行里加长内容（续行符不变）→ 不得报
     _mk("dg.xwl", BASE)
@@ -4821,7 +4861,7 @@ def _check_diffguard(tmp, node, failures, write) -> None:
         elif "精确命中" not in out:
             dg.append("diffguard 报「%s」时没标出是精确命中" % label)
         if rc != 1:
-            dg.append("「%s」--strict 下应 rc=1，实得 %d" % (label, rc))
+            dg.append("「%s」--strict 下应 rc=1，实得 %s" % (label, rc))
         _mk("dg.xwl", BASE)
 
     # ④c **行号落点必须真实**（起因 diffguard 行号落 0）：精确判据报出的「工作区第 N 行」必须是**真实物理行号**、
@@ -4865,10 +4905,10 @@ def _check_diffguard(tmp, node, failures, write) -> None:
     _mk("dg_fresh.xwl", SRC)
     rc, out = _cli("diffguard", "dg_fresh.xwl")
     if rc != 0 or "跳过" not in out:
-        dg.append("diffguard 对新文件应提示跳过且 rc=0（rc=%d）" % rc)
+        dg.append("diffguard 对新文件应提示跳过且 rc=0（rc=%s）" % rc)
     rc, out = _cli("diffguard", "dg_fresh.xwl", "--strict")
     if rc != 2:
-        dg.append("diffguard --strict 下一个文件都没比成时应 rc=2（实得 %d）" % rc)
+        dg.append("diffguard --strict 下一个文件都没比成时应 rc=2（实得 %s）" % rc)
 
     # ⑥b 退出码优先级：**可疑压平 > 跳过**（否则带新增文件的 CI 会永远红）
     big = _build("var rec = app.g.getSelection()[0];",
@@ -4881,12 +4921,12 @@ def _check_diffguard(tmp, node, failures, write) -> None:
     _mk("dg_fresh2.xwl", SRC)
     rc, out = _cli("diffguard", "dg.xwl", "dg_fresh2.xwl", "--strict")
     if rc != 1:
-        dg.append("同时有可疑压平与跳过项时 --strict 应 rc=1（可疑优先），实得 %d" % rc)
+        dg.append("同时有可疑压平与跳过项时 --strict 应 rc=1（可疑优先），实得 %s" % rc)
 
     # ⑦ --rev 写错是用法错 → rc=2（且不得被说成"新增文件"）
     rc, out = _cli("diffguard", "dg.xwl", "--rev", "no-such-ref")
     if rc != 2 or "不存在" not in out:
-        dg.append("diffguard 对不存在的 --rev 应 rc=2 并明说基线不存在（rc=%d）" % rc)
+        dg.append("diffguard 对不存在的 --rev 应 rc=2 并明说基线不存在（rc=%s）" % rc)
 
     # ⑧ 不在 git 仓库里 → 跳过而不是崩
     nogit = os.path.join(tmp, "dg_nogit")
@@ -4895,7 +4935,7 @@ def _check_diffguard(tmp, node, failures, write) -> None:
         fh.write(SRC)
     rc, out = _cli("diffguard", "n.xwl", cwd=nogit)
     if rc != 0 or "跳过" not in out or "Traceback" in out:
-        dg.append("diffguard 在非 git 目录应提示跳过、rc=0、不冒 traceback（rc=%d）" % rc)
+        dg.append("diffguard 在非 git 目录应提示跳过、rc=0、不冒 traceback（rc=%s）" % rc)
 
     # ⑨ **cwd 的另一种写法**（Windows 8.3 短名 ↔ 长名）下必须仍能比对。
     #     这一条补的是一个真实事故：`windows-latest` 上 diffguard 整组 8 项 FAIL、
@@ -5773,6 +5813,17 @@ def _run_serial(blocks, node) -> list[str]:
     return failures
 
 
+# ⭐ 并行派发时单块的**兜底超时**（秒）：worker 卡住 ⇒ 杀掉并**显式报失败**（⛔ 不静默跳过／通过）。
+#   起因：外层注入器虽有超时，但**内层派发侧不能裸奔** —— worker 一旦卡死，`poll()` 永不返回，
+#   整个自检**无界挂住**（本批正是治这个）。默认 1800s；可用环境变量 `XWL_SELFTEST_JOB_TIMEOUT`
+#   覆盖（≤ 0 视为关闭兜底，退回旧的无界行为）。
+_JOB_TIMEOUT = 1800
+try:
+    _JOB_TIMEOUT = int(os.environ.get("XWL_SELFTEST_JOB_TIMEOUT") or _JOB_TIMEOUT)
+except ValueError:
+    pass
+
+
 def _run_parallel(blocks, node, jobs: int) -> list[str]:
     """并发（`--jobs N`）：每块在**独立子进程**里跑（各自 mkdtemp、失败写 JSON）。
 
@@ -5788,9 +5839,13 @@ def _run_parallel(blocks, node, jobs: int) -> list[str]:
     且**顺序固定为块定义序** ⇒ 展示部分与 `--jobs 1` **逐字同序**（非并发交错、逐次不同）。
     失败（`[FAIL]`）仍走"每块 JSON 文件、父进程回收"⇒ **失败永不丢**。父进程收齐后只按
     **固定块顺序**汇总打印 `[FAIL]`。
+    ⭐ 内层兜底（本批新增）：单块超过 `_JOB_TIMEOUT` 秒未退出 ⇒ **杀掉该 worker 并把它
+    记进 `[FAIL]`**（⛔ 既不跳过、也不通过）—— 免"worker 卡死 ⇒ 整个自检**无界挂住**"。
     """
     rdir = tempfile.mkdtemp(prefix="xwl_selftest_res_")
     procs: dict[str, tuple] = {}
+    started: dict[str, float] = {}      # 各 worker 的启动时刻（monotonic）⇒ 内层兜底超时判据
+    timed_out: set = set()              # 被兜底超时杀掉的块名（回放阶段**显式报失败**，⛔ 不静默跳过）
     pending = list(blocks)
     active: list[str] = []
     while pending or active:
@@ -5818,10 +5873,23 @@ def _run_parallel(blocks, node, jobs: int) -> list[str]:
                 _cmd, env={**os.environ, "PYTHONIOENCODING": "utf-8:backslashreplace"},
                 stdout=fout, stderr=ferr)
             procs[name] = (proc, result, fout, ferr, outlog, errlog)
+            started[name] = time.monotonic()
             active.append(name)
         time.sleep(0.1)
+        _now = time.monotonic()
         for name in list(active):
             if procs[name][0].poll() is not None:
+                active.remove(name)
+            elif _JOB_TIMEOUT > 0 and started[name] + _JOB_TIMEOUT < _now:
+                # ⭐ 内层兜底：worker 卡住 ⇒ 杀掉、**显式**记成失败（⛔ 不是跳过、不是通过）。
+                #   外层注入器虽有超时，内层不能裸奔 —— 否则 `poll()` 永不返回、整块无界挂住。
+                _p = procs[name][0]
+                _p.kill()
+                try:
+                    _p.wait(timeout=10)
+                except subprocess.TimeoutExpired:
+                    pass
+                timed_out.add(name)
                 active.remove(name)
 
     failures: list[str] = []
@@ -5829,6 +5897,11 @@ def _run_parallel(blocks, node, jobs: int) -> list[str]:
         proc, result, fout, ferr, outlog, errlog = procs[name]
         fout.close()
         ferr.close()
+        if name in timed_out:
+            # ⭐ 被兜底超时杀掉的块：其捕获输出**必然是截断的**（可能停在半个 `[ok]` 行）
+            #   ⇒ 先在回放前出一条 `[note]`，免"画面先出一串 `[ok]`、再报 `[FAIL]`"的误导。
+            print("[note] 块 %s 已被兜底超时终止（超过 %ss 未退出）⇒ 以下为**截断**的捕获输出，"
+                  "不是该块的完整结果" % (name, _JOB_TIMEOUT))
         # ⭐ 按**块定义序**回放：stdout → stdout、stderr → stderr（两路**不合并**）。
         # ⭐ 回放**绝不静默丢弃**（批2b·P2）：按**字节**读，先**严格**解一次（仅用于探测）；
         #   解不动 ⇒ 用 `errors="replace"` **照常回放**，并**打印一行可见提示**点名是哪块、发生了什么。
@@ -5861,13 +5934,20 @@ def _run_parallel(blocks, node, jobs: int) -> list[str]:
                 sink.write(text)
             except Exception as exc:  # noqa: BLE001 —— 回放失败不得影响判据（failures 仍据 JSON 定）
                 print("[note] 块 %s 的 %s 展示输出写不到目标流：%s" % (name, _lbl, exc))
-        if proc.returncode != 0:
+        if name in timed_out:
+            # ⭐ 超时块**显式报出**（⛔ 不静默）：点名块与超时值；worker 已杀 ⇒ **有界返回**。
+            failures.append("块 %s 的子进程超过 %d 秒未退出（worker 卡住）⇒ 已终止"
+                            % (name, _JOB_TIMEOUT))
+        elif proc.returncode != 0:
             failures.append("块 %s 的子进程异常退出（rc=%s）" % (name, proc.returncode))
-        try:
-            with open(result, encoding="utf-8") as fh:
-                failures.extend(json.load(fh))
-        except Exception as exc:  # noqa: BLE001
-            failures.append("块 %s 的失败清单读不到：%s" % (name, exc))
+        # ⭐ 超时块**必然写不出** JSON（worker 被杀在写盘前）⇒ 不再叠加一条误导的
+        #   「失败清单读不到：No such file …」——只保留上面那条正确的超时 `[FAIL]`。
+        if not (name in timed_out and not os.path.exists(result)):
+            try:
+                with open(result, encoding="utf-8") as fh:
+                    failures.extend(json.load(fh))
+            except Exception as exc:  # noqa: BLE001
+                failures.append("块 %s 的失败清单读不到：%s" % (name, exc))
     return failures
 
 
@@ -5903,6 +5983,12 @@ def main(argv: list[str] | None = None) -> int:
         sys.stdout.reconfigure(line_buffering=True)     # 并行时每行一次原子写，不与其他子进程交错
     except Exception:           # noqa: BLE001
         pass
+
+    # ⭐ 显式声明兜底被关闭（本仓判据：静默一律算缺陷）—— `≤ 0` 的语义（关闭）**不变**，只是不许静默。
+    #    只在**顶层**进程打印一次（并行派生的 worker 带 `--result` ⇒ 跳过，免每块各重复一行）。
+    if args.result is None and _JOB_TIMEOUT <= 0:
+        print("[note] XWL_SELFTEST_JOB_TIMEOUT=%s（≤ 0）⇒ 并行派发的单块兜底超时**已关闭**："
+              "worker 若卡死将**无界挂住**（退回旧行为）。" % _JOB_TIMEOUT, flush=True)
 
     # ---- `--list-blocks`：按定义序逐行打印自检块名（供 `--only` 选块）后退出 ----
     if args.list_blocks:

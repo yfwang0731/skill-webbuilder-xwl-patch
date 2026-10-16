@@ -680,9 +680,9 @@ def _node_check_once(node: str, code: str) -> tuple[bool, str]:
     try:
         with os.fdopen(fd, "w", encoding="utf-8", newline="") as f:
             f.write(code)
-        proc = subprocess.run(
-            [node, "--check", tmp], capture_output=True, text=True,
-            encoding="utf-8", errors="replace", timeout=60
+        proc = _cap_run(
+            [node, "--check", tmp],
+            timeout=60,
         )
         if proc.returncode == 0:
             return True, ""
@@ -748,10 +748,10 @@ def node_check_many(node: str, codes: list) -> list:
         return []
     results = None
     try:
-        proc = subprocess.run(
+        proc = _cap_run(
             [node, "-e", _NODE_BATCH_JS],
             input=json.dumps([{"code": c} for c in codes]),
-            capture_output=True, text=True, encoding="utf-8", timeout=300,
+            timeout=300,
         )
         if proc.returncode == 0:
             got = json.loads(proc.stdout)
@@ -3198,9 +3198,66 @@ def _longest_line(text: str) -> tuple:
     return best, best_no
 
 
+# ⭐ 同形面收口：`_cap_run` 的返回值 —— 只暴露调用点用到的四属性（`subprocess.run` 的最小替身）。
+_Cap = collections.namedtuple("_Cap", ("returncode", "stdout", "stderr", "timed_out"))
+
+
+def _cap_run(cmd, *, cwd=None, timeout=None, env=None, input=None, binary=False):
+    """跑子进程：`stdout`/`stderr` 落**临时文件**（⛔ 不是管道）＋ `timeout` ⇒ **有界返回**。
+
+    ⭐ 为什么弃 `capture_output=True`（本仓"同形面"病灶）：管道下**后代进程**可能一直持着写端
+      ⇒ 收尾等 EOF **永不返回** —— 连 `timeout` 都卡在"等管道"那一步（对照实测：`capture_output`
+      被阻塞时**不返回**）。改落临时文件后只等**直子**退出，后代持不持都不阻塞 ⇒ `timeout` 到即返回。
+    ⭐ 超时 ⇒ `subprocess.run` 杀掉子进程、`timed_out=True`、`returncode=None`，并把原因**显式**
+      写进 `.stderr` 开头（⛔ 不静默降级 —— 本仓判据：静默一律算缺陷）。
+    ⚠️ `stdout`/`stderr` **两路分开**（⛔ 不合并）：合并会污染 `stdout` 上的判据
+      （如 `stdout.strip() == "true"` 一类）。
+    返回 `_Cap(returncode, stdout, stderr, timed_out)`：`binary=False` ⇒ 二者为 `str`
+      （`utf-8` ＋ `errors="replace"` ＋ 通用换行，与 `text=True` **同口径**）；`binary=True` ⇒ `bytes`。
+    """
+    with tempfile.TemporaryFile() as _fo, tempfile.TemporaryFile() as _fe:
+        _kw = {"cwd": cwd, "env": env, "stdout": _fo, "stderr": _fe, "timeout": timeout}
+        if input is not None:      # `input` ⇒ `subprocess.run` 自会置 `stdin=PIPE`（此处别显式传 stdin）
+            _kw["input"] = input.encode("utf-8") if isinstance(input, str) else input
+        try:
+            _rc, _to = subprocess.run(cmd, **_kw).returncode, False
+        except subprocess.TimeoutExpired:
+            _rc, _to = None, True
+        _fo.seek(0)
+        _out = _fo.read()
+        _fe.seek(0)
+        _err = _fe.read()
+    if not binary:
+        _out = _out.decode("utf-8", "replace").replace("\r\n", "\n").replace("\r", "\n")
+        _err = _err.decode("utf-8", "replace").replace("\r\n", "\n").replace("\r", "\n")
+    if _to:
+        _m = "[TIMEOUT] 子进程超过 %ss 未退出，已终止" % timeout
+        if binary:      # ⛔ binary 档 `_err` 仍为 bytes：超时提示也须编码成 bytes（str＋bytes ⇒ TypeError 崩块）
+            _m = _m.encode("utf-8")
+            _nl = b"\n"
+        else:
+            _nl = "\n"
+        _err = (_m + _nl + _err) if _err else _m
+    return _Cap(_rc, _out, _err, _to)
+
+
+# ⭐ 超时哨兵：git 探针**超时**与**否定结果**（不在仓库 / rev 坏）在上层必须**可区分**。
+#   ⚠️ 否则二者会被折成 `None`（`_git_prefix`）/ `False`（`_git_has_rev`），`cmd_diffguard`
+#   据此把「超时」**误诊**成「不在 git 仓库里（或调不到 git）」/「基线 `HEAD` 不存在」。
+#   修法只动**超时路径**：成功 / 否定路径的返回类型与取值**一字未动**（⛔ 不动对外判定面）。
+_GIT_TIMEOUT = object()
+
+# `_git_show` 的 `why` 哨兵：把"必须报 `[FAIL]` 的基线不可用"从"跳过并说明"里分出来
+#   （⛔ 内部哨兵，不是给用户看的文案；`cmd_diffguard` 见到它自行打印中文）。
+#   `"BADREV"`      ＝ `--rev` 本身解析不了（用法错）。
+#   `_GIT_REV_TIMEOUT` ＝ `git rev-parse` **超时**（⛔ 不是用法错，但同样"无法确认基线" ⇒ 保 rc=2）。
+_GIT_REV_TIMEOUT = "GITREVTIMEOUT"
+
+
 @functools.lru_cache(maxsize=None)
 def _git_prefix(cwd: str):
-    """返回 `cwd` **相对仓库根**的路径（仓库根处为 `""`）；不在仓库 / 调不到 git ⇒ `None`。
+    """返回 `cwd` **相对仓库根**的路径（仓库根处为 `""`）；不在仓库 / 调不到 git ⇒ `None`；
+    **git 调用超时** ⇒ `_GIT_TIMEOUT`（与"不在仓库"可区分，⛔ 不再折成 `None`）。
 
     **为什么不让 Python 自己算相对路径**：`git rev-parse --show-toplevel` 给出的绝对
     路径与 `os.path.abspath` **不一定同源**。Windows 上 `TEMP` 常是 8.3 短名
@@ -3213,27 +3270,32 @@ def _git_prefix(cwd: str):
     按 `cwd` 缓存：批量跑时同一目录的文件只起一次 git 进程。
     """
     try:
-        p = subprocess.run(["git", "rev-parse", "--show-prefix"], cwd=cwd,
-                           capture_output=True, timeout=30)
+        p = _cap_run(["git", "rev-parse", "--show-prefix"], cwd=cwd,
+                     timeout=30, binary=True)
     except (OSError, subprocess.SubprocessError):
         return None
+    if p.timed_out:                 # ⭐ 超时 ≠ 不在仓库：哨兵上传，由调用方鉴别
+        return _GIT_TIMEOUT
     if p.returncode != 0:
         return None
     return p.stdout.decode("utf-8", "replace").strip()
 
 
 @functools.lru_cache(maxsize=None)
-def _git_has_rev(rev: str, cwd: str) -> bool:
-    """`rev` 在这个仓库里能否解析；调不到 git / 不在仓库 ⇒ `False`。
+def _git_has_rev(rev: str, cwd: str):
+    """`rev` 在这个仓库里能否解析（`True` / `False`）；调不到 git / 不在仓库 ⇒ `False`；
+    **git 调用超时** ⇒ `_GIT_TIMEOUT`（与"rev 坏"可区分，⛔ 不再折成 `False`）。
 
     按 `(rev, cwd)` 缓存：`diffguard` 会遍历整个目录，而 `rev` 对同一仓库是常量 ——
     不缓存的话每个文件都要多起一次 git 进程。
     """
     try:
-        p = subprocess.run(["git", "rev-parse", "--verify", "--quiet", rev],
-                           cwd=cwd, capture_output=True, timeout=30)
+        p = _cap_run(["git", "rev-parse", "--verify", "--quiet", rev],
+                     cwd=cwd, timeout=30, binary=True)
     except (OSError, subprocess.SubprocessError):
         return False
+    if p.timed_out:                 # ⭐ 超时 ≠ rev 不存在：哨兵上传，由调用方鉴别
+        return _GIT_TIMEOUT
     return p.returncode == 0
 
 
@@ -3243,20 +3305,26 @@ def _git_show(rev: str, rel: str, cwd: str, in_repo: bool):
     找不到 git / 不在仓库 / 路径不在该 rev 里 —— 一律转成"跳过并说明"，
     因为这几件事都不是使用者的用法错误。
     `--rev` **本身不存在**是例外：那是用法错误，用哨兵 `"BADREV"` 报给调用方转成 rc=2。
+    git 探针**超时**也**不是**"基线不存在"，用哨兵 `_GIT_REV_TIMEOUT` 报给调用方
+    （⇒ 文案写"超时"，⛔ 不冒充 `"BADREV"`）。
     """
     if not in_repo:
         return False, None, "不在 git 仓库里（或调不到 git）"
     if not rel or rel.startswith(".."):     # 纯防御：rel 由 git 给出，正常不会含 ..
         return False, None, "路径不在该仓库内"
     try:
-        if not _git_has_rev(rev, cwd):
+        has = _git_has_rev(rev, cwd)
+        if has is _GIT_TIMEOUT:             # ⭐ rev-parse 超时 ≠ rev 坏。
+            return False, None, _GIT_REV_TIMEOUT
+        if not has:
             return False, None, "BADREV"
-        got = subprocess.run(["git", "show", f"{rev}:{rel}"], cwd=cwd,
-                             capture_output=True, timeout=60)
+        got = _cap_run(["git", "show", f"{rev}:{rel}"], cwd=cwd,
+                       timeout=60, binary=True)
     except (OSError, subprocess.SubprocessError) as exc:
         return False, None, f"git show 失败（{type(exc).__name__}）"
     if got.returncode != 0:
-        return False, None, f"在 `{rev}` 里没有这个文件（新增文件？）"
+        return False, None, ("git show 超时（已终止）" if got.timed_out else
+                             f"在 `{rev}` 里没有这个文件（新增文件？）")
     return True, got.stdout, None
 
 
@@ -3310,12 +3378,18 @@ def cmd_diffguard(args) -> int:
         # 仓库内路径 = 「仓库根 → cwd」由 **git 自己**给出（带尾斜杠） + 文件名。
         # `basename` 只涉及同一个字符串，不可能算出 `..`；盘符/短名一概不相关。
         prefix = _git_prefix(cwd)
-        rel = f"{prefix}{os.path.basename(abs_path)}" if prefix is not None else ""
-        ok, head_bytes, why = _git_show(args.rev, rel, cwd, prefix is not None)
+        if prefix is _GIT_TIMEOUT:      # ⭐ 超时 ≠ 不在仓库：显式诊断，⛔ 不当成"不是仓库"
+            ok, head_bytes, why = False, None, "git 调用超时（已终止）"
+        else:
+            rel = f"{prefix}{os.path.basename(abs_path)}" if prefix is not None else ""
+            ok, head_bytes, why = _git_show(args.rev, rel, cwd, prefix is not None)
 
         print(f"=== diffguard: {safe_relpath(path)}")
         if why == "BADREV":
             print(f"[FAIL] 基线 `{args.rev}` 不存在（或不是一个能解析的 revision）")
+            return 2
+        if why == _GIT_REV_TIMEOUT:      # ⭐ 超时 ≠ 基线不存在：文案说"超时"，但**仍 rc=2**（severity 未变）
+            print(f"[FAIL] 调 git 校验基线超时（已终止） —— 无法确认基线 `{args.rev}` 是否存在")
             return 2
         if not ok:
             print(f"  [note] 跳过：{why} —— 无法与基线 `{args.rev}` 比对")
