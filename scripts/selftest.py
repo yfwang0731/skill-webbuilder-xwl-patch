@@ -81,6 +81,7 @@ import io
 import json
 import os
 import re
+import shlex
 import subprocess
 import sys
 import tempfile
@@ -3090,6 +3091,139 @@ def _trows(ls):
             and not set(l.strip()) <= set("|-: ")}
 
 
+# ---- `#82` 的**通用解析式守卫**（并入既有 17h 块，⛔ 不新增块名）----
+#   起因（按 17s 的纪律写清"不这么做会漏什么"）：`#82` 的既有裁定是「**登记为已知无守卫、
+#     ⛔ 不加窄守卫**」—— 因为候选处置（硬编码某一个 flag 名的断言）属「纸糊式」：
+#     那个 flag 一改名断言照样绿、而新写错的另一条样例照样绿。⇒ **正解是机械验证「照抄能跑通」**：
+#     把文档里写给用户看的 `xwl.py <命令> …` 逐条喂 `build_parser().parse_args()`，
+#     解析器拒哪条就红哪条 —— 与具体 flag 名、与子命令清单**都无关**（解析器本身是唯一权威）。
+#   ⚠️ 抽取面**可枚举、⛔ 不写死文件清单**：走 `_doc_names(root)`（根三份 + `references/` 磁盘推导）
+#     ⇒ 后续在 `references/faq.md` 增删一条命令样例会**自动进/出**本守卫，不必改代码；
+#     只排除 `CHANGELOG.md`（历史记录按写入时的事实记，同 17j-9 的豁免口径）。
+#   ⚠️ 只收**围栏块内、整行以 `xwl.py` 起头**的形态（＝真能照抄的形态）：行内反引号里的
+#     `xwl.py new`（散文提及、无参数）不算 —— 拿它判会把"提个名字"误判成"样例坏了"。
+#   ⚠️ 含模板记法（`…` ／ `|`）的行 ⇒ **截断到第一个模板记号之前、`[` 起的可选组舍去** 后
+#     **仍送解析器判一次**（`_prompt_cmd_prefix_argv`）：能过 ＝ 合法的省略写法，过不了 ＝ 照样红
+#     —— 否则**加个 `…` 就能免检**（实测：只要文档里还有别的合法样例，坏样例带 `…` 即整体仍绿）；
+#     条数仍打进 `[ok]` 行。
+_PROMPT_CMD_RE = re.compile(r"^\s*(?:python\s+)?(?:\S*/)?xwl\.py(?:\s+(.*))?$")
+_PROMPT_TEMPLATE_MARKS = ("…", "|")
+
+
+def _prompt_cmd_strip_comment(s):
+    """去掉行尾 shell 注释（`#` 前须为行首或空白；引号内的 `#` 不动）。"""
+    _q = None
+    for _i, _ch in enumerate(s):
+        if _q:
+            if _ch == _q:
+                _q = None
+        elif _ch in ("'", '"'):
+            _q = _ch
+        elif _ch == "#" and (_i == 0 or s[_i - 1].isspace()):
+            return s[:_i]
+    return s
+
+
+def _prompt_cmd_prefix_argv(body):
+    """模板记法行 ⇒ 可判定的**前缀 argv**（截到第一个模板记号前；`[` 起的可选组整段舍去）。
+
+    ⚠️ 为什么不能直接跳过：`xwl.py check a.xwl --no-such-flag …` 这类**坏样例**一旦带 `…`
+    就会被静默放行（实测：只要文档里还有别的合法样例，整体仍绿）⇒ 守卫漏检。
+    截断后仍送解析器：`--no-such-flag` 不存在就会红；而 `xwl.py params <page.xwl> [--controls …]`
+    截成 `params <page.xwl>` 能过 —— 两边都不冤。
+    """
+    _cut = len(body)
+    for _t in _PROMPT_TEMPLATE_MARKS:
+        _i = body.find(_t)
+        if 0 <= _i < _cut:
+            _cut = _i
+    _out = []
+    for _tok in body[:_cut].split():
+        if _tok.startswith("["):
+            break
+        _out.append(_tok)
+    return _out
+
+
+def _doc_prompt_cmds(root):
+    """从文档围栏块里抽 `xwl.py <命令> …` 样例 ⇒ (参与判定的 [(rel, 行号, argv 文本)], 模板记法行 [(rel, 行号, argv 文本)])"""
+    _got, _skip = [], []
+    for _rel in [n for n in _doc_names(root) if n != "CHANGELOG.md"]:
+        try:
+            with open(os.path.join(root, _rel.replace("/", os.sep)), encoding="utf-8") as _fh:
+                _lines = _fh.read().splitlines()
+        except OSError:
+            continue
+        _in = False
+        for _no, _ln in enumerate(_lines, 1):
+            if _ln.strip().startswith("```"):
+                _in = not _in
+                continue
+            if not _in:
+                continue
+            _m = _PROMPT_CMD_RE.match(_ln)
+            if not _m:
+                continue
+            _body = _prompt_cmd_strip_comment(_m.group(1) or "").strip()
+            if not _body:
+                continue
+            if any(_t in _body for _t in _PROMPT_TEMPLATE_MARKS):
+                _skip.append((_rel, _no, _body))
+                continue
+            _got.append((_rel, _no, _body))
+    return _got, _skip
+
+
+def _doc_prompt_cmd_probe(root):
+    """判**每条文档命令样例都能被解析器接住** ⇒ `(FAIL 文案 or None, 判定条数, 模板记法条数)`。"""
+    _got, _skip = _doc_prompt_cmds(root)
+    if not (_got or _skip):
+        return ("prompt 命令样例守卫：一条 `xwl.py <命令>` 样例都没抽到 ⇒ 本项无法判定，判红"
+                "（抽取面可能已失效：围栏块标记或起头形态变了）", 0, len(_skip))
+    try:
+        _ap = xwl.build_parser()
+    except Exception as _exc:  # noqa: BLE001
+        return "prompt 命令样例守卫：`build_parser()` 跑不起来：%s" % _exc, len(_got), len(_skip)
+    _bad = []
+    for _rel, _no, _body in _got:
+        try:
+            _argv = shlex.split(_body)
+        except ValueError as _exc:
+            _bad.append("%s:%d 「%s」引号不闭合（%s）" % (_rel, _no, _body, _exc))
+            continue
+        _err, _out = io.StringIO(), io.StringIO()
+        try:
+            with contextlib.redirect_stderr(_err), contextlib.redirect_stdout(_out):
+                _ap.parse_args(_argv)
+        except SystemExit as _exc:
+            if _exc.code not in (0, None):     # `--help` 走 `SystemExit(0)`：能跑通，不算红
+                _last = (_err.getvalue().strip().splitlines() or ["（解析器没给错因）"])[-1]
+                _bad.append("%s:%d 「%s」⇒ %s" % (_rel, _no, _body, _last))
+        except Exception as _exc:  # noqa: BLE001
+            _bad.append("%s:%d 「%s」⇒ %s: %s" % (_rel, _no, _body, type(_exc).__name__, _exc))
+    # ⭐ 模板记法行（`…` / `|`）**不再免检**：截断到第一个记号之前、可选组舍去后仍判一次。
+    for _rel, _no, _body in _skip:
+        _p_argv = _prompt_cmd_prefix_argv(_body)
+        if not _p_argv:
+            continue
+        _p_err, _p_out = io.StringIO(), io.StringIO()
+        try:
+            with contextlib.redirect_stderr(_p_err), contextlib.redirect_stdout(_p_out):
+                _ap.parse_args(_p_argv)
+        except SystemExit as _exc:
+            if _exc.code not in (0, None):
+                _p_last = (_p_err.getvalue().strip().splitlines() or ["（解析器没给错因）"])[-1]
+                _bad.append("%s:%d 「%s」⇒ 截断前缀「%s」被判 %s（模板记法**不等于**可以写错参数）"
+                            % (_rel, _no, _body, " ".join(_p_argv), _p_last))
+        except Exception as _exc:  # noqa: BLE001
+            _bad.append("%s:%d 「%s」⇒ %s: %s" % (_rel, _no, _body, type(_exc).__name__, _exc))
+    if _bad:
+        return ("prompt 里的命令样例「照抄跑不通」%d/%d 条（文档写的命令必须能被 `xwl.py` 的解析器接住；"
+                "改了参数 / 子命令请**同批**改文档）：%s"
+                % (len(_bad), len(_got) + len(_skip), "；".join(_bad[:6])), len(_got), len(_skip))
+    return None, len(_got), len(_skip)
+
+
 def _check_docs(tmp, node, failures, write) -> None:
     """文档一致性守卫（跨文件）：重复表格 / 引用可解析 / 格式 / 自称数字 / 索引与节号（第 17~18 组）"""
 
@@ -3366,6 +3500,20 @@ def _check_docs(tmp, node, failures, write) -> None:
             doc_fail.append("test-prompts.json 里没有任何 prompt 覆盖这些子命令：%s" % _uncovered)
     except (OSError, ValueError) as _exc:
         doc_fail.append("test-prompts.json 读不了或不是合法 JSON：%s" % _exc)
+
+    # ⭐ 并入本块（17h）：**文档里写给用户看的命令样例，照抄必须跑得通**（`#82` 的通用解析式守卫）。
+    #     起因：`#82` 裁定「登记为已知无守卫、⛔ 不加窄守卫」（硬编码某个 flag 名属"纸糊式"）——
+    #     正解即本臂：逐条喂 `build_parser().parse_args()`，与具体 flag / 子命令清单无关。
+    #     抽取面与跳过口径见模块级 `_PROMPT_CMD_RE` 上方注释（**可枚举、不写死文件清单**）。
+    #     ⚠️ 与 17h 同属一类：**样例/语料必须与命令行接口同步**（那边是 test-prompts 的覆盖度，
+    #     这边是文档样例的可解析性）⇒ 故并入、⛔ 不新开块名（新块名会撞 `_DOC_GUARD_BLOCK_BASELINE`）。
+    _pc_bad, _pc_n, _pc_skip = _doc_prompt_cmd_probe(root)
+    if _pc_bad:
+        doc_fail.append(_pc_bad)
+    else:
+        print("[ok]  文档命令样例可解析：%d 条 `xwl.py <命令>` 照抄全部能被解析器接住"
+              "（另有模板记法 %d 条：`…`／`|` 截到记号前、可选组舍去后**也判过**，不因带省略号就免检）"
+              % (_pc_n, _pc_skip))
 
     # 17i 打包元数据必须与 SKILL.md 一致。`metadata.json` 是**平台与本地评测器读的**打包声明
     #     （TRACE 的 T/R/E 维直接看它），却一直没有守卫 —— 版本号 / name / references 列表

@@ -296,7 +296,7 @@ def _strip_trailing_commas(t: str) -> str:
     跟踪转义态，**只在字符串外**删逗号 ⇒ `{"s":"a,}"}` 里字符串内的 `,}` 原样保留、取值不变。
 
     已知未对齐面（本轮**只做尾随逗号**）：加载器还接受单引号键 / 未引号键 / 相邻的贪婪
-    `{...}{...}`（只取第一个）—— 这些**不处理**、登记为候选、须单独立项。而 `\\x` 非标准转义**不在此列**：加载器**同样拒绝** ⇒ 工具报 ④ FAIL 是正确的。
+    `{...}{...}`（只取第一个）—— 这些**不处理**、登记为候选、须单独立项。而 `\\x` 非标准转义**不在此列**：加载器**同样拒绝** ⇒ 工具报 ④ FAIL 是正确的。⚠️ **限定（仅 ④ 判定面）**：`parse_xwl` 等**公共入口仍不处理**这三类（`params` 面行为不变）；但 ④ 判定处另有**局部宽容解析**（`_check_wide_parse_or_none`）⇒ 这三类形态在 ④ 上与加载器一致；⚠️ **不等于全等价**（加载器比 ④ 更宽，见 `references/faq.md` ④）。
     """
     out = []
     in_str = False
@@ -835,6 +835,72 @@ def _load_chain_issues(obj) -> list:
     return issues
 
 
+# ⑧ 的**第二类**判据 —— **数据加载链**（`M4` 节点 2）。口径来源＝`acceptance_metrics.py` 的 `M4`
+#   （该工具的判据已于 2026-10-10 修定：①按值扫、逐段剥注释 ②`store.reload(` 算 ③`Wb.request` 不算）。
+#   ⚠️ 与上面三条的**性质不同**：那三条是「加载期必抛」的硬结构；本条是**负向断言**
+#      （「结果表**永不**加载」）—— 静态文本证不了「永不」⇒ 同样只 `[warn]`、不进 rc，
+#      且文案必须带"人工确认"提示（父页以窗口/子页方式打开本页时由父页 load，本页文件里看不到）。
+def _store_load_chain_issues(obj) -> list:
+    """返回「数据加载链」问题清单（空 ＝ 有加载通路 / 无 store / `obj` 非对象）。
+
+    判据（三条判定同源于 `acceptance_metrics.py` 的 `M4`；⚠️ **取页口径不同** —— `M4` 按**文件名** `*.page.xwl` 认页，`check` 面对**任意** `.xwl` ⇒ 这里按**内容级**认页（页内有 `type == "store"` 就查），见 `references/faq.md` ⑧）：
+      ① 页内有 `store`，且**没有任何** `configs.autoLoad` ∈ {`True`, `"true"`, `"1"`}；
+      ② 且**承载 JS 的字符串**（带 `type` 的节点的 `events.*` 值 ＋ `configs` 字符串值）里
+         扫不到 `.load(` / `store.reload(` —— ⚠️ 逐段过 `strip_js_comments`（注释里的不算）；
+         ⚠️ 裸 `reload(` 不算（会误命中 `Wb.reload(`）、`Wb.request` 也不算（见 `M4` 的口径声明）；
+      ③ ①② 同时成立 ⇒ 报一条。
+
+    ⚠️ **遍历只走 `children`**（⛔ 不下钻 `configs`）：与 `M4` 的 `iter_nodes` 同源 ——
+       `configs` 里的内联对象会成"幻影控件"（同 `_iter_controls` 的用途边界）。
+    """
+    issues: list = []
+    if not isinstance(obj, dict):
+        return issues
+
+    stores: list = []
+    chunks: list = []
+
+    def walk(o) -> None:
+        if isinstance(o, list):
+            for v in o:
+                walk(v)
+            return
+        if not isinstance(o, dict):
+            return
+        if isinstance(o.get("type"), str):
+            if o.get("type") == "store":
+                stores.append(o)
+            evs = o.get("events")
+            if isinstance(evs, dict):
+                for v in evs.values():
+                    if isinstance(v, str) and v.strip():
+                        chunks.append(v)
+            cfgs = o.get("configs")
+            if isinstance(cfgs, dict):
+                for v in cfgs.values():
+                    if isinstance(v, str) and v.strip():
+                        chunks.append(v)
+        walk(o.get("children"))
+
+    walk(obj)
+    if not stores:
+        return issues
+    for st in stores:
+        cfg = st.get("configs")
+        val = cfg.get("autoLoad") if isinstance(cfg, dict) else None
+        if val is True or (isinstance(val, str) and val.lower() in ("true", "1")):
+            return issues
+    scan = "\n".join(strip_js_comments(c) for c in chunks)
+    if ".load(" in scan or "store.reload(" in scan:
+        return issues
+    issues.append(
+        "store 无加载通路：%d 个 store 既无 `autoLoad`，页内也扫不到 `.load(` / `store.reload(`"
+        " —— 结果表可能永不加载。⚠️ 本项是**负向断言**：窗口内嵌 / 窗口子页（由父页 load）、"
+        "运行时动态绑定时不适用，须结合**源页语义**与**引入方式**人工确认" % len(stores)
+    )
+    return issues
+
+
 def _js_err_head(err: str) -> str:
     """从 node `--check` 的 stderr 里取**真正的诊断行**（供 ⑥ / ⑥-ext 报错正文用）。
 
@@ -860,9 +926,102 @@ def _js_err_head(err: str) -> str:
     return "语法错误"
 
 
+def _check_wide_normalize(t: str) -> str:
+    """把加载器（org.json）接受、但 Python `json` 拒绝的**两类**形态归一到标准 JSON。
+
+    只做两件事（⛔ 不扩面）：
+      · 单引号串（键 / 值）⇒ 双引号串；
+      · `{` 或 `,` 之后「未加引号的标识符紧跟 `:`」⇒ 给该标识符补上双引号（键）。
+
+    字符串感知：字符串内部的 `{` `}` `,` `:` 一律不参与判定（只在串外换引号 / 补键引号）。
+    ⚠️ **转义原样透传**：`\\x` 这类非标准转义**不修**，交给 `json` 判错 —— 加载器同样拒绝它，
+    ⇒ ④ 该 FAIL，这一条是**故意**不宽松的。
+
+    ⛔ 它不是公共解析入口的一部分：`parse_xwl` / `_strip_trailing_commas` 一字不动（行为面隔离），
+    本函数只被 `cmd_check` 的 ④ 经 `_check_wide_parse_or_none` 调用。
+
+    ⚠️ **token 面限定**：本函数的 token 面只覆盖**标识符形态**（`[A-Za-z0-9_$.]`）；加载器的 token 面更宽，
+    **未引号「值」与含 `-` 的键不在本函数覆盖内** —— 当前语料实测**零实例**，属**已知能力边界**（见 `references/faq.md` ④）。
+    """
+    out: list[str] = []
+    i = 0
+    n = len(t)
+    in_quote = ""
+    after_sep = False          # 位于 `{` / `,` 之后（其间允许空白）
+    while i < n:
+        c = t[i]
+        if in_quote:
+            if c == "\\":
+                out.append(t[i:i + 2])      # 转义对原样透传（`\x` 就此保留，交给 json 判错）
+                i += 2
+                continue
+            if c == in_quote:
+                out.append('"')
+                in_quote = ""
+                i += 1
+                continue
+            out.append('\\"' if c == '"' else c)   # 单引号串里的裸 `"` 需转义后才能放进双引号串
+            i += 1
+            continue
+        if c == '"' or c == "'":
+            in_quote = c
+            out.append('"')
+            i += 1
+            after_sep = False
+            continue
+        if c == "{" or c == ",":
+            out.append(c)
+            i += 1
+            after_sep = True
+            continue
+        if after_sep and (c.isalnum() or c in "_$."):
+            j = i
+            while j < n and (t[j].isalnum() or t[j] in "_$."):
+                j += 1
+            k = j
+            while k < n and t[k] in " \t\r\n":
+                k += 1
+            if k < n and t[k] == ":":
+                out.append('"' + t[i:j] + '"')     # 未引号键 ⇒ 补引号
+            else:
+                out.append(t[i:j])
+            i = j
+            after_sep = False
+            continue
+        if c not in " \t\r\n":
+            after_sep = False
+        out.append(c)
+        i += 1
+    return "".join(out)
+
+
+def _check_wide_parse_or_none(text: str):
+    """`check` ④ 专用的**局部**宽容解析；任何异常一律返回 `None`（**不抛**）。
+
+    与 `parse_xwl` 只差一步：解析前多跑一次 `_check_wide_normalize`；**取值一律交回**
+    `parse_xwl` —— ⛔ 这里**不另做**解析（切片 / 剥尾逗号 / `json.loads`），否则对
+    `parse_xwl` 的收严变异会被这条"第二次机会"救活。第三类形态「相邻贪婪 `{...}{...}`
+    （`json.loads` 报 `Extra data`、加载器读到第一个闭括号就收工）由 `raw_decode`
+    **只量第一个对象的边界**（不判取值），再把 `{` 起的前缀原文交回 `parse_xwl`
+    ⇒ 前导内容仍留在输入里、收严变异照样爆；其余口径全部同源于公共入口。
+    """
+    try:
+        t = _strip_trailing_commas(_check_wide_normalize(loader_text(text)))
+        pos = t.find("{")
+        if pos < 0:
+            return None
+        end = json.JSONDecoder(strict=False, parse_constant=_reject_nonfinite).raw_decode(t[pos:])[1]
+        return parse_xwl(t[:pos + end])
+    except Exception:  # noqa: BLE001
+        return None
+
+
 def cmd_check(args) -> int:
+    # ⚠️ `no_js` 一律 `getattr(..., False)` 取：本仓惯用「手工 Namespace」（`selftest._run_check`
+    #    只带 `{files,node,no_js}`、`_post_check` 自带该键）⇒ 属性缺失时按 False，⛔ 别改回直取。
+    no_js = getattr(args, "no_js", False)
     node = find_node(args.node)
-    if node is None and not args.no_js:
+    if node is None and not no_js:
         print("[warn] 未找到 node，事件 JS 语法校验被跳过（用 --node 指定，或 --no-js 静音）")
 
     failed = False
@@ -878,7 +1037,7 @@ def cmd_check(args) -> int:
     checks = getattr(args, "checks", None)
     if checks is None:
         checks = {1, 2, 3, 4, 5, 6, 7, 8}
-        if getattr(args, "no_js", False):
+        if no_js:
             checks.discard(6)
         if getattr(args, "no_itemid", False):
             checks.discard(7)
@@ -954,7 +1113,13 @@ def cmd_check(args) -> int:
         try:
             obj = parse_xwl(text)
         except Exception as exc:  # noqa: BLE001
-            if not text.strip():
+            # 另外 3 类「加载器接受」的形态（单引号键/值、未引号键、相邻贪婪 `{...}{...}`）
+            #   只在 ④ 判定处这一次做局部宽容解析；⛔ 公共入口 `parse_xwl` 不改 ⇒ `params` 面行为不变。
+            #   ⚠️ `exc` 必须仍是**第一次** `parse_xwl` 的错 ⇒ 纯坏文件的 ④ 文案逐字不变。
+            wide = _check_wide_parse_or_none(text)
+            if wide is not None:
+                obj = wide
+            elif not text.strip():
                 errors.append("④ 这是空文件（尚未建内容），不是格式错误 —— 但它无法被加载器加载")
                 notes.append("空文件常**集中出现**、不是均匀形态（多半是脚本只建了文件、"
                              "没填内容）。")
@@ -965,7 +1130,7 @@ def cmd_check(args) -> int:
 
         # ⑥ 事件 JS 语法
         events: list[tuple[str, str]] = []
-        if obj is not None and node and not args.no_js and 6 in checks:
+        if obj is not None and node and not no_js and 6 in checks:
             events = collect_events(obj)
             results = node_check_many(node, [code for _name, code in events])
             for (name, _code), (ok, err) in zip(events, results):
@@ -1001,7 +1166,7 @@ def cmd_check(args) -> int:
         reg_warn: list[str] = []
         _controls = getattr(args, "controls", None)
         if obj is not None and _controls:
-            _rf, reg_show, reg_warn, _nh = _check_registry_dims(obj, _controls, node, args.no_js)
+            _rf, reg_show, reg_warn, _nh = _check_registry_dims(obj, _controls, node, no_js)
             errors.extend(_rf)      # 仅 ⑥-ext（configs 内联 [js] 语法错）进 rc；⑨ 已降为 warn
             if _nh:
                 reg_hits_all += _nh
@@ -1016,7 +1181,7 @@ def cmd_check(args) -> int:
             print("  [ok]   ① BOM  ② 换行一致  ③ 续行空白  ④ 解析  ⑤ 末行结构")
             # ⑥⑦ 无论跑没跑都要留一行 —— 否则用户看到 6 行、文档写「八项」，
             # 而且 `--no-js` 与 `--no-js --no-itemid` 的输出会长得一模一样。
-            if args.no_js:
+            if no_js:
                 print("  [note] ⑥ 事件 JS 语法校验：已按 `--no-js` 跳过")
             elif node is None:
                 print("  [note] ⑥ 事件 JS 语法校验：未找到 node，已跳过（见上方 warn）")
@@ -1049,14 +1214,15 @@ def cmd_check(args) -> int:
             print(f"  [warn] {w}")
         for n in notes:
             print(f"  [note] {n}")
-        # ⑧ 加载链完整性（**只提示、不进 rc**）—— 三条判据见 `_load_chain_issues`。
+        # ⑧ 加载链完整性（**只提示、不进 rc**）—— 判据见 `_load_chain_issues`（结构位三条）
+        #    ＋ `_store_load_chain_issues`（数据加载链，`M4` 节点 2；同为 warn、不进 rc）。
         #    ⚠️ 必须打在 `if errors … else …`（916–939）**之外**：④ 失败（`obj is None`）时
         #       也要留一行"因解析失败跳过"，塞进 `else` 会让 FAIL 时 ⑧ 消失。
         if 8 in checks:
             if obj is None:
                 print("  [note] ⑧ 加载链完整性：因解析失败跳过")
             else:
-                _chain = _load_chain_issues(obj)
+                _chain = _load_chain_issues(obj) + _store_load_chain_issues(obj)
                 if _chain:
                     for _cw in _chain:
                         print(f"  [warn] ⑧ 加载链完整性：{_cw}")
@@ -4880,4 +5046,16 @@ def main(argv: list[str] | None = None) -> int:
 
 
 if __name__ == "__main__":
-    sys.exit(main())
+    try:
+        sys.exit(main())
+    except BrokenPipeError:
+        # 下游提前关管道（如 `xwl.py dump big.xwl | head -1`）：不吐 traceback、按 0 退出。
+        # ⚠️ 射程仅「**先读走一行**再关」这一种时序：Windows 上「一行都不读就 close」抛的是
+        #    `OSError: [Errno 22]`、**不是** `BrokenPipeError` ⇒ 本条不覆盖它（⛔ 别扩到 catch
+        #    `OSError`：那会把真错误一起吞掉）。
+        # 先把 stdout 接回 devnull —— 否则解释器退出时再次 flush 会抛「Exception ignored」。
+        try:
+            os.dup2(os.open(os.devnull, os.O_WRONLY), sys.stdout.fileno())
+        except OSError:
+            pass
+        sys.exit(0)

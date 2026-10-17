@@ -2,7 +2,7 @@
 name: webbuilder-xwl-patch
 slug: skill-webbuilder-xwl-patch
 displayName: webbuilder-xwl-patch
-version: 1.6.5
+version: 1.6.6
 license: MIT
 metadata:
   category: development-tools
@@ -378,7 +378,7 @@ python scripts/xwl.py check <file.xwl> --no-itemid          # 跳过注册键重
 - **⑦ 的 `[FAIL]` 与 ①–⑥ 性质不同** —— ①–⑤ 是**格式**（文件坏了）、⑥ 是**事件 JS 语法**，⑦ 是**命名质量**
   （文件能用但取值有风险）。所以 `patch` / `edit` / `expand` **写盘后的自动校验只判 ①–⑥**，
   否则会出现"写盘成功却返回非 0"。要看 ⑦ 请单独跑 `check`，或直接 `itemids`。
-- **第 ⑧ 维是"只提示"**：加载链完整性有问题（如 `children` 不是数组）时只打 `[warn] ⑧ 加载链完整性：…`，**不影响退出码**；正常打 `[note] ⑧ 加载链完整性：无异常`、④ 解析失败时打 `[note] ⑧ 加载链完整性：因解析失败跳过`（**它同样不进写盘后自检**）。
+- **第 ⑧ 维是"只提示"**：加载链完整性有问题（如 `children` 不是数组）时只打 `[warn] ⑧ 加载链完整性：…`，**不影响退出码**；正常打 `[note] ⑧ 加载链完整性：无异常`、④ 解析失败时打 `[note] ⑧ 加载链完整性：因解析失败跳过`（**它同样不进写盘后自检**）。⚠️ 本版起 ⑧ **另含一条「数据加载链」**：页内有 `store`，却既没有 `configs.autoLoad`、页内也扫不到 `.load(`／`store.reload(` ⇒ 同样只打 `[warn]`（提示**结果表可能永不加载**、须人工确认）；**窗口内嵌／以子页方式打开**（由父页 load）、**运行时动态绑定**时**不适用**，判据与例外见 [references/faq.md](references/faq.md) ⑧。
 > 自己写校验脚本的两坑（② **别写成"必须 CRLF"**、④ **不是替换成换行符**）见 [references/faq.md](references/faq.md) §一。
 
 ### 第 5 步 · 提交前扫一遍（`diffguard`。**只在 git 仓库里有意义**）
