@@ -3541,6 +3541,33 @@ def _check_docs(tmp, node, failures, write) -> None:
             if _mdrefs != _dkrefs:
                 doc_fail.append("metadata.json 的 references 列表与磁盘不一致：声明 %s / 实际 %s"
                                 % (_mdrefs, _dkrefs))
+            # ⭐ 打包声明与变更记录的**措辞对账**（note 级：⛔ 不进 `doc_fail`、⛔ 不改 `rc`）。
+            #     起因（现象）：`update_history` 段按历史记录语义整段豁免，于是「同一事实在打包声明的
+            #     最新版 summary 与变更记录里措辞不一致」无人发现 —— 最新版 summary 里的某个标识，
+            #     在 CHANGELOG 与其余交付物正文里都找不到，读的人无从判断它指代什么。
+            #     只提示、不下判：差集非空也可能是包内无法解析的内部标号，须人工确认。
+            #     `update_history` 缺失／不是 list／首元素不是 dict／`summary` 缺失 ⇒ 静默跳过。
+            _idn_re = re.compile(r"(?<![A-Za-z0-9])[A-Za-z]{1,4}\d{1,3}(?![A-Za-z0-9])|#\d{1,3}")
+            _idn_hist = _md.get("update_history")
+            _idn_own = set()
+            if isinstance(_idn_hist, list) and _idn_hist and isinstance(_idn_hist[0], dict):
+                _idn_sum = _idn_hist[0].get("summary")
+                if isinstance(_idn_sum, str):
+                    _idn_own = set(_idn_re.findall(_idn_sum))
+            if _idn_own:
+                _idn_pool = set()
+                for _idn_t in _txt.values():
+                    _idn_pool.update(_idn_re.findall(_idn_t if isinstance(_idn_t, str) else str(_idn_t)))
+                try:
+                    with open(os.path.join(root, "CHANGELOG.md"), "r", encoding="utf-8") as _idn_fh:
+                        _idn_pool.update(_idn_re.findall(_idn_fh.read()))
+                except OSError:
+                    pass
+                _idn_cand = sorted(_idn_own - _idn_pool)
+                if _idn_cand:
+                    print("[note] 17i-note 交付物标识一致性：最新版 summary 出现 %d 个别处没有的标识 %s"
+                          " ⇒ 可能是包内无法解析的内部标号，须人工确认（不进 rc）"
+                          % (len(_idn_cand), "、".join(_idn_cand)))
         except (OSError, ValueError) as _exc:
             doc_fail.append("metadata.json 读不了或不是合法 JSON：%s" % _exc)
 
@@ -4291,7 +4318,7 @@ def _check_docs(tmp, node, failures, write) -> None:
             doc_fail.extend(_b17r_fail[:12])
         else:
             print("[ok]  17r 分发面自包含：%d 个分发文件里无包外引用"
-                  "（无《验收基线》/《落地清单》/施工索引/施工单、无施工单条目代号（单字母-数字 ／ 字母-短横-数字 ／ 单字母-短横-小写字母 形态）、"
+                  "（无《验收基线》/《落地清单》/施工索引/施工单、无施工单条目代号（**A–L 单字母**-数字 ／ 字母-短横-数字〔任意 1–3 个字母〕／ **A–L 单字母**-短横-小写字母 形态）、"
                   "无 §N-M 形式的节号指针、无前置批次号/过程角色编号；"
                   "`.py` 只判字符串字面量之外；CHANGELOG 整文件 ＋ 历史记录段 ＋ 编码名词形豁免）" % len(_b17r_files))
 
