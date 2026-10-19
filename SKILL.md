@@ -2,7 +2,7 @@
 name: webbuilder-xwl-patch
 slug: skill-webbuilder-xwl-patch
 displayName: webbuilder-xwl-patch
-version: 1.6.6
+version: 1.6.7
 license: MIT
 metadata:
   category: development-tools
@@ -49,7 +49,7 @@ WebBuilder 的页面与查询定义都写在 `.xwl` 里。它**看起来像 JSON
 | **对象** | 仅 `.xwl` 文件本身：格式、编辑、校验、抽取。**不含**后端 Java、模块打包、`target/` 部署副本同步、数据库菜单注册（`WB_MENU`） |
 | **操作系统** | Windows 与 POSIX（含 macOS）均支持；路径分隔符与换行按各平台惯例处理，跨平台时注意检出/存储形态差异 |
 | **环境** | Python 3.9+，**纯标准库零依赖**；`node` 可选，只用于事件 JS 语法校验，找不到时自动降级为提示 |
-| **规模** | 跨 5 个工程 / **8 个 wb 根**实测 **24986 个 xwl**，最大单文件 **728.8 KB**（746299 字节，按 1024 算；口径与耗时见 [`references/measured-data-skeleton.md`](references/measured-data-skeleton.md) §十）。该量级下 `check` 全开约 **0.56 s** —— **性能不是约束**。**工具没有任何文件大小上限**，但**未验证**过 1 MB 以上的文件、或单文件事件段极多的情形 |
+| **规模** | 跨 5 个工程 / **8 个 wb 根**已在 **≥2.5 万 .xwl** 上实测（口径：8 个 wb 根 `modules/**`、排除 `target/`；时点 2026-10-19；精确值、复算命令与语料快照指纹见 [`references/measured-data-skeleton.md`](references/measured-data-skeleton.md) §十），最大单文件 **728.8 KB**（746299 字节，按 1024 算）。该量级下 `check` 全开约 **0.56 s** —— **性能不是约束**。**工具没有任何文件大小上限**，但**未验证**过 1 MB 以上的文件、或单文件事件段极多的情形 |
 | **能改的前提** | 目标文件能被加载器解析（即 `check` 的 ④ 通过）。已经是坏文件的，先用 `edit` 做文本级修复 |
 
 > 上表「规模」是**样本实测值，不是硬上限** —— 换工程要自己测。别把两处数字混起来：**这里**是"跨 5 个
@@ -152,11 +152,7 @@ hidden, children, roles, title, iconCls, inframe, pageLink
 > [`references/measured-data-skeleton.md`](references/measured-data-skeleton.md) §九。
 
 > **要补齐这类「缺钥匙」文件时**：`set` 一个**原本不存在**的顶层键就是**新建键**，该 op 要带 `"create": true`
-> （或命令行加 `--allow-new-key` 全局放行；不给则默认拒绝、rc=2，详见 §3.1）：
-
-```json
-[{"op": "set", "path": ["inframe"], "value": false, "create": true}]
-```
+> （或命令行加 `--allow-new-key` 全局放行；不给则默认拒绝、rc=2 —— 示例与两条出路见 §3.1）。
 
 ## 二、格式硬规则与文件形态
 
@@ -167,14 +163,11 @@ hidden, children, roles, title, iconCls, inframe, pageLink
 
 ### 2.2 单行源 vs 多行源（**决定性规则**）
 
-改之前先判形态 —— `xwl.py check` 会给出提示。**两种源的处置完全不同**：
+改之前先判形态（`xwl.py check` 会给出提示）。**两种源的处置完全不同**：
+**多行源**（含结构换行）**绝对不能压成一行**，任何理由都不行；
+**单行源**（整份紧凑一行）就在一行形态上改，**可以**转成多行、且能做到与设计器逐字节一致。
 
-| 源形态 | 处置 |
-|---|---|
-| **多行源**（含结构换行） | **绝对不能压成一行**，任何理由都不行 |
-| **单行源**（整份紧凑一行） | 就在一行形态上改；**可以**转成多行，且能做到与设计器逐字节一致 |
-
-> 上表「单行源就在一行形态上改」只说**格式上允许** —— 用 `patch` 改单行源的结果**一定是多行**，
+> 上一句「单行源就在一行形态上改」只说**格式上允许** —— 用 `patch` 改单行源的结果**一定是多行**，
 > 想保住单行形态只能走 3.2 的 `edit`（完整说明见 [`references/faq.md`](references/faq.md) §四）。
 
 ### 2.3 多行源为什么绝不能压成一行
@@ -196,11 +189,8 @@ hidden, children, roles, title, iconCls, inframe, pageLink
 > 详见 [`references/faq.md`](references/faq.md) §四，写回算法与规模占比见
 > [`references/measured-data-designer.md`](references/measured-data-designer.md) §五。
 
-| 源 | `auto` 怎么定 |
-|---|---|
-| **只有一种**换行（全 CRLF / 全 LF / 全 CR） | **沿用它**（含纯 CR） |
-| **混用多种**换行 | 只在 **CRLF / LF** 取多数（等量取 CRLF）；**裸 CR 不参与投票** ⇒ 绝不产出 CR |
-| **一个换行符都没有**（紧凑单行源正属此类，样本工程 902 个） | 无从"沿用" ⇒ **回退 LF** |
+`auto` 怎么定：**只有一种**换行（全 CRLF / 全 LF / 全 CR）⇒ **沿用它**（含纯 CR）；**混用多种** ⇒ 只在
+**CRLF / LF** 取多数（等量取 CRLF）、**裸 CR 不参与投票**；**一个换行符都没有**（紧凑单行源正属此类，样本工程 902 个）⇒ 无从"沿用"、**回退 LF**。
 
 ### 2.5 值里的「字面反斜杠 + n」为什么长得别扭
 
@@ -430,12 +420,9 @@ python scripts/xwl.py diffguard <改过的文件或目录> --strict    # CI / pr
 | `1` | **被检查对象或查询结果有问题**（`check` 有 `[FAIL]`；`paths` / `sqlrefs` / `sql` / `events` 没找到目标字段 —— 即无可抽取内容、空结果判 `1`） |
 | `2` | **用法或前置条件不满足**（缺必填参数、`edit` 锚点次数不符、`new` 拒绝覆盖、读不到目标文件） |
 
-两类**判定会随命令线宽严变化**的命令，各自三档（默认 / 收紧 / 放松）：
-
-| 命令 | 默认 | 收紧（严格） | 放松（留痕） |
-|---|---|---|---|
-| `diffguard` | 疑似压平**只告警**（rc=0） | `--strict`：疑似压平判失败（rc=1）；一个文件都没比成才 rc=2 | 非 git 仓库 / 新文件以 `[note]` 跳过 |
-| `params` | 缺来源**只告警**（rc=0） | `--strict`：缺来源判失败（rc=1） | 缺来源时打一行 `[note]` 告知怎么改成阻塞 |
+两类**判定会随命令线宽严变化**的命令，各自三档（默认 / 收紧 / 放松）：`diffguard`（疑似压平默认只告警，
+`--strict` 判失败 rc=1、一个文件都没比成才 rc=2，非 git 仓库 / 新文件以 `[note]` 跳过）；`params`（缺来源默认只告警，`--strict` 判失败，
+缺来源时打一行 `[note]` 告知怎么改成阻塞）。
 
 > **原则：判定变严要喧哗、放松要留痕** —— 收紧必须让调用方**当场**看得见（`[FAIL]` / rc≠0）；
 > 放松必须留一条**可查的预告行**（`[note]`），不能悄悄改掉默认行为。
@@ -556,10 +543,8 @@ python scripts/xwl.py diffguard <改过的文件或目录> --strict    # CI / pr
 
 > 建议值的命名惯例与实测依据见 [references/measured-data-addressing.md](references/measured-data-addressing.md) §7.6。
 
-> 想知道**某个工程整体**有多少重名：在**你自己的工程**上跑一遍就是最新结果 ——
-> `itemids <file> --dups-only`（单文件明细）、`check`（该文件的 error / benign 计数）、
-> `itemids <file> --json`（机器可读，便于汇总）。
-> 样本工程的一份完整分布（各档组数 + 按控件类型的 Top）见
+> 想知道**某个工程整体**有多少重名：在**你自己的工程**上跑一遍就是最新结果 —— `itemids <file> --dups-only`（单文件明细）、
+> `check`（error / benign 计数）、`itemids <file> --json`（机器可读）；样本工程的一份完整分布（各档组数 + 按控件类型的 Top）见
 > [`references/measured-data-addressing.md`](references/measured-data-addressing.md) §7.2，只作**量级参考**。
 >
 > `itemids <file> --json` 的**字段契约**（脚本消费用）：`groups[].name` 的值 = **注册键**
@@ -572,12 +557,8 @@ python scripts/xwl.py diffguard <改过的文件或目录> --strict    # CI / pr
 
 ## 八、常见问题（FAQ）
 
-**19 条**高频问题在 [`references/faq.md`](references/faq.md)，**按四组归类**：
-① 格式与解析（`check` 报 FAIL 怎么排查、页面白屏 / 解析错误、文件不是 UTF-8、为什么严格 JSON 解析会误判、**框架能打开但 ④ 报错**（加载器未对齐面））；
-② 命名与引用（`app.X` 取不到值、改了 SQL 参数查询结果不对、参数明明由调用方页面传入却报"没发现来源"、**同一文件在不同目录下跑结论为何可能不同**）；
-③ 能不能这么改（能不能压成一行、能不能文本替换批量改、怎么确认没改坏）；
-④ 命令行为（设计器里看不到新文件、SQL 抽取报 `1064`、`node --check` 误报、`expand` 没变化、
-`check` 慢或没装 `node`、`new` 骨架的 `itemId` 能不能改、脚本 / CI 里怎么判断成败）。
+**19 条**高频问题在 [`references/faq.md`](references/faq.md)，按四组归类：① 格式与解析 / ② 命名与引用 /
+③ 能不能这么改 / ④ 命令行为（设计器看不到新文件、SQL 抽取报 `1064`、`check` 慢或没装 `node`、脚本 / CI 怎么判断成败等）。
 
 > 出问题**第一站是那份 FAQ**（按症状查）；**动手前**想避开已知的坑，看
 > [`references/anti-patterns.md`](references/anti-patterns.md)。
@@ -585,9 +566,7 @@ python scripts/xwl.py diffguard <改过的文件或目录> --strict    # CI / pr
 ## 九、改完的自检清单
 
 **30 项**清单（改已有文件 24 项 + 新建文件 6 项）在 [`references/checklist.md`](references/checklist.md) ——
-交活前逐条过一遍。按主题分了七组，**与 [`references/anti-patterns.md`](references/anti-patterns.md) 的分组对齐**：
-源形态（↔ 反模式组一、二）/ 编辑方式与回退 / 验证 / 改引用与控件结构 / SQL 与传参（↔ 组六）/
-`itemId` 命名（↔ 组五）/ 新建文件（↔ 组三）。
+交活前逐条过一遍。按主题分了七组，**与 [`references/anti-patterns.md`](references/anti-patterns.md) 的分组对齐**（七组 ↔ 反模式组的对照表在 [`references/checklist.md`](references/checklist.md) 开头）。
 
 > 其中最容易跳过、后果最重的三条：① 多行源**绝不能**压成一行（改完用 `diffguard` 扫一遍，
 > 这是唯一能自动发现它的手段）；② 真跑 `patch` 必须带 `--backup`；③ 新建文件必须在**设计器里打开过一次**
