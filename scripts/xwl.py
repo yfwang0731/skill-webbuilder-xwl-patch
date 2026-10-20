@@ -5,7 +5,7 @@
 设计目标：把「安全编辑 + 格式校验」从"凭记忆手工做"固化成可复跑的命令。
 
 子命令（15 个）：
-  check   <file...>                              八项校验：格式五项 + 事件 JS 语法 + 注册键重名分级 + 加载链完整性（只提示）
+  check   <file...>                              九项校验：格式五项 + 事件 JS 语法 + 注册键重名分级 + configs 值类型 + 加载链完整性（只提示）
   new     <out.xwl> [--kind page|sql]            **从零生成** xwl（内置设计器骨架）
   patch   <file> --ops ops.json                  结构级编辑（改对象 → 按设计器规则重建）
   edit    <file> --old-file O --new-file N       文本级安全替换（锚点按目标换行归一、断言出现次数、拍平多行时警示）
@@ -888,7 +888,10 @@ def _store_load_chain_issues(obj) -> list:
     for st in stores:
         cfg = st.get("configs")
         val = cfg.get("autoLoad") if isinstance(cfg, dict) else None
-        if val is True or (isinstance(val, str) and val.lower() in ("true", "1")):
+        # `strip()` 必须与「主 grid 的 store.autoLoad」提示（`_main_grid_autoload_note`）**同口径**：
+        #   只 `lower()` 时 `" true "` 会在这里判「无加载通路」、在那边判「命中」⇒ 同一文件同时
+        #   得到两条**互相矛盾**的结论（`[warn] ⑧` ＋ `[note] 主 grid … autoLoad`）。
+        if val is True or (isinstance(val, str) and val.strip().lower() in ("true", "1")):
             return issues
     scan = "\n".join(strip_js_comments(c) for c in chunks)
     if ".load(" in scan or "store.reload(" in scan:
@@ -899,6 +902,172 @@ def _store_load_chain_issues(obj) -> list:
         "运行时动态绑定时不适用，须结合**源页语义**与**引入方式**人工确认" % len(stores)
     )
     return issues
+
+
+# ⑩「configs 值类型」的判据（**FAIL、进 rc**；`--no-cfgtype` 可关）。**只在 `check` 生效** ——
+#   `_post_check`（写盘后自检）传 `checks={1..6}` ⇒ 本项不在其中，否则既有坏文件会让 `patch`
+#   写盘失败，属**行为突变**。
+#   依据：加载器按 **String** 取值 ⇒ `configs` 里任一值不是 `str` 必崩（生成脚本漏 `str()` 是主因）。
+#   ⚠️ **只判类型、不判语义**：`"300px"` 仍是 `str` ⇒ 不报 —— 判语义会把注释 / 表达式误杀。
+#   ⚠️ 遍历面 = 所有节点的 `configs`；`configs` **本身不是 dict** 的情形**本项不判** ——
+#      `_iter_controls` 取 `configs` 时已把非 dict 归一成 `{}` ⇒ 这类节点在这里看不到；
+#      而 ⑧ 的「`configs` 不是对象」那条**只覆盖 `children[0]`**（首个控件），中段节点不判
+#      ⇒ 中段节点的"`configs` 是字符串/数组"目前**无人判**（有意不扩 ⑧ 的射程：那会改 ⑧ 的
+#      既有结论面；要扩是另一件事，需先量存量语料）。
+def _scan_cfg_types(obj) -> tuple:
+    """⑩：逐节点扫 `configs` 的**值类型**。
+
+    返回 `(hits, n_nodes)`：`hits` ＝ `[(节点路径, itemId, 键, 值展示串, python 类型名)]`
+    （空 = 无命中）；`n_nodes` ＝ **实际扫过的 `configs` 为 dict 的节点数**（供 `[ok]` 行的量纲）。
+    **纯数据、不打印**。
+    · 节点路径 —— 与 `sqlrefs` 的落点同一种写法（`"/".join(str(x) for x in path)`，根为空串）；
+    · 值展示串 —— JSON 形态（`300` / `true`）并**截断到 80 字符**（避免 `pickList` 那种大数组刷屏），
+      转不出时退 `repr()`；
+    · 迭代序 —— `_iter_controls` 的文档序 ＋ `configs` 的插入序 ⇒ 输出确定、可 diff。
+    """
+    hits: list = []
+    n_nodes = 0
+    for _n, _t, cfg, path, _anc, _cont, _key in _iter_controls(obj):
+        if not isinstance(_n.get("configs"), dict):
+            continue          # `configs` 缺失 / 非 dict ⇒ 没有"值类型"可判（口径见上方注释）
+        n_nodes += 1
+        for k, v in cfg.items():
+            if isinstance(v, str):
+                continue
+            hits.append(("/".join(str(x) for x in path), cfg.get("itemId"), k,
+                         _cfg_val_text(v), type(v).__name__))
+    return hits, n_nodes
+
+
+def _cfg_val_text(v, limit: int = 80) -> str:
+    """把 `configs` 的非 str 值渲染成**有界**的展示串（供 ⑩ 的明细行）。"""
+    try:
+        s = json.dumps(v, ensure_ascii=False)
+    except (TypeError, ValueError):
+        s = repr(v)
+    return s if len(s) <= limit else s[:limit] + "…"
+
+
+# 主 grid 的 `autoLoad` 提示（**无编号、`[note]`、不进 rc**）。出处＝实例反馈 §1.2（行为事实）：
+#   `autoLoad` 的初始化加载**不经过**查询条件面板 ⇒ 即使页面赋了默认查询条件也不会被带上
+#   ⇒ 默认筛选形同虚设（审核页默认「待审批」却把已审批全查出来）。
+#   ⛔ 不是这三件事：① 不是「存在 `panelCondition`」（查询条可能就是一条 `toolbar`）；
+#   ② 不是「任意 `grid` 的 store」（`combo`／`tree` 的 store 用 `autoLoad:"true"` 合法且常见）；
+#   ③ 不要求先证明「页面设了默认条件」才报 —— 规范本身就是「所有页面的主 grid 都不该 autoLoad:"true"」。
+_MAIN_GRID_UNKNOWN = "主 grid 未识别，请人工确认"
+# 主 grid 认出来了、但它的 `store` **不在直接子节点**（`grid > panel > store` 这类）⇒ 判不了
+#   `autoLoad`，同样只 note。⛔ 别为此下钻：主 grid 的 store 按设计器惯例是直接子节点，
+#   深层 store 可能是列 / 内嵌面板自己的 store ⇒ 下钻会判错对象（少报胜过误报）。
+_MAIN_GRID_STORE_NOT_CHILD = ("主 grid 未识别（store 不在主 grid 的直接子节点），请人工确认"
+                              "（主 grid `%s` 下无直接子 `store`，深层有 %d 个；"
+                              "本次未判 store.autoLoad）")
+
+
+def _first_control_of_type(o, want: str):
+    """在 `o` 的**子树（含自身）**里按文档序找第一个 `type == want` 的控件节点；没有 ⇒ `None`。
+
+    走 `_iter_controls` ⇒ 与 `patch` 的 `@itemId` 寻址**同一口径**（跳过 `configs`、不造幻影控件）。
+    """
+    if not isinstance(o, dict):
+        return None
+    for n, t, _cfg, _p, _a, _c, _k in _iter_controls(o):
+        if t == want:
+            return n
+    return None
+
+
+def _first_descendant_of_type(o, want: str):
+    """在 `o` 的**真子孙**（不含自身）里按文档序找第一个 `type == want` 的控件；没有 ⇒ `None`。"""
+    if not isinstance(o, dict):
+        return None
+    for n, t, _cfg, _p, _a, _c, _k in _iter_controls(o):
+        if n is o:
+            continue
+        if t == want:
+            return n
+    return None
+
+
+def _main_grid_node(obj):
+    """机械识别「页面主 grid」；判不出 ⇒ `None`（调用方须打印「主 grid 未识别，请人工确认」）。
+
+    识别规则（**顺序即优先级**）：
+      ① 页内有 `viewport`，且它之下（`_first_descendant_of_type`，**含更深分支**）能取到 `grid`
+         ⇒ **取它**；
+      ② 否则页内有 `tab` ⇒ 取**第一个 `tab` 之内**（同为后代序）的第一个 `grid`；
+      ③ 都没有 ⇒ `None`。
+
+    ⚠️ 为什么 `viewport` 先于 `tab`、且 `tab` 那一支**不再**先找「子 tab」：`tab` 在业务页里
+      常是**编辑区的明细签页**（形态 `panelEdit > tab > panel > grid`）。按「第一个 tab ⇒ 其
+      首个子 tab ⇒ 首个 grid」取，会把**明细表**当成主列表 —— 实测 `FeeCommVer.xwl` 会被指到
+      `gridFeeCommRateF`（编辑签页里的费率明细），而真列表是 `viewport > tab(mainTab) > … >
+      gridFeeCommVer`。`viewport` 是页面可视根、主列表必在其内 ⇒ 有 `viewport` 就先信它。
+    """
+    if not isinstance(obj, dict):
+        return None
+    vp = _first_control_of_type(obj, "viewport")
+    if vp is not None:
+        in_vp = _first_descendant_of_type(vp, "grid")
+        if in_vp is not None:
+            return in_vp
+    tab1 = _first_control_of_type(obj, "tab")
+    if tab1 is not None:
+        return _first_descendant_of_type(tab1, "grid")
+    return None
+
+
+def _main_grid_autoload_note(obj) -> str:
+    """页面主 grid 的子 `store` 用 `autoLoad` 自动加载 ⇒ 返回 `[note]` 正文；否则返回空串。
+
+    ⭐ 本判据有**四种**情形（⛔ 别把它们混成一种）：
+      ① **文件里一个 `grid` 都没有** ⇒ **不适用、不打**（片断页 / 数据载体 / SQL 文件，没有"主 grid"
+         这个对象 ⇒ 没有 `store.autoLoad` 可判）。⚠️ 这一支**不是**「静默跳过一条可判的缺陷」：
+         没有 grid 就没有可判对象。实测该仓 400 份随机抽样里 **337 份没有 grid**，若在这里也报
+         一句，note 会在 **84%** 的文件上恒亮、把真命中（12 份）淹掉 —— 与本仓「恒亮 ⇒ 淹没真问题」
+         同型，故必须区分；
+      ② **有 `grid` 但判不出主 grid** ⇒ 返回 `_MAIN_GRID_UNKNOWN` ＋ 说明（**⛔ 不静默、⛔ 不判红**）；
+      ③ **定位到主 grid，但它没有直接子 `store` 而后代里有** ⇒ 返回
+         `_MAIN_GRID_STORE_NOT_CHILD`（**⛔ 不静默放过** —— 本轮修的就是「`grid > panel > store`
+         完全静默」这条漏报；也⛔ 不下钻判深层 store，理由见该常量的注释）；
+      ④ **定位到主 grid 且有直接子 `store`** ⇒ 判**全部**直接子 `store` 的 `autoLoad`
+         （**任一**为真即命中；⛔ 只看第一个 —— 多 store 时结论不该取决于文档序）：
+         · 都没写 `autoLoad`（或写了假值）⇒ 空串（无从判、也无需提示）；
+         · 任一 ∈ `{True, "true", "1"}`（字符串**去首尾空白**后按小写比，与 ⑧ 同一判据）⇒ 一条提示。
+    """
+    grid = _main_grid_node(obj)
+    if grid is None:
+        if _first_control_of_type(obj, "grid") is None:
+            return ""
+        return (_MAIN_GRID_UNKNOWN
+                + "（本页有 grid，但按「① `viewport` 下首个 `grid`」"
+                  " / 「② 首个 `tab` 之内首个 `grid`」都定位不到主 grid；本次未判 store.autoLoad）")
+    # **全部**直接子 store —— 任一 `autoLoad` 命中即算（⛔ 不 break 在第一个）。
+    stores: list = []
+    kids = grid.get("children")
+    if isinstance(kids, list):
+        for c in kids:
+            if isinstance(c, dict) and c.get("type") == "store":
+                stores.append(c)
+    if not stores:
+        deep = sum(1 for _n, _t, *_rest in _iter_controls(grid) if _t == "store")
+        if deep <= 0:
+            return ""
+        gid = (grid.get("configs") or {}).get("itemId") if isinstance(grid.get("configs"), dict) else None
+        return _MAIN_GRID_STORE_NOT_CHILD % (gid or "itemId 未命名", deep)
+    hit = False
+    for st in stores:
+        cfg = st.get("configs")
+        val = cfg.get("autoLoad") if isinstance(cfg, dict) else None
+        if val is True or (isinstance(val, str) and val.strip().lower() in ("true", "1")):
+            hit = True
+            break
+    if not hit:
+        return ""
+    gid = (grid.get("configs") or {}).get("itemId") if isinstance(grid.get("configs"), dict) else None
+    return ("主 grid（%s）的 store 用了 `autoLoad` 自动加载：初始化加载**不经过**查询条件面板 ⇒ "
+            "页面赋的默认查询条件不会被带上、默认筛选形同虚设。规范：主 grid 一律 "
+            "`autoLoad:\"false\"`；需要首屏就查 ⇒ 在加载逻辑里先赋默认查询条件、再代码触发"
+            "「查询」按钮的点击事件" % (gid or "itemId 未命名"))
 
 
 def _js_err_head(err: str) -> str:
@@ -1024,23 +1193,54 @@ def cmd_check(args) -> int:
     if node is None and not no_js:
         print("[warn] 未找到 node，事件 JS 语法校验被跳过（用 --node 指定，或 --no-js 静音）")
 
+    # `--controls` **取不到注册表 ⇒ 记标志、全部文件照跑，末了 `rc=2`**（⛔ 不再早早 `return`）。
+    #   契约：路径不存在 / 读不了 / 不是可解析的 JSON（含"是 JSON 但里面一个控件 type 都没有"）
+    #   属**调用方配置错**，⛔ 不是被检文件的内容缺陷 ⇒ 走 `rc=2` 的**用法错**契约（与 `patch --ops`
+    #   读不动、`edit --old-file` 指向不存在同一种"参数给错即 rc=2"，⛔ 不新造标记）。
+    #   ⚠️ 为什么必须进 rc：原行为只 `[warn]`、不进 rc ⇒ 路径写错时「校验过」**恒真**（假绿）。
+    #   ⚠️ **为什么不再早退**（本轮修）：早退会把 `①②③④⑤⑥⑦⑧⑩` 的**逐文件结论整段吞掉**
+    #      （实测带 2 个文件时输出从 10 行缩到 3 行、连 `=== check:` 段都没有）—— 用户拿不到
+    #      任何"文件本身好不好"的信息，而注册表只影响 ⑨ 与 ⑥-ext 两项。故改为：**只跳过那两项**，
+    #      其余照跑；全部跑完后打一行 `[note]` 说明 + `=== 结果: FAIL` + `rc=2`。
+    #   ⚠️ ⛔ 这一行**不用 `[FAIL]` 标记**：本仓行首标记是**闭集**（`[ok]/[note]/[warn]/[FAIL]`），
+    #      而 `[FAIL]` 一律指「被检**文件**有缺陷」；本条是**调用方把参数给错**（文件本身可能
+    #      完全正常）⇒ 用既有语义最贴的 `[note]`（＝不做判定、只告知），免得用户去改文件。
+    #      ⛔ 也**不新造标记**（如 `[拒跑]`）：那会新开一个对外文案面、语料面也得跟着长。
+    #   ⚠️ 不影响写盘路径：`_post_check` 的 Namespace 没有 `controls` 键（getattr ⇒ None）。
+    #   ⚠️ **注册表只读一次**：入口这里解析一次、结果 `_reg` 传给 `_check_registry_dims`
+    #      （2.4 MB 注册表单次解析约 106 ms ⇒ 别让它被解析两遍）。
+    _controls = getattr(args, "controls", None)
+    _reg = None
+    _ctl_bad = False
+    if _controls:
+        _reg = _registry_configs(_controls)
+        _ctl_bad = _reg is None
+
     failed = False
     # ⑨「键不在注册表」的运行级汇总计数（**warn、不进 rc**）—— 跨 `args.files` 累计，
     # 供循环末尾打**一行汇总**（明细随各文件段打印）。
     reg_hits_all = 0
     reg_files_all = 0
+    # ⑩「configs 值类型」的运行级汇总计数（**FAIL、进 rc**）—— 同 ⑨ 的形态：明细随各文件段
+    # 打印（进 `errors`）、循环末尾打**一行跨文件汇总**。
+    cfg_nodes_all = 0
+    cfg_hits_all = 0
+    cfg_files_all = 0
     # 判定集合（**内部机制、不改 CLI 面貌**）：调用方显式给 `checks` 时优先；没给则由
-    # `--no-js` / `--no-itemid` 回退到「全量 1–8」。起因：第 ⑧ 维只该在 `check` 出现、
-    # **不进写盘后自检**（`_post_check` 传 1–6）—— 由调用方说"跑哪几项"，而非让 ⑧ 猜"是不是自检"。
+    # `--no-js` / `--no-itemid` / `--no-cfgtype` 回退到「全量 1–9」。起因：第 ⑧ 维只该在 `check`
+    # 出现、**不进写盘后自检**（`_post_check` 传 1–6）—— 由调用方说"跑哪几项"，而非让 ⑧ 猜"是不是自检"。
+    # ⚠️ 第 ⑨ 个编号（`9`）＝ `⑩ configs 值类型`（判据与注册表无关，故 `--controls` 不影响它）。
     # ⚠️ 必须 `getattr(..., None)`：本仓惯用「手工 Namespace」，`selftest` 的 `_run_check`
     #    只带 `{files,node,no_js}`；直接取 `args.checks` 会让十余条 check 断言齐 `AttributeError`。
     checks = getattr(args, "checks", None)
     if checks is None:
-        checks = {1, 2, 3, 4, 5, 6, 7, 8}
+        checks = {1, 2, 3, 4, 5, 6, 7, 8, 9}
         if no_js:
             checks.discard(6)
         if getattr(args, "no_itemid", False):
             checks.discard(7)
+        if getattr(args, "no_cfgtype", False):
+            checks.discard(9)
     for path in args.files:
         print(f"=== check: {path}")
         errors: list[str] = []
@@ -1164,13 +1364,32 @@ def cmd_check(args) -> int:
         #       （⑨ 已改 **warn**、本就不再进 rc；它仍在此处算，只为与 ⑥-ext 同源取注册表。）
         reg_show: list[str] = []
         reg_warn: list[str] = []
-        _controls = getattr(args, "controls", None)
-        if obj is not None and _controls:
-            _rf, reg_show, reg_warn, _nh = _check_registry_dims(obj, _controls, node, no_js)
+        # 注册表取不到时（`_ctl_bad`）**只跳过本块**（⑨ 与 ⑥-ext）—— 其余各项照跑，
+        # 理由见函数入口那段注释（早退会吞掉逐文件结论）。
+        if obj is not None and _controls and _reg is not None:
+            _rf, reg_show, reg_warn, _nh = _check_registry_dims(obj, _controls, node, no_js,
+                                                              reg=_reg)
             errors.extend(_rf)      # 仅 ⑥-ext（configs 内联 [js] 语法错）进 rc；⑨ 已降为 warn
             if _nh:
                 reg_hits_all += _nh
                 reg_files_all += 1
+
+        # ⑩ configs 值类型（**FAIL、进 rc**）—— 明细进 `errors`（随 `[FAIL]` 打印），
+        #    跨文件的汇总行在循环末尾打（与 ⑨ 的运行级汇总同形态）。
+        #    ⚠️ 判据与注册表**无关** ⇒ 给了 `--controls` 也不改结论；`--no-js` 亦无关。
+        #    ⚠️ 只判**类型**：`"300px"` 仍是 str ⇒ 不报（判语义会把注释 / 表达式误杀）。
+        cfg_n_nodes = 0             # 本文件扫过的 `configs` dict 节点数（供 `[ok]` 行的量纲）
+        if obj is not None and 9 in checks:
+            _cfg_hits, cfg_n_nodes = _scan_cfg_types(obj)
+            if _cfg_hits:
+                # 量纲：**节点数按"真有命中的节点"去重**（一个节点多键命中只算 1 个节点），
+                # 处数 = 命中条数 —— 与 ⑨ 的「N 个节点」同义，⛔ 别拿"每文件加 1"充节点数。
+                cfg_nodes_all += len({h[0] for h in _cfg_hits})
+                cfg_hits_all += len(_cfg_hits)
+                cfg_files_all += 1
+                for _pth, _iid, _ck, _cv, _ct in _cfg_hits:
+                    errors.append("⑩ %s %s.%s = %s (%s)"
+                                  % (_pth or "<根>", _iid or "?", _ck, _cv, _ct))
 
         if errors:
             for e in errors:
@@ -1179,7 +1398,8 @@ def cmd_check(args) -> int:
             failed = True
         else:
             print("  [ok]   ① BOM  ② 换行一致  ③ 续行空白  ④ 解析  ⑤ 末行结构")
-            # ⑥⑦ 无论跑没跑都要留一行 —— 否则用户看到 6 行、文档写「八项」，
+            # ⑥⑦ 无论跑没跑都要留一行 —— 否则通过态下这两项会整段消失，用户只看到
+            # `[ok] ①–⑤` 那一行，分不清 ⑥⑦ 是**真跑了**还是**被跳过**；
             # 而且 `--no-js` 与 `--no-js --no-itemid` 的输出会长得一模一样。
             if no_js:
                 print("  [note] ⑥ 事件 JS 语法校验：已按 `--no-js` 跳过")
@@ -1197,6 +1417,15 @@ def cmd_check(args) -> int:
                 print("  [ok]   ⑦ 无重名")
             for _ln in reg_show:
                 print("  " + _ln)
+            # ⑩ 与 ⑥⑦ 同一条纪律：**通过态也要留一行** —— 否则"跑了且干净"与"根本没跑"
+            #   在输出上无法区分（`--no-cfgtype` 静音后更是完全一样）。
+            #   ⚠️ 判据用 `args.no_cfgtype` 而**不是** `9 in checks`：写盘后自检
+            #      （`_post_check`）传的是 `checks={1..6}`、根本没带这个开关 ⇒ 若按 `9 in checks`
+            #      判，`patch` 的输出会凭空多出一行（正常文件 stdout 必须逐字节不变）。
+            if getattr(args, "no_cfgtype", False):
+                print("  [note] ⑩ configs 值类型：已按 `--no-cfgtype` 跳过")
+            elif 9 in checks and obj is not None:
+                print(f"  [ok]   ⑩ configs 值类型：{cfg_n_nodes} 个节点、0 个非字符串值")
             print("  -> OK")
         n_nul = bare_nul_in_strings(text)
         if n_nul:
@@ -1229,22 +1458,96 @@ def cmd_check(args) -> int:
                 else:
                     print("  [note] ⑧ 加载链完整性：无异常")
 
+        # 主 grid 的 `store.autoLoad` 提示（**无编号、`[note]`、不进 rc**；判据见
+        # `_main_grid_autoload_note`）。位置与 ⑧ 并列、同在 `if errors … else …` **之外**
+        # ⇒ 文件本身 FAIL 时这句照样打得出来。
+        # ⚠️ 闸写的是 `8 in checks`，但 **本项不属于 ⑧**：只是**借用 ⑧ 的闸**来复用本仓已有的
+        #     「只在 `check` 出现、不进写盘后自检」机制 —— `_post_check` 传 `checks={1..6}`
+        #     是它**不进写盘路径的唯一原因**（⛔ 别把 `8` 改成 `9`：那会被 `--no-cfgtype` 顺带关掉；
+        #     也⛔ 别改成无条件执行：那会给 `patch` 的输出加行＝行为突变）。
+        # ⚠️ ⛔ 不受 `--no-cfgtype` 管：那个开关的名字与射程都是 `configs` **值类型**（⑩），
+        #     与自动加载语义无关 ⇒ 本项**常开、只 note**（有意不为它单设开关：它不进 rc，
+        #     静音需求可用 `grep -v '\[note\]'` 满足）。
+        if 8 in checks and obj is not None:
+            _mg_note = _main_grid_autoload_note(obj)
+            if _mg_note:
+                print(f"  [note] {_mg_note}")
+
     # ⑨「键不在注册表」的**运行级一行汇总**（warn、不进 rc）—— 明细已随各文件段打印。
     #    独立成行是为便于人读（一次 `check` 可能带多个文件 ⇒ 需要跨文件总数）。
     if reg_hits_all:
         print(f"  [warn] ⑨ configs 键不在注册表：{reg_hits_all} 个节点（涉及 {reg_files_all} 个文件）"
               " —— 明细见上方各文件段")
+    # ⑩「configs 值类型」的**运行级一行汇总**（FAIL、进 rc）—— 明细已随各文件段打 `[FAIL]`。
+    #    量纲与 ⑨ 对齐（"N 个节点（涉及 M 个文件）"），并额外给**处数**：一个节点可能多键命中。
+    if cfg_hits_all:
+        print(f"  [FAIL] ⑩ configs 值类型：{cfg_nodes_all} 个节点 / {cfg_hits_all} 处"
+              f"（涉及 {cfg_files_all} 个文件） —— 明细见上方各文件段")
+    # `--controls` 取不到的**运行级说明**（`[note]`、但**进 rc=2**：属调用方用法错）。
+    #   打在**全部文件跑完之后** —— 上面 ①②③④⑤⑥⑦⑧⑩ 的逐文件结论已经完整产出，
+    #   这句只解释"为什么没有 ⑨ / ⑥-ext"以及"为什么 rc=2"。
+    if _ctl_bad:
+        print("  [note] --controls 取不到控件注册表: %s"
+              "（这属**调用方配置错**：路径不存在 / 不可读 / 不是可解析的 JSON；"
+              "⛔ 不是被检文件的内容缺陷。①②③④⑤⑥⑦⑧⑩ 已照常判定，⑨ 与 configs 内联 [js] 未校）"
+              % _controls)
+        failed = True
+        print("=== 结果:", "FAIL")
+        return 2
     print("=== 结果:", "FAIL" if failed else "ALL OK")
     return 1 if failed else 0
 
 
-def _post_check(file: str, args) -> int:
+# 写盘后自检里那条 `configs` 非字符串值 `[warn]` 的**列名上限**（⛔ 别放开：一个大 `pickList`
+#   能列几十个键 ⇒ 一条 warn 变成刷屏）。
+_CFG_WARN_LIST_MAX = 8
+
+
+def _cfg_nonstr_warn_line(obj) -> str:
+    """写盘后自检用：本次写入的对象含 `configs` 非字符串值 ⇒ 一行 `[warn]` **正文**；否则空串。
+
+    ⛔ **不进 rc、不改值、不阻断写盘** —— 只做"可见性"：`check` 的 ⑩ 会把这种写法判 FAIL
+    （加载器按 String 取值），而 `_post_check` 有意不判 ⑩（判了会让存量坏文件突然无法 `patch`）。
+    两件事叠在一起时用户会看到"patch rc=0、紧接着 check rc=1" ⇒ 这条 warn 就是那个缺口的说明。
+    ⚠️ **`configs` 全为字符串时返回空串** —— 正常文件的 stdout 必须**逐字节不变**（既有承诺）。
+    """
+    if not isinstance(obj, dict):
+        return ""
+    hits, _n_nodes = _scan_cfg_types(obj)
+    if not hits:
+        return ""
+    shown = ["%s.%s" % (h[1] or "?", h[2]) for h in hits[:_CFG_WARN_LIST_MAX]]
+    more = "…" if len(hits) > len(shown) else ""
+    return ("本次写入含 %d 处 configs 非字符串值（%s%s）：check 的 ⑩ 会判 FAIL，请改成字符串"
+            % (len(hits), ", ".join(shown), more))
+
+
+def _load_obj_quiet(file: str):
+    """尽力把文件解析成对象；失败 ⇒ `None`（**静默** —— 调用方只拿它做"顺带提示"，不判对错）。"""
+    try:
+        _text, _has_bom, obj = load_xwl(file)
+        return obj
+    except Exception:  # noqa: BLE001
+        return None
+
+
+def _post_check(file: str, args, obj=None) -> int:
     """写盘后的**格式**自检 —— 只回答「这次改动有没有破坏格式」。
 
     **判定面 = ①–⑥**（BOM / 换行 / 续行空白 / 解析 / 末行 / 事件 JS）—— 越过 ①–⑥ 的都不进这里：
     · 注册键重名（第 ⑦ 项）是**文件既有的质量属性**，不是本次改动造成的；
-    · 加载链完整性（第 ⑧ 项）是**只提示**项、本来就不进 rc。
-    若把 ⑦/⑧ 一并判定，会出现"写盘成功却返回非 0"的误导。故这里只传 ①–⑥（`checks`）。
+    · 加载链完整性（第 ⑧ 项）是**只提示**项、本来就不进 rc；
+    · `configs` 值类型（第 ⑩ 项）是**文件既有的内容属性**（写盘只搬字节、不改值），
+      且它对存量判 FAIL ⇒ 若在这里判，会让**本来能写盘**的坏文件突然 `patch` 失败（行为突变）。
+    若把 ⑦/⑧/⑩ 一并判定，会出现"写盘成功却返回非 0"的误导。故这里只传 ①–⑥（`checks`）。
+
+    ⭐ 唯一的 ⑩ 相关输出是**一条 `[warn]`**（`_cfg_nonstr_warn_line`）：本次写入的对象若含
+      `configs` 非字符串值 ⇒ 明说"check 的 ⑩ 会判 FAIL"。⛔ 不进 rc、⛔ 不改值、⛔ 不阻断写盘；
+      `configs` 全为字符串时**一行都不打**（正常文件 stdout 逐字节不变）。
+
+    `obj` —— 调用方手上**已解析**的对象（`patch` / `expand` / `new` 都传）：省一次读盘解析。
+      不传（如 `edit` 只改文本层、手上没有对象）⇒ 由 `_load_obj_quiet` 读回自检写完的文件；
+      读不回来也不影响 rc（`cmd_check` 已经就"读不动/解析不了"给出 `[FAIL]`）。
     """
     print("--- 自动校验（本次改动是否破坏格式）---")
     _no_js = getattr(args, "no_js", False)
@@ -1252,6 +1555,10 @@ def _post_check(file: str, args) -> int:
                             no_js=_no_js, no_itemid=True,
                             checks={1, 2, 3, 4, 5} | ({6} if not _no_js else set()))
     rc = cmd_check(ns)
+    _w_obj = obj if obj is not None else _load_obj_quiet(file)
+    _w_line = _cfg_nonstr_warn_line(_w_obj)
+    if _w_line:
+        print("[warn] " + _w_line)
     print("提示：注册键重名不在本步判定范围；要连它一起体检，跑 "
           "`xwl.py itemids %s`" % os.path.basename(file))
     return rc
@@ -1263,9 +1570,18 @@ _CHECK_IMMUTABLE_CFG_KEYS = frozenset({"itemId"})
 
 
 def _registry_configs(controls: str):
-    """读注册表 → `{type: {"configs": {键…}, "js": {标 [js] 的键}}}`；读不了返回 `None`。"""
+    """读注册表 → `{type: {"configs": {键…}, "js": {标 [js] 的键}}}`；读不了 / **解析出空** ⇒ `None`。
+
+    ⚠️ **「解析出空」也算取不到**（`{}` / `[]` / `{"foo":1}` 这类"是 JSON 但不是控件注册表"）：
+       `cmd_check` 拿到 `None` ⇒ 只跳过 ⑨ / ⑥-ext、其余各项照跑，末了 `rc=2`。若只把"读不了"当
+       失败，`--controls` 指到形状不对的文件时 `_registry_configs` 会返回**空 dict** ⇒ ⑨ 一个节点都不校、
+       `[ok] ⑨ … 0 个非法键` 照打、rc=0 —— **假绿只是从"路径错"换成了"形状错"**。
+    ⚠️ 读取用 `encoding="utf-8-sig"`：Windows 上手工编辑 / PowerShell 重定向常给注册表加
+       UTF-8 BOM，`utf-8` 会把它当非法字符 ⇒ `json.load` 抛 `JSONDecodeError` ⇒ 合法注册表反被判
+       「取不到」(rc=2)。`utf-8-sig` 对**无 BOM** 的文件行为完全一致（只是多剥可选 BOM）。
+    """
     try:
-        reg = json.load(open(controls, "r", encoding="utf-8"))
+        reg = json.load(open(controls, "r", encoding="utf-8-sig"))
     except Exception:  # noqa: BLE001 —— 读不了由调用方给 warn、跳过，不崩
         return None
     types: dict = {}
@@ -1287,7 +1603,7 @@ def _registry_configs(controls: str):
                 walk(v)
 
     walk(reg)
-    return types
+    return types or None       # 空 ⇒ `None`（见 docstring 第一条 ⚠️）
 
 
 def _scan_configs_keys(obj, reg_types):
@@ -1324,7 +1640,7 @@ def _scan_configs_js(obj, reg_types):
     return job
 
 
-def _check_registry_dims(obj, controls: str, node, no_js: bool):
+def _check_registry_dims(obj, controls: str, node, no_js: bool, reg=None):
     """⑨ 校 configs 键合法性（#48）＋ ⑥ 扩到 configs 内联 `[js]` 的键（#49）。
 
     返回 `(fail_bodies, show_lines, warn_bodies, n_key_hits)`（**纯数据、不打印**）：
@@ -1332,6 +1648,11 @@ def _check_registry_dims(obj, controls: str, node, no_js: bool):
     · `show_lines` —— 成功/跳过的展示行（含 `[ok]`/`[note]` 标记，调用方原样打印）；
     · `warn_bodies` —— 只告警项（含 ⑨「键不在注册表」**明细**；调用方以 `[warn] ` 前缀打印）；
     · `n_key_hits` —— 本文件 ⑨「键不在注册表」命中的**节点数**（供调用方打**运行级**汇总行）。
+
+    `reg` —— **已解析**的注册表（`_registry_configs` 的返回值）。`cmd_check` 在入口探测时已解析过
+       一次，直接传下来 ⇒ **一次 `check` 只读一次注册表**（2.4 MB 注册表实测量级 106 ms/次，
+       原来"探测 + 本函数"各读一次）。⚠️ 不传（`None`）时本函数自己读 —— 供其它调用方直接调，
+       语义与从前一致。
 
     ⚠️ ⑨「键不在注册表」取 **warn（⛔ 不进 rc）** —— 实测存量语料里这类命中**几乎都是
        「注册表未收录的既有键」**（`column.keyNameExp` 576／`array.height/width/x/y` 316／
@@ -1345,8 +1666,14 @@ def _check_registry_dims(obj, controls: str, node, no_js: bool):
     ⚠️ **只在显式给 `--controls` 时由 `cmd_check` 调用** —— 这两条的判据来源是注册表；
        默认（不给 `--controls`）整个函数不跑 ⇒ 输出与判定**逐字节不变**（承重墙）。
     """
-    reg = _registry_configs(controls)
     if reg is None:
+        reg = _registry_configs(controls)
+    if reg is None:
+        # 正常路径不可达：`cmd_check` 入口探测到注册表取不到时**只跳过本函数**（照常跑其余各项），
+        # 并在全部文件跑完后打 `[note] --controls 取不到控件注册表: …` ＋ `rc=2`。
+        # 本分支**保留**只为防**其它调用方**直接调本函数踩空（⛔ 别删、⛔ 别把它改成恒真/静默 ——
+        # 静默就是那条假绿的成因；`rc=2` 的契约与入口那处一致：属**调用方用法错**，
+        # 不是被检文件的缺陷 ⇒ 只 `[warn]` 一行、不进 `[FAIL]`）。
         return [], [], [f"⑨ 读注册表失败（{controls}），configs 键 / 内联 [js] 校验跳过"], 0
     fails: list = []
     show: list = []
@@ -1441,6 +1768,8 @@ def cmd_edit(args) -> int:
     print(f"已写入: {args.target}")
 
     # 立即自检（只判格式；注册键重名见 _post_check 注释）
+    # ⚠️ `edit` 只改文本层、手上没有对象 ⇒ **不传** `obj`，由 `_post_check` 读回刚写完的文件
+    #    做那条「本次写入含 configs 非字符串值」的提示（读不回来也不影响 rc）。
     return _post_check(args.target, args)
 
 
@@ -1521,7 +1850,7 @@ def cmd_expand(args) -> int:
     write_text(dest, out)
     print(f"已写入: {dest}")
 
-    rc = _post_check(dest, args)
+    rc = _post_check(dest, args, obj)     # 传已解析对象：省一次读盘（用于那条 ⑩ 预告 warn）
     if rc == 0:
         print("> 排版与设计器 `IDE.updateModule` 一致（org.json toString(1) 布局）。")
         print("> 若原文件已被设计器保存过，正常情况下本命令应产出**逐字节相同**的内容。")
@@ -1615,7 +1944,9 @@ def normalname_types(controls_path: str | None = None) -> tuple:
     ids: set[str] = set(_NORMALNAME_FALLBACK)
     if controls_path:
         try:
-            reg = json.load(open(controls_path, encoding="utf-8"))
+            # `utf-8-sig`：带 BOM 的注册表也要能读（与 `_registry_configs` 同口径；
+            #   无 BOM 时行为完全一致）。
+            reg = json.load(open(controls_path, encoding="utf-8-sig"))
         except Exception:  # noqa: BLE001
             reg = None
         if reg is not None:
@@ -2607,7 +2938,7 @@ def cmd_patch(args) -> int:
     write_text(args.file, out)
     print(f"已写入: {args.file}")
 
-    return _post_check(args.file, args)
+    return _post_check(args.file, args, obj)   # 传已解析对象：省一次读盘（那条 ⑩ 预告 warn）
 
 
 # --------------------------------------------------------------------------- #
@@ -2705,7 +3036,8 @@ def cmd_schema(args) -> int:
         print("[FAIL] `--observed` 针对一个具体控件类型，不能与 `--list` / `--tree` 同用")
         return 2
     try:
-        reg = json.load(open(args.controls, "r", encoding="utf-8"))
+        # `utf-8-sig`：带 UTF-8 BOM 的注册表是 Windows 手工编辑的常见形态，⛔ 不该被判"读不了"。
+        reg = json.load(open(args.controls, "r", encoding="utf-8-sig"))
     except Exception as exc:  # noqa: BLE001
         print(f"[FAIL] 读注册表失败: {exc}")
         return 2
@@ -3094,7 +3426,7 @@ def cmd_new(args) -> int:
     write_text(dest, out)
     print(f"已写入: {dest}")
 
-    rc = _post_check(dest, args)
+    rc = _post_check(dest, args, obj)     # 传已解析对象：省一次读盘（用于那条 ⑩ 预告 warn）
     if rc == 0:
         print("> 新建之后必做：")
         print(f"  1) 设计器导航树里看不到它 → 跑 `xwl.py folders {dest}` 看 folder.json 登记情况")
@@ -3275,7 +3607,7 @@ def cmd_folders(args) -> int:
 # diffguard（相对 git 基线，检测「多行内容被压平」这种静默语义损坏）
 # --------------------------------------------------------------------------- #
 # 为什么需要它：SKILL.md 2.3 承认——把「反斜杠 + 换行」直接删掉（"合并行"）之后，
-# 文件**依然是合法 JSON**、`check` 八项全绿、`node --check` 也可能返回 0，
+# 文件**依然是合法 JSON**、`check` 九项全绿、`node --check` 也可能返回 0，
 # 唯一的发现手段是人工 `git diff`。这是本工具唯一"没有自动化防线"的损坏类型。
 #
 # 判据为什么是**两个条件**而不是"续行符变少"：
@@ -3862,7 +4194,8 @@ def field_types(controls_path: str | None = None) -> tuple:
     ids: set[str] = set(_FIELD_FALLBACK)
     if controls_path:
         try:
-            reg = json.load(open(controls_path, encoding="utf-8"))
+            # `utf-8-sig`：与 `_registry_configs` / `normalname_types` 同口径（BOM 也要能读）。
+            reg = json.load(open(controls_path, encoding="utf-8-sig"))
         except Exception:  # noqa: BLE001
             reg = None
         if reg is not None:
@@ -4838,11 +5171,15 @@ def build_parser() -> argparse.ArgumentParser:
     )
     sub = p.add_subparsers(dest="cmd", required=True)
 
-    c = sub.add_parser("check", help="八项校验：格式五项 + 事件 JS 语法 + 注册键重名分级 + 加载链完整性（只提示）")
+    c = sub.add_parser("check",
+                       help="九项校验：格式五项 + 事件 JS 语法 + 注册键重名分级 + configs 值类型"
+                            " + 加载链完整性（只提示）")
     c.add_argument("files", nargs="+", help="一个或多个 .xwl 文件")
     c.add_argument("--node", help="node 可执行文件路径")
     c.add_argument("--no-js", action="store_true", help="跳过事件 JS 语法校验")
     c.add_argument("--no-itemid", action="store_true", help="跳过注册键重名分级检查")
+    c.add_argument("--no-cfgtype", action="store_true",
+                   help="跳过 ⑩ configs 值类型校验（本项默认即最严档：FAIL、进 rc）")
     c.add_argument("--controls", metavar="CONTROLS",
                    help="设计器控件注册表路径（wb/system/controls.json）；**给了才**校 configs 键 "
                         "与 configs 内联 [js]（缺省不校、也不自动找）")

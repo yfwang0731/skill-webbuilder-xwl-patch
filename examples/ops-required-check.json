@@ -26,7 +26,7 @@
   {"op": "append",
    "path": ["@tbar", "children"],
    "value": {
-     "configs": {"itemId": "keyword", "fieldLabel": "关键字", "width": 160},
+     "configs": {"itemId": "keyword", "fieldLabel": "关键字", "width": "160"},
      "expanded": false,
      "children": [],
      "type": "text"

@@ -3,12 +3,12 @@
   "name_en": "webbuilder-xwl-patch",
   "displayName": "webbuilder-xwl-patch",
   "author": "yfwang0731",
-  "version": "1.6.7",
+  "version": "1.7.0",
   "schema_version": "1.0",
   "description": "WebBuilder（wb）平台 .xwl 定义文件的处理与安全编辑：结构级 patch（只给值 / 子树，工具按设计器自己的算法重建整份文件）+ 格式校验 + 相对 git 基线的压平检测。",
   "core_capabilities": [
     "结构级 patch 编辑（不碰文本层，格式错误在构造上不会发生）",
-    "check 八项校验（7 项判定：BOM / 换行一致 / 续行空白 / 加载器等价解析 / 末行结构 / 事件 JS 语法 / 注册键重名分级 ＋ 1 项只提示：加载链完整性）；另：给了 `--controls` 时另校 `configs` 键合法性（`[warn]`、不进 rc）与 `configs` 内联 `[js]` 语法（`[FAIL]`、进 rc），缺省不校也不自动找",
+    "check 九项校验（8 项判定：BOM / 换行一致 / 续行空白 / 加载器等价解析 / 末行结构 / 事件 JS 语法 / 注册键重名分级 / `configs` 值类型 ＋ 1 项只提示：加载链完整性）；另：给了 `--controls` 时另校 `configs` 键合法性（⑨，`[warn]`、不进 rc）与 `configs` 内联 `[js]` 语法（`[FAIL]`、进 rc），缺省不校也不自动找；`--controls` 指向的注册表取不到 ⇒ rc=2（属调用方配置错、不算文件缺陷；此时 ①–⑧⑩ 与逐文件结论照常产出，只跳过 ⑨ 与 `configs` 内联 `[js]`）",
     "schema 的机器可读与语料实测（`--json` / `--observed`）：`--json` 出机器可读形态（单个对象 / `--list` 出数组）；`--observed [ROOT]` 统计该控件类型在语料里实测用过的 `configs` 键 ＋ 频次，并与注册表给差集",
     "patch 的按键序插入 `insertKey`：把对象键插到指定位置（before/after/index 三选一），补 `set` 只能新建末端的缺口；新建键自授权、以 `[note]` 列出可见",
     "从零新建页面与 SQL 载体（内置设计器真实键序骨架）",
@@ -47,7 +47,8 @@
     "degradation": [
       "找不到 node → 事件 JS 语法校验降级为提示，不阻塞",
       "不是 git 仓库 / 文件不在基线里 → diffguard 以 [note] 跳过",
-      "非 UTF-8 文本 → 明确报错并说明修法，不猜编码"
+      "非 UTF-8 文本 → 明确报错并说明修法，不猜编码",
+      "注册表取不到 → check 返 rc=2（属调用方配置错；①–⑧⑩ 与逐文件结论照常产出，只跳过 ⑨ 与 configs 内联 [js]）；其余命令（itemids / params 等）回退内置兜底、打 [warn] 读注册表失败、rc 不变"
     ]
   },
   "retry": {
@@ -71,7 +72,11 @@
     "不含后端 Java、模块打包、target/ 部署副本同步、数据库菜单注册（WB_MENU）",
     "操作系统：Windows 与 POSIX（含 macOS）均支持；路径分隔符与换行按各平台惯例处理，跨平台时注意检出 / 存储形态差异",
     "diffguard 需要 git 仓库；压平同时改内容且增量不足时不报，仍需 git diff 复核",
-    "配套 Java 后台方法的实现支持不在此范围（按路线图预留位，属 2.0.0）"
+    "配套 Java 后台方法的实现支持不在此范围（按路线图预留位，属 2.0.0）",
+    "`check` 的 ⑩「configs 值类型」在当前真实语料上**召回为 0**（实测 configs 的值全为字符串）—— 它的价值是防生成脚本漏 str() / 手改件引入，不是「已有一批坏文件待查」",
+    "主 grid 的 autoLoad 提示**无从知道页面是窗口 / 弹窗**（这类页由父页 load，`autoLoad` 在那里可能合法）⇒ 对它们是**误报面**；`store` 不在主 grid 直接子节点时**判不出**，会打「主 grid 未识别（store 不在主 grid 的直接子节点），请人工确认」。两种情形都须结合源页语义与引入方式人工核对，工具不替你下结论",
+    "**已知边界**（主 grid 提示「未识别」那一支的触发前提）：它的前提是「文件里**存在** `grid`」，**不是**「存在一个**可判的**主 grid 候选」—— 主列表区为空、或 `grid` 全在 `window` 里的页面，会恒亮一条 `[note] 主 grid 未识别，请人工确认`，而这类页根本没有「主 grid」这个对象（抽样实测 500 份里 7 份、占有 `grid` 文件的 5.6%）。这是**噪声面**：`[note]` 不进 `rc`、不改变任何判定。它的正解应为「`viewport` / `tab` 内无 `grid` 候选 ⇒ 不打」，当前未这么做。⚠️ 与上一条不是同一件事：上一条讲「命中 / 判不出」，本条讲「未识别」那一支的前提写宽了",
+    "**已知边界**（`⑩` 射程内目前未覆盖的一类）：节点自身的 `configs` **不是对象**（如 `\"configs\": \"oops\"`、`\"configs\": [\"oops\", 1]`）时，`⑩` 会跳过该节点，而 ⑧「加载链完整性」只覆盖 `children[0].configs` ⇒ 中段与其余节点**两侧都漏判**，`check` 仍给 `rc=0`。这是既有边界、⛔ 不是「已知无害」。要覆盖它须先量存量语料里这类形态有多少，再决定是并入 `⑩` 还是扩 ⑧ 的射程；在量之前不扩，免得把「类型不看语义」的既有一刀切判据改成结构判据"
   ],
   "references": [
     "references/walkthrough.md",
@@ -79,6 +84,9 @@
     "references/faq.md",
     "references/checklist.md",
     "references/controls.md",
+    "references/layout.md",
+    "references/value-mapping.md",
+    "references/generation.md",
     "references/js-api.md",
     "references/sql-fragments.md",
     "references/measured-data.md",
@@ -91,6 +99,7 @@
     "references/transcription-defaults.md"
   ],
   "update_history": [
+    { "version": "1.7.0", "date": "2026-10-20", "summary": "能力补齐批（minor）：新增 `check` 第 `⑩` 项「`configs` 值类型」＋ 开关 `--no-cfgtype`，另加一条无编号 `[note]`（主 grid 的 `store.autoLoad`）与一处 `rc` 语义变化（`--controls` 取不到注册表 ⇒ `rc=2`），并新建 3 份参考材料。① ⑩ 判据：逐节点看 `configs` 的每个值，任一个不是字符串即 `FAIL`（进 `rc`）；只判类型不判语义（`\"300px\"` 不报）；与注册表无关，给 `--controls` 不改结论；**只在 `check` 生效**（写盘后自检仍只判 ①–⑥）；通过态与跳过态都留行（`[ok]   ⑩ configs 值类型：N 个节点、0 个非字符串值` / `[note] ⑩ … 已按 --no-cfgtype 跳过`）。档位依据：开工当场随机抽 1 个工程按当期状态复量 ⇒ **命中 0**，故一刀到位判 `FAIL`、无 `[warn]` 过渡；零命中的含义是「防将来」、当前召回为 0（数量本身不作判据）。② `--controls` 取不到注册表 ⇒ `rc=2`：路径不存在／读不了／不是可解析的 JSON，**含「是 JSON 但一个控件 type 都没有」的 `{}` / `[]` / `{\"foo\":1}`**（堵「形状错」的假绿）；**不整条拒跑** —— ①–⑧⑩ 与逐文件结论照常产出，只跳过 ⑨ 与 `configs` 内联 `[js]`，末了打一行 `[note]` ＋ `=== 结果: FAIL`；注册表改按 `utf-8-sig` 读（带 BOM 的合法注册表不再被误判为取不到）。③ 主 grid `autoLoad` 的 `[note]`：初始化加载不经过查询条件面板 ⇒ 默认筛选失效；**主 grid 识别改为「① `viewport` 下第一个 `grid` → ② 否则第一个 `tab` 之内第一个 `grid` → ③ 都没有 ⇒ 判不出」**（按「第一个 tab 的后代 tab」取会把编辑签页里的明细表当主列表、并对真主 grid 命中的形态完全静默）；直接子 `store` **全部**参与（任一 `autoLoad` 即命中）、直接子无 store 而深层有 ⇒ 打「未识别（store 不在主 grid 的直接子节点）」；无 `grid` 的文件不打；用 ⑧ 的闸 ⇒ `patch` 输出逐字节不变。④ 写盘命令（`patch` / `edit` / `expand` / `new`）新增一条 `[warn]`：本次写入含非字符串 `configs` 值时提示「check 的 ⑩ 会判 FAIL，请改成字符串」（列名最多 8 个；`rc` 仍 0、不改值、不阻断写盘；configs 全为字符串时不打）。⑤ 与 `itemids` / `params` 的契约有意不同：那两个命令取不到注册表是回退内置兜底 ＋ `rc` 不变（只影响白名单精度），`check` 的 ⑨ 是判定项 ⇒ 回退即假绿，故判 `rc=2`。⑥ 新增 references/layout.md（布局：面板高度算法、列网格与列宽、`region` 拉伸、数字列右对齐、工具条两条硬规则）、references/value-mapping.md（`keyName` vs `renderer`、禁在 SQL 里翻译、多选三路来源、值往返与存储格式代价、缓存提醒）、references/generation.md（脚本化：何时该脚本、`configs` 的 `str()` 收口、双层闸、换行对齐、可重跑；`new --eol` 默认 `lf` 已写明）。⑦ 既有件：faq.md 删「不新增第 ⑨ 项」承诺句并补 ⑨ 说明 ＋ 5 条症状条 ＋ 1 条「patch 显示 ALL OK、check 却报 ⑩」的新 Q（FAQ 19 → 24）、controls.md 补 `renderer`/`keyName` 最小写法、workflow-notes.md 补「参考页可复用边界」、SKILL.md 与 README.md 的 `check` 表述改九项 ＋ 四道验收（＋ 条件附加道）、SKILL.md 删两处越界指针、exit 2 行补 check 的 `--controls` 情形、随包样板 7 处 `width` 由数字改字符串。⑧ 绑定 `M4` 节点 2 的口径（⑧ 的数据加载链），`M4` 是验收侧指标节点编号、不是本仓检查项编号。" },
     { "version": "1.6.7", "date": "2026-10-19", "summary": "账实对齐版（patch）：不改 `scripts/xwl.py` 任何字节，不改任何判定／输出／`rc`。① 退役 4 个死项 —— `17a`（标题禁 emoji，只服务样式一致性、本仓无出处）、`17j-2`（「N 份参考材料」三数相等：`SKILL.md` 里该措辞 0 次 ⇒ 循环体永不进入，大绿行仍宣称通过＝假绿；职责已由 `17j-3` 覆盖）、`17j-9`（旧措辞文本扫描：已由 `17j-10` 行为级判据守住）、`17s`（检的是本文件自身注释、属脚手架自检）；块基线 39 → 35。② 块基线判据**有意放宽**并登记：改为「块总数 ≥ 基线」＋「基线外块名必须在本文件声明」；残余（净 0 偷换在已声明时不再机械判红）如实写明；注入验证先红后绿三条各跑一次。③ 清掉注释里 4 处工作区私有计划文档指针 ＋ 18 处对已退役块名的悬空引用。④ `SKILL.md` 594 → 573 行（只削不增，每处确认 `references/` 指针仍在）。⑤ 规模数改口径：能力声明改为**下界**「≥2.5 万 `.xwl`」＋口径＋时点，精确值／复算命令／语料快照指纹落依据层第十节（工程侧天天在变，裸精确值落笔即过期）；`17q` 对 `SKILL.md` 当期无 token 可查一事**显式登记**（不是失效，写裸数即恢复生效）。⑥ 同步面：CHANGELOG / metadata.json / SKILL.md（version）。" },
     { "version": "1.6.6", "date": "2026-10-17", "summary": "check 判据口径对齐与取法统一版（patch，段 3）：无新子命令、无新参数。① `check` ④ 判据**接受**加载器（org.json）也接受的 3 类写法（单引号键／未引号键／相邻的贪婪 `{...}{...}` 只取第一个）—— ⚠️ 性质是**口径对齐**、**当前语料实测零实例** ⇒ **现存文件判定零变化**，`rc` 只可能 1 → 0；第四类「非标准转义」加载器同样拒绝 ⇒ 维持报错。② `check` ⑧「加载链完整性」并入 **M4 节点 2**：页内有 `store`，却既无 `configs.autoLoad`、页内也扫不到 `.load(`／`store.reload(` ⇒ 打一条 `[warn]`（**不进 `rc`**、不改判定、⛔ 不新增第 ⑨ 项）。③ `scripts/selftest.py` 为「文档里写给用户看的命令样例，照抄必须跑得通」增设**通用解析式守卫**（`#82`：逐条喂 `build_parser().parse_args()`，与具体 flag 名无关，并入既有 17h 块）。④ 管道与取法：模块级入口兜 `BrokenPipeError` —— ⚠️ **射程限定**为「下游读走一行后关闭」（由 traceback ＋ `rc=1` 改为无 traceback ＋ `rc=0`；**一行不读直接 close** 仍 `rc=1` ＋ traceback，⛔ 不在覆盖内）；`check` 的 `--no-js` 取值统一为 `getattr(..., False)`（同义重构、行为无变化）。⑤ 同步面：CHANGELOG / metadata.json / SKILL.md（version）；references/faq.md 的 ④／⑧ 判据表述同步。" },
     { "version": "1.6.5", "date": "2026-10-16", "summary": "超时路径有界兜底版（patch）：对外能力零变化 —— 无新子命令、无新参数、无新输出行；**正常路径的判定行为与命令行输出【零变化】**。本版唯一新增的是**超时路径的有界兜底**（⛔ 显式报出、不静默 —— 本仓判据：静默一律算缺陷）：① scripts/xwl.py 新增 `_cap_run()` —— 子进程的 `stdout`/`stderr` 改落**临时文件**（⛔ 非管道）＋ `timeout` ⇒ **有界返回**（管道下**后代进程**可能一直持写端 ⇒ 收尾等 EOF **永不返回**、连 `timeout` 也卡在等管道那一步）；超时 ⇒ 显式把原因写进 `stderr` 开头（与 `text=True` 同口径、两路不合并）。② scripts/xwl.py 给 git 探针加**超时哨兵**（`_GIT_TIMEOUT` / `_GIT_REV_TIMEOUT`）：`_git_prefix`／`_git_has_rev`／`_git_show`／`cmd_diffguard` **超时**不再被折成「不在仓库 / 基线不存在」，而是**显式诊断**（`diffguard --rev` 超时时**仍 `rc=2`**，severity 未变；成功/否定路径一字未动）。③ scripts/selftest.py：`_run_cli`／`_run_cli_env` 等改用 `_cap_run()`；**并行派发**（`--jobs N`）新增**单块兜底超时** —— 单块超过阈值仍未退出 ⇒ **杀掉该 worker 并显式记进失败清单**（⛔ 既不跳过、也不通过），父进程因此**有界返回**；阈值取环境变量 `XWL_SELFTEST_JOB_TIMEOUT`（整数秒，默认 **1800**；`≤ 0` ⇒ 关闭兜底、退回无界行为，并打印一行 `[note]` **显式声明**）。④ 相关断言里的 `%d` 收口为 `%s` —— 超时路径的 `returncode` 是 `None`，⛔ 不能再当整数格式化。⑤ references/workflow-notes-guards.md 新增「七、自检运行器：并行派发与单块兜底超时」。⑥ 同步面：CHANGELOG / metadata.json / SKILL.md（version）。" },

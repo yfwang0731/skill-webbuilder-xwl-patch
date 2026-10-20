@@ -26,7 +26,7 @@
   {"op": "append",
    "path": ["@columns", "children"],
    "value": {
-     "configs": {"itemId": "code", "dataIndex": "code", "text": "编码", "width": 140},
+     "configs": {"itemId": "code", "dataIndex": "code", "text": "编码", "width": "140"},
      "expanded": false,
      "children": [],
      "type": "column"
@@ -38,7 +38,7 @@
        "itemId": "name",
        "dataIndex": "name",
        "text": "名称",
-       "width": 200,
+       "width": "200",
        "renderer": "var s = v == null ? '' : String(v);\nif (s.length > 12) {\n  return s.substring(0, 12) + '…';\n}\nreturn s;"
      },
      "expanded": false,

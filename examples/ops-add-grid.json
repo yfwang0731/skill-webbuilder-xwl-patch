@@ -26,7 +26,7 @@
   {"op": "append",
    "path": ["@columns", "children"],
    "value": {
-     "configs": {"itemId": "sel", "xtype": "checkcolumn", "width": 40},
+     "configs": {"itemId": "sel", "xtype": "checkcolumn", "width": "40"},
      "expanded": false,
      "children": [],
      "type": "column"
@@ -34,7 +34,7 @@
   {"op": "append",
    "path": ["@columns", "children"],
    "value": {
-     "configs": {"itemId": "code", "dataIndex": "code", "text": "编码", "width": 140},
+     "configs": {"itemId": "code", "dataIndex": "code", "text": "编码", "width": "140"},
      "expanded": false,
      "children": [],
      "type": "column"
@@ -42,7 +42,7 @@
   {"op": "append",
    "path": ["@columns", "children"],
    "value": {
-     "configs": {"itemId": "name", "dataIndex": "name", "text": "名称", "width": 200},
+     "configs": {"itemId": "name", "dataIndex": "name", "text": "名称", "width": "200"},
      "expanded": false,
      "children": [],
      "type": "column"

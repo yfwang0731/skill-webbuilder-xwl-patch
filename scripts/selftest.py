@@ -1684,11 +1684,75 @@ def _check_new_guards(tmp, node, failures, write) -> None:
         reg_fail.append("④ ⑨（`#76`）运行级汇总未用「N 个节点（涉及 M 个文件）」量纲：\n%s" % _o9c)
     if _rc9c != 0:
         reg_fail.append("④ ⑨（`#76`）量纲修正不应改 rc，实得 rc=%s" % _rc9c)
+    def _run_check_nc(files, node_, **extra):
+        """同 `_run_check`，但可加**额外属性**（本段只用 `no_cfgtype=True` / `controls=…`）。
+
+        ⚠️ 单独造一个而不是改模块级 `_run_check` 的签名：那个被十余处断言共用，
+           多一个参数就多一个"别处传错也静默生效"的面。
+        """
+        buf = io.StringIO()
+        _attrs = {"files": files, "node": node_, "no_js": node_ is None}
+        _attrs.update(extra)
+        ns = type("NS", (), _attrs)()
+        with contextlib.redirect_stdout(buf):
+            code = xwl.cmd_check(ns)
+        return code, buf.getvalue()
+
+    # ④-6（⑩）真阳性：`configs` 里 `width` / `maxLength` 写成 int ⇒ `[FAIL] ⑩`、rc=1
+    #   起因（按守卫维护纪律）：⑩ 是**零覆盖**项 —— 把 `_scan_cfg_types` 整段删掉、或把
+    #   `--no-cfgtype` 开关删掉，本文件一条断言都不会红（`check --help` 行数 15→14 仍在上限内）。
+    #   ⚠️ 夹具**必须含两个不同键**（`width` ＋ `maxLength`）：只锚 `width` 时，把判据改成
+    #      "只查 width" 仍全绿 —— 那就等于没钉住"遍历整个 `configs`"这件事。
+    _rc10, _o10 = _run_check([_mkreg("cfgint", {"itemId": "l1", "html": "x",
+                                                "width": 300, "maxLength": 20})], node)
+    _fl10 = [l.strip() for l in _o10.splitlines() if l.strip().startswith("[FAIL] ⑩")]
+    if not _fl10:
+        reg_fail.append("④ ⑩ 真阳性：`configs` 含 int 值却未见 `[FAIL] ⑩` 明细行：\n%s" % _o10)
+    else:
+        for _k in ("width", "maxLength"):
+            if _k not in _o10:
+                reg_fail.append("④ ⑩ 真阳性：明细行未点名非字符串键 `%s`"
+                                "（判据疑似只查某一键）：\n%s" % (_k, _o10))
+    if _rc10 == 0:
+        reg_fail.append("④ ⑩ 是 `[FAIL]` 级（进 rc），`configs` 含 int 值时 rc 仍 0")
+
+    # ④-7（⑩）`--no-cfgtype` ⇒ rc=0 且 **⑩ 的判定行一行都不出现**（开关真的关掉了判定面）
+    #   ⚠️ 判据是"无 `[FAIL] ⑩` / 无 `[ok] … ⑩`"，⛔ 不是"输出里没有 ⑩ 这个字符"：
+    #      跳过时**必须**留一行 `[note] ⑩ … 已按 --no-cfgtype 跳过`（否则与"跑了且干净"无法区分）。
+    _rcnc, _onc = _run_check_nc([_mkreg("cfgint_nc", {"itemId": "l1", "html": "x",
+                                                      "width": 300})], node, no_cfgtype=True)
+    _jud10 = [l.strip() for l in _onc.splitlines()
+              if ("⑩" in l) and (l.strip().startswith("[FAIL]") or l.strip().startswith("[ok]"))]
+    if _jud10:
+        reg_fail.append("④ ⑩ `--no-cfgtype`：开关给上了，仍有 ⑩ 的判定行：\n%s" % _onc)
+    if not any(l.strip().startswith("[note]") and "⑩" in l and "--no-cfgtype" in l
+               for l in _onc.splitlines()):
+        reg_fail.append("④ ⑩ `--no-cfgtype`：未留 `[note] ⑩ … 已按 --no-cfgtype 跳过` 行"
+                        "（分不清「跳过」与「没跑」）：\n%s" % _onc)
+    if _rcnc != 0:
+        reg_fail.append("④ ⑩ `--no-cfgtype`：跳过 ⑩ 后 rc 应为 0，实得 %s" % _rcnc)
+
+    # ④-8（⑩）全字符串 ⇒ rc=0 且留 `[ok] ⑩ … N 个节点、0 个非字符串值`
+    #   起因：⑩ 通过态**一行都不打**时，"跑了且干净"与"根本没跑"在输出上无法区分
+    #   （`--no-cfgtype` 静音后更是完全一样）。
+    _rcok, _ook = _run_check([_mkreg("cfgstr", {"itemId": "l1", "html": "x",
+                                                "width": "300"})], node)
+    _ok10 = [l.strip() for l in _ook.splitlines() if l.strip().startswith("[ok]") and "⑩" in l]
+    if not _ok10:
+        reg_fail.append("④ ⑩ 通过态：`configs` 全为字符串时未见 `[ok] ⑩ …` 行"
+                        "（分不清「真跑了」与「没跑」）：\n%s" % _ook)
+    elif "个节点" not in _ok10[0] or "0 个非字符串值" not in _ok10[0]:
+        reg_fail.append("④ ⑩ 通过态：`[ok] ⑩` 行量纲/结论不符（期望 `N 个节点、0 个非字符串值`）：%s"
+                        % _ok10[0])
+    if _rcok != 0:
+        reg_fail.append("④ ⑩ 通过态：全字符串时 rc 应为 0，实得 %s" % _rcok)
+
     if reg_fail:
         failures.extend(reg_fail)
     else:
         print("[ok]  ④ `check --controls`：⑨ 校 configs 键（非法键进 `[warn]`、rc 不变）＋ "
-              "⑥ 扩到 configs 内联 `[js]`（语法错进 `[FAIL]`、rc≠0）；不给 `--controls` 时该段不出现")
+              "⑥ 扩到 configs 内联 `[js]`（语法错进 `[FAIL]`、rc≠0）；不给 `--controls` 时该段不出现"
+              " ＋ ⑩ 值类型（int ⇒ rc=1；`--no-cfgtype` ⇒ 无 ⑩；全字符串 ⇒ `[ok] ⑩`）")
 
     # ---- ⑤ `#71`（插队）：`check --controls` 的 ⑥-ext **行序确定**（与 seed 无关）----
     #   起因（按守卫维护纪律，不这么做会漏什么）：`_scan_configs_js` 迭代 `reg_types[t]["js"]`，而它是
@@ -2226,8 +2290,9 @@ def _check_new_guards(tmp, node, failures, write) -> None:
     #     ② **来源行 == 手写「未找到」文案**、且**不含**那个坏路径（⛔ 不再回退后仍打用户给的坏路径）。
     #   ⛔ 不重复 `f11`（`selftest.py:5559` 一带）已钉的**文案字面** —— 直接引用**手写**常量
     #      `_REG_SRC_LINE_UNFOUND`（`:5343`）；⛔ 不改 `controls_source_line`（`xwl.py:1433`，三处复用）。
-    #   ⚠️ 坏 `--controls` 必须是**读不动**的：`_registry_configs` 只在 `json.load` 抛异常时返回 `None`；
-    #      **合法 JSON 但非注册表** ⇒ 返回空 dict、**不触发** warn ⇒ 夹具用**非 JSON**内容。
+    #   ⚠️ 坏 `--controls` 的**两种坏法都算**：`_registry_configs` 在「`json.load` 抛异常」**或**
+    #      「能解析但一个控件 type 都没有（`{}` / `[]` / `{"foo":1}`）」时都返回 `None` ⇒ 两站点都会
+    #      warn。夹具取最直白的一种（**非 JSON** 内容）。
     p74_fail: list[str] = []
     _bad74 = os.path.join(_r75, "bad-registry.json")   # 存在、但**不是**能解析的注册表
 
@@ -2387,8 +2452,11 @@ _splits = [
 #   纯数据、被 `_check_docs` 的 `17j-7` 循环读取 ⇒ 搬到模块级不改任何上限值、不改判据。
 #   ⚠️ 新增子命令必须**同步在此登记**上限（`_check_docs` 的 `_h_unreg` 会把漏登的报红）。
 _help_caps = {
-    None: 36,        # 顶层 `xwl.py --help`（实测 26）
-    "check": 16, "edit": 22, "patch": 47, "params": 23, "paths": 12,
+    # 顶层 `xwl.py --help`（实测 **27** 行：子命令简介折行占 2 行）。
+    #   ⚠️ 上限 36 不动 —— `36-27=9 ≤ 10`，仍满足"上限不得比实测大 10 行以上"的设计余量。
+    None: 36,
+    # `check`：实测 15（新增 `--no-cfgtype` 后 +1）⇒ 15 ＋ 设计余量 5 ＝ 20。
+    "check": 20, "edit": 22, "patch": 47, "params": 23, "paths": 12,
     "new": 29, "folders": 15, "itemids": 27, "sqlrefs": 12, "diffguard": 14,
     "schema": 26, "dump": 12, "expand": 26, "sql": 12, "events": 13,
 }
@@ -2740,6 +2808,21 @@ def _real_out_corpus(tmp: str) -> str:
                 {"configs": {"itemId": "btn"}, "type": "button", "expanded": False, "children": [],
                  "events": {"click": "app.gs.load({ out: app.tbar });"}}]}]}, 1, CRLF))
     _cap(xwl.cmd_params, file=_pp, module_root=tmp, controls=None, list_fields=False)
+    # `[warn] 本次写入含 N 处 configs 非字符串值（<itemId>.<key>, …）：check 的 ⑩ 会判 FAIL，请改成字符串`
+    #   ⇒ `patch`（及 edit / expand / new）**写盘后自检**里那条预告。造一个含**非字符串** `configs` 值的
+    #   夹具（`width: 40` 是 int）＋ 一条无害 op（改 `title`），真跑一次 `patch`。
+    #   ⚠️ `no_js=True` ⇒ 免依赖 node（本语料只用它的 stdout 做 oracle，不判 JS）。
+    #   ⚠️ 必须**真打出**那条 warn：`configs` 全为字符串时本工具有意**不打**（正常文件输出不变的承诺）
+    #      ⇒ 夹具里那个 int 是这条语料成立的前提，别"顺手改成字符串"。
+    _pw = _w("corpus_cfgwarn.xwl", xwl.dumps_designer(
+        {"title": "c", "roles": {}, "children": [
+            {"configs": {"itemId": "t1", "html": "x", "width": 40},
+             "type": "text", "expanded": False, "children": []}]}, 1, CRLF))
+    _pops = os.path.join(tmp, "corpus_cfgwarn_ops.json")
+    with open(_pops, "w", encoding="utf-8") as f:
+        json.dump([{"op": "set", "path": ["title"], "value": "c2"}], f)
+    _cap(xwl.cmd_patch, file=_pw, ops=_pops, eol="auto", indent=1, dry_run=False,
+         backup=False, allow_new_key=False, node=None, no_js=True)
     return "\n".join(re.sub(r"\s+", "", _ln) for _t in _buf for _ln in _t.splitlines())
 
 

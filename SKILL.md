@@ -2,7 +2,7 @@
 name: webbuilder-xwl-patch
 slug: skill-webbuilder-xwl-patch
 displayName: webbuilder-xwl-patch
-version: 1.6.7
+version: 1.7.0
 license: MIT
 metadata:
   category: development-tools
@@ -81,6 +81,9 @@ WebBuilder 的页面与查询定义都写在 `.xwl` 里。它**看起来像 JSON
 | **动手前**扫一遍"别这么干" | [`references/anti-patterns.md`](references/anti-patterns.md) —— 23 条，标了哪些是**静默**的 |
 | **交活前**逐条过 | 第九章 + [`references/checklist.md`](references/checklist.md) —— 30 项 |
 | 换控件 / 不知道用哪个 / 该挂哪里 | [`references/controls.md`](references/controls.md) |
+| 定布局：面板该多高、列宽与列网格、`region` 拉伸、工具条挂法 | [`references/layout.md`](references/layout.md) |
+| 值映射：`keyName` vs `renderer`、多选三路来源、值往返与存储格式 | [`references/value-mapping.md`](references/value-mapping.md) |
+| 脚本化生成：什么时候该写脚本、`configs` 归一、双层闸、换行对齐 | [`references/generation.md`](references/generation.md) |
 | **HTML → xwl 转写**：默认做法 / 必须回问 / 不预设 | [`references/transcription-defaults.md`](references/transcription-defaults.md) |
 | 想看一次完整实操（从零造页面 + SQL 载体） | [`references/walkthrough.md`](references/walkthrough.md) |
 | 想跑最小示例（每条命令都真跑过） | [`examples/README.md`](examples/README.md)（示例 `.xwl` 用 `xwl.py new` 现场生成，不在仓库里预置） |
@@ -350,11 +353,12 @@ python scripts/xwl.py edit <file.xwl> --old-file old.txt --new-file new.txt --ex
 
 > **能力边界（不随时间变的一句）**：`check` 只做**静态、文件级**校验 —— **格式与结构、事件 JS 语法、注册键重名分级等静态项**，**不证页面可用**（逐项判据与报错处置见 [`references/faq.md`](references/faq.md)）。
 
-`check` 共 **八项** = **7 项判定 ＋ 1 项只提示**。7 项判定 = **格式五项 ①–⑤**（无 BOM / 换行一致 / 无「反斜杠 + 空白」行 /
-**加载器等价解析** / 末行结构）+ **⑥ 事件 JS 语法**（提取后交 `node` 校验）+ **⑦ 注册键重名分级**；
+`check` 共 **九项** = **8 项判定 ＋ 1 项只提示**。8 项判定 = **格式五项 ①–⑤**（无 BOM / 换行一致 / 无「反斜杠 + 空白」行 /
+**加载器等价解析** / 末行结构）+ **⑥ 事件 JS 语法**（提取后交 `node` 校验）+ **⑦ 注册键重名分级** +
+**⑩ `configs` 值类型**（任一个值不是字符串 ⇒ `FAIL`，`--no-cfgtype` 可关；判据与语义无关，`300` 这种数字才是命中、`"300px"` 不是）；
 **第 ⑧ 维「加载链完整性」只提示、不进 rc**（判据对齐框架取键方式：`children` 须是**非空数组**、
 `children[0].configs` 与 `roles` 须是**对象**，否则文件能被 ④ 解析、页面却在加载期抛）。逐项判据与报错处置见
-[`references/faq.md`](references/faq.md)；不通过时先用 `--backup` 的 `<file>.bak` 回退再排查。**另**：给了 `--controls` 时**另校 `configs` 键与内联 `[js]`**（缺省不校、也不自动找），它**不计入上面八项**。
+[`references/faq.md`](references/faq.md)；不通过时先用 `--backup` 的 `<file>.bak` 回退再排查。**另**：给了 `--controls` 时**另校 `configs` 键（⑨）与内联 `[js]`**（缺省不校、也不自动找）—— **⑨ 只在显式给 `--controls` 时跑、只 `warn`、不进 `rc`，不计入上面九项**。
 
 ```bash
 python scripts/xwl.py check <file.xwl> [more.xwl ...]
@@ -371,9 +375,17 @@ python scripts/xwl.py check <file.xwl> --no-itemid          # 跳过注册键重
 - **第 ⑧ 维是"只提示"**：加载链完整性有问题（如 `children` 不是数组）时只打 `[warn] ⑧ 加载链完整性：…`，**不影响退出码**；正常打 `[note] ⑧ 加载链完整性：无异常`、④ 解析失败时打 `[note] ⑧ 加载链完整性：因解析失败跳过`（**它同样不进写盘后自检**）。⚠️ 本版起 ⑧ **另含一条「数据加载链」**：页内有 `store`，却既没有 `configs.autoLoad`、页内也扫不到 `.load(`／`store.reload(` ⇒ 同样只打 `[warn]`（提示**结果表可能永不加载**、须人工确认）；**窗口内嵌／以子页方式打开**（由父页 load）、**运行时动态绑定**时**不适用**，判据与例外见 [references/faq.md](references/faq.md) ⑧。
 > 自己写校验脚本的两坑（② **别写成"必须 CRLF"**、④ **不是替换成换行符**）见 [references/faq.md](references/faq.md) §一。
 
+**页面类交付的四道验收**（交付前逐道过，缺一道就不算完成）：**① `check`**（格式与结构、事件 JS、重名、`configs` 值类型）
+→ **② `check --controls <…/controls.json>`**（键合法性 ⑨ 与内联 `[js]`；**路径必须绝对**）
+→ **③ 在设计器里打开一次**（能否渲染 —— `check` 只证"格式能加载"，不证"页面能开"）
+→ **④ 按清单人工看布局与交互**（面板高度 / 列宽 / 对齐 / 工具条显示，判据见 [`references/layout.md`](references/layout.md)）。
+
+> ⚠️ **有库可连时另加一道「连库实跑 SQL」** —— 它是**条件附加道**：没库时**不算缺项**。
+> 口径是「**四道 ＋ 条件附加道**」（⛔ 别写成五道、⛔ 别把附加道算成缺项）。
+
 ### 第 5 步 · 提交前扫一遍（`diffguard`。**只在 git 仓库里有意义**）
 
-第 4 步的八项**只能证明"文件自身格式没坏"**，证不了"没人把多行悄悄压平" —— 压平后文件是**自洽**的。
+第 4 步的九项**只能证明"文件自身格式没坏"**，证不了"没人把多行悄悄压平" —— 压平后文件是**自洽**的。
 提交前补这一刀：
 
 ```bash
@@ -398,7 +410,7 @@ python scripts/xwl.py diffguard <改过的文件或目录> --strict    # CI / pr
 | `patch` | **结构级编辑（默认方式）**：只给值 / 子树，按设计器算法重建整份文件 |
 | `edit` | 文本级安全替换（**例外**手段，改一小段文本且不希望整份重排时用） |
 | `expand` | 单行源 → 设计器同款多行 |
-| `check` | 八项校验：格式五项 + 事件 JS 语法 + **注册键**重名分级 + 加载链完整性（只提示）；**给了 `--controls` 时另校 `configs` 键与内联 `[js]`** |
+| `check` | 九项校验：格式五项 + 事件 JS 语法 + **注册键**重名分级 + **`configs` 值类型** + 加载链完整性（只提示）；**给了 `--controls` 时另校 `configs` 键（⑨）与内联 `[js]`** |
 | `diffguard` | **相对 git 基线**检测「多行内容被压平」 |
 | `itemids` | 注册键重名报告 + 建议改名（只读） |
 | `paths` | 列出 `sql` / `totalSql` / `serverScript` / `url` 四类字段的位置 |
@@ -418,7 +430,7 @@ python scripts/xwl.py diffguard <改过的文件或目录> --strict    # CI / pr
 |---|---|
 | `0` | 成功 |
 | `1` | **被检查对象或查询结果有问题**（`check` 有 `[FAIL]`；`paths` / `sqlrefs` / `sql` / `events` 没找到目标字段 —— 即无可抽取内容、空结果判 `1`） |
-| `2` | **用法或前置条件不满足**（缺必填参数、`edit` 锚点次数不符、`new` 拒绝覆盖、读不到目标文件） |
+| `2` | **用法或前置条件不满足**（缺必填参数、`edit` 锚点次数不符、`new` 拒绝覆盖、读不到目标文件；**`check` 的 `--controls` 取不到控件注册表** —— 此时 ①–⑧⑩ 已照常判定，只有 ⑨ 与 configs 内联 `[js]` 未校） |
 
 两类**判定会随命令线宽严变化**的命令，各自三档（默认 / 收紧 / 放松）：`diffguard`（疑似压平默认只告警，
 `--strict` 判失败 rc=1、一个文件都没比成才 rc=2，非 git 仓库 / 新文件以 `[note]` 跳过）；`params`（缺来源默认只告警，`--strict` 判失败，
@@ -557,7 +569,7 @@ python scripts/xwl.py diffguard <改过的文件或目录> --strict    # CI / pr
 
 ## 八、常见问题（FAQ）
 
-**19 条**高频问题在 [`references/faq.md`](references/faq.md)，按四组归类：① 格式与解析 / ② 命名与引用 /
+**24 条**高频问题在 [`references/faq.md`](references/faq.md)，按四组归类：① 格式与解析 / ② 命名与引用 /
 ③ 能不能这么改 / ④ 命令行为（设计器看不到新文件、SQL 抽取报 `1064`、`check` 慢或没装 `node`、脚本 / CI 怎么判断成败等）。
 
 > 出问题**第一站是那份 FAQ**（按症状查）；**动手前**想避开已知的坑，看

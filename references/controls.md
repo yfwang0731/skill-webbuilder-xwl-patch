@@ -364,6 +364,26 @@ module                          ← 每个 xwl 的 children[0]（页面级节点
 | 移动端页面 | `t` 前缀那一套（lib=2） | 与桌面控件一一对应，别混用 |
 | SQL 数据源 | `module.configs.serverScript` + `dataprovider.configs.sql` | 文件名惯用 `xxxSql/queryXxx` |
 
+### 6.1 `renderer` / `keyName` 的最小写法（**语法只此一处**）
+
+`renderer` 是 `column` 的 `configs` 里的一个 `[js]` 键，值是一段**函数体字符串**（多行同样合法）：
+
+```json
+{"type": "column", "configs": {"itemId": "code", "text": "编码",
+  "renderer": "function(v){ return v == null ? '' : String(v); }"}, "children": []}
+```
+
+`keyName` 同为 `column` 的 `configs` 键，值写**字典里的键名**（字符串、不写代码）：
+
+```json
+{"type": "column", "configs": {"itemId": "status", "text": "状态", "keyName": "<字典键名>"}, "children": []}
+```
+
+> ⚠️ 该键**确切的取值语义**（写字典名，还是写字典内的键）注册表未声明 —— 落文件前以设计器实测为准，⛔ 不要凭本文猜。
+
+> **什么时候用哪个、以及存储与往返的代价**见 [`value-mapping.md`](value-mapping.md)（本文只管**写法**）。
+> 两个键是否被该控件接受，用 `xwl.py schema column --controls <…/controls.json>` 复核 —— 注册表是唯一权威。
+
 ## 七、改结构时的安全顺序
 
 **要新建整个文件**：用 `xwl.py new --kind page|sql`（见 SKILL.md 第三章第 0 步）——
