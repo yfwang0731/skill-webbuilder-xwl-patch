@@ -31,6 +31,7 @@ from __future__ import annotations
 
 import argparse
 import collections
+import difflib
 import functools
 import json
 import os
@@ -295,8 +296,11 @@ def _strip_trailing_commas(t: str) -> str:
     字符串感知（安全边界）：逐字符扫描，用**未转义**的 `"` 翻转「在字符串内」标志、用 `\\`
     跟踪转义态，**只在字符串外**删逗号 ⇒ `{"s":"a,}"}` 里字符串内的 `,}` 原样保留、取值不变。
 
-    已知未对齐面（本轮**只做尾随逗号**）：加载器还接受单引号键 / 未引号键 / 相邻的贪婪
-    `{...}{...}`（只取第一个）—— 这些**不处理**、登记为候选、须单独立项。而 `\\x` 非标准转义**不在此列**：加载器**同样拒绝** ⇒ 工具报 ④ FAIL 是正确的。⚠️ **限定（仅 ④ 判定面）**：`parse_xwl` 等**公共入口仍不处理**这三类（`params` 面行为不变）；但 ④ 判定处另有**局部宽容解析**（`_check_wide_parse_or_none`）⇒ 这三类形态在 ④ 上与加载器一致；⚠️ **不等于全等价**（加载器比 ④ 更宽，见 `references/faq.md` ④）。
+    已知未对齐面（本轮**只做尾随逗号**）：加载器还接受单引号键 / 未引号键 / 未引号值 / 相邻的贪婪
+    `{...}{...}`（只取第一个）—— 这些**不在本函数**做，由 `loader_normalize` ＋ `loader_parse`
+    处理（`check`／`params`／`dump` 共用）；⛔ 本函数只管尾随逗号，别再往里塞别的。
+    而 `\\x` 非标准转义**不在任何宽容面之内**：加载器**同样拒绝** ⇒ 工具报 ④ FAIL 是正确的。
+    ⚠️ **不等于全等价**：加载器比工具的宽容面更宽（键名含 `-` 的未引号键仍不认），见 `references/faq.md` ④。
     """
     out = []
     in_str = False
@@ -324,6 +328,169 @@ def _strip_trailing_commas(t: str) -> str:
                 continue            # 尾随逗号 ⇒ 丢弃（其后只剩空白 + 闭括号）
         out.append(c)
     return "".join(out)
+
+
+def loader_normalize(t: str) -> str:
+    """把加载器（org.json）接受、但 Python `json` 拒绝的形态归一到标准 JSON。
+
+    四类（⛔ 不扩面）：
+      · 单引号串（键 / 值）⇒ 双引号串；
+      · `{` 或**对象内** `,` 之后「未加引号的标识符紧跟 `:`」⇒ 给该标识符补双引号（**键**）；
+      · `:` / `[` / **数组内** `,` 之后的**未引号「值」**（裸 token）⇒ 补双引号；
+      · 相邻贪婪 `{...}{...}` —— ⚠️ 本条**不在这里处理**：由 `loader_parse` 用 `raw_decode`
+        量出第一个对象的右边界（加载器读到第一个闭括号就收工）。
+
+    字符串感知：字符串内部的 `{` `}` `[` `]` `,` `:` 一律不参与判定（只在串外换引号 / 补引号）。
+    ⚠️ **转义原样透传**：`\\x` 这类非标准转义**不修**，交给 `json` 判错 —— 加载器同样拒绝它，
+    ⇒ ④ 该 FAIL，这一条是**故意**不宽松的。
+
+    起因（为什么它在解析层、而不是 ④ 的私有函数）：它原名 `_check_wide_normalize`，只被 `check`
+    的 ④ 调用 ⇒ 同一份文件 `check` 说"能加载"、`params`／`dump` 说"不能"（**同一事实两套结论**，
+    就是本段要修的病）。提成公共层后由 `loader_parse` 统一调用，三条命令共用一份归一化
+    ⇒ 结构上不可能再各说一套。
+    ⛔ `patch`／`edit`／`expand` **仍走 `parse_xwl`**（`load_xwl` 的 `loader` 开关默认关）——
+    把"加载器能读"的文件当成**可安全重排**的对象是另一件事，本段不做。
+
+    ⚠️ **token 面在两处有意不对称**：
+      · 键：`[A-Za-z0-9_$.]` —— ⛔ **不含 `-`**：`{ a-b: 1 }` 这类未引号键**仍判 ④ FAIL**
+        （加载器接受、工具不认 = **已知能力边界**，见 `references/faq.md` ④）。⛔ 别为了让它过
+        而把 `-` 加进**键**的 token 面 —— 那会把"键名拼错"变成"静默补引号"。
+      · 值：`[A-Za-z_$][A-Za-z0-9_$.-]*` —— **含 `-`**（值可能是 `abc-def`）；且**必须字母/`_`/`$` 开头**
+        ⇒ `85` / `-8.5` / `1e5` 这类合法 JSON 数字**不补引号**。
+    裸 token 的判定与 org.json 的 `stringToValue` 对齐：`true`／`false`／`null`（精确匹配）与
+    数字原样输出，其余裸 token 一律当**字符串**补引号（`truex` 也会被补 —— 与加载器一致）。
+    ⚠️ 已知未覆盖：`-abc` 这种以 `-` 开头但**不是数字**的裸值不补引号（仍判错）；当前语料零实例。
+    """
+    out: list[str] = []
+    i = 0
+    n = len(t)
+    in_quote = ""
+    want = ""                  # "" ＝ 不期待；`key` ＝ 期待键；`val` ＝ 期待值
+    stack: list[str] = []      # 容器栈（`obj` / `arr`）—— 决定 `,` 之后是键还是值
+    while i < n:
+        c = t[i]
+        if in_quote:
+            if c == "\\":
+                out.append(t[i:i + 2])      # 转义对原样透传（`\x` 就此保留，交给 json 判错）
+                i += 2
+                continue
+            if c == in_quote:
+                out.append('"')
+                in_quote = ""
+                i += 1
+                continue
+            out.append('\\"' if c == '"' else c)   # 单引号串里的裸 `"` 需转义后才能放进双引号串
+            i += 1
+            continue
+        if c == '"' or c == "'":
+            in_quote = c
+            out.append('"')
+            i += 1
+            want = ""
+            continue
+        if c == "{":
+            out.append(c)
+            stack.append("obj")
+            i += 1
+            want = "key"
+            continue
+        if c == "[":
+            out.append(c)
+            stack.append("arr")
+            i += 1
+            want = "val"
+            continue
+        if c == "}" or c == "]":
+            if stack:
+                stack.pop()
+            out.append(c)
+            i += 1
+            want = ""
+            continue
+        if c == ",":
+            out.append(c)
+            i += 1
+            # 对象里的 `,` 后面是**键**，数组里的 `,` 后面是**值** —— 靠容器栈分辨
+            want = "val" if (stack and stack[-1] == "arr") else "key"
+            continue
+        if c == ":":
+            out.append(c)
+            i += 1
+            want = "val"
+            continue
+        # ---- 裸 token（键位 / 值位，两套 token 面）----
+        if want == "key" and (c.isalnum() or c in "_$."):
+            j = i
+            while j < n and (t[j].isalnum() or t[j] in "_$."):
+                j += 1
+            k = j
+            while k < n and t[k] in " \t\r\n":
+                k += 1
+            if k < n and t[k] == ":":
+                out.append('"' + t[i:j] + '"')     # 未引号键 ⇒ 补引号
+            else:
+                out.append(t[i:j])
+            i = j
+            want = ""
+            continue
+        if want == "val" and (c.isalnum() or c in "_$.-"):
+            j = i
+            while j < n and (t[j].isalnum() or t[j] in "_$.-"):
+                j += 1
+            tok = t[i:j]
+            # ⚠️ `NaN` / `Infinity`（及 `-Infinity`，它以 `-` 开头、下面这条正则本来就不匹配）**不补引号**：
+            #   它们是 `_reject_nonfinite` 专门要拒绝的非有限数值 token，属**另一条**既有判断
+            #   （"工具放行、框架读到另一种类型"⇒ 假阴性转真报）。本段只补「加载器当字符串读的裸值」，
+            #   ⛔ 不顺手改这条；否则 `{"a":NaN}` 会被归一成 `"NaN"`、④ 由红转绿 —— 那是**另一个决定**。
+            if (tok in ("true", "false", "null", "NaN", "Infinity")
+                    or re.match(r"-?\d", tok)
+                    or not re.match(r"[A-Za-z_$][A-Za-z0-9_$.-]*$", tok)):
+                out.append(tok)                     # 字面量 / 非有限值 / 数字 / 面外形态 ⇒ 原样
+            else:
+                out.append('"' + tok + '"')         # 未引号值 ⇒ 补引号（当字符串，与加载器一致）
+            i = j
+            want = ""
+            continue
+        if c not in " \t\r\n":
+            want = ""
+        out.append(c)
+        i += 1
+    return "".join(out)
+
+
+def loader_parse(text: str):
+    """**按加载器的宽容面**解析 xwl —— `check`／`params`／`dump` 三条只读命令共用这一个入口。
+
+    与 `parse_xwl` 只差一步：解析前多跑一次 `loader_normalize`。
+    ⭐ **取值一律交回 `parse_xwl`**：这里只用 `raw_decode` **量出第一个对象的右边界**
+    （相邻贪婪 `{...}{...}` 时加载器读到第一个闭括号就收工），再把 `{` 起的那段前缀原文交给
+    `parse_xwl` 重新解析。
+    起因（不这么做会漏什么）：若在这里自己 `json.loads` 一遍，"取值"就有了**两份实现**；
+    将来有人把 `parse_xwl` 收严（修 bug / 堵漏洞）时，这条宽容入口会变成**第二次机会**、
+    把变异**救活** ⇒ 守卫形同虚设。故边界可以在这里量，**取值必须回落公共入口**。
+
+    已知边界（与 ④ 的历史行为一致）：前导内容里含**未配对引号**时，归一化会被那个引号带偏
+    ⇒ 仍判解析失败（加载器本身接受）—— 见 `references/faq.md` ④。
+    """
+    t = _strip_trailing_commas(loader_normalize(loader_text(text)))
+    pos = t.find("{")
+    if pos < 0:
+        raise ValueError("文件里找不到 `{` —— 不是 xwl 内容（空文件或纯文本）")
+    end = json.JSONDecoder(strict=False,
+                           parse_constant=_reject_nonfinite).raw_decode(t[pos:])[1]
+    return parse_xwl(t[:pos + end])
+
+
+def loader_parse_or_none(text: str):
+    """`loader_parse` 的**薄包装**：任何异常 ⇒ `None`（**不抛**），供 `check` 的 ④ 判"能不能读"。
+
+    ⚠️ 它里面**没有**解析逻辑，只是 try/except —— ⛔ 别在这里补归一化或补解析：
+    两份实现一出现，就又回到"同一文件两套结论"的老路。
+    """
+    try:
+        return loader_parse(text)
+    except Exception:  # noqa: BLE001
+        return None
 
 
 def parse_xwl(text: str):
@@ -585,16 +752,32 @@ def read_xwl_text(path: str):
         raise XwlLoadError("%s（原始错误：%s）" % (_NOT_UTF8_HINT, exc)) from exc
 
 
-def load_xwl(path: str):
-    """**读 + 解码 + 按加载器规则解析**，返回 `(text, has_bom, obj)`；失败抛 `XwlLoadError`。
+def load_xwl(path: str, loader: bool = False):
+    """**读 + 解码 + 解析**，返回 `(text, has_bom, obj)`；失败抛 `XwlLoadError`。
 
     各子命令统一走它，避免把 `FileNotFoundError` / `JSONDecodeError` 冒到顶层变成裸 Traceback。
+
+    `loader=True` ⇒ 走**宽容面** `loader_parse`（多认单引号键／未引号键／未引号值／相邻 `{...}{...}`），
+    **只给 `params`／`dump` 这两条只读命令用**。
+    起因（为什么做成**显式开关**、⛔ 不做成默认）：`load_xwl` 被十几个命令共用 —— 把默认行为切到
+    宽容面，等于连带把 `patch`／`edit`／`expand`／`sqlrefs`／`itemids`／`paths` 全切过去；
+    而"重排/写回一个文件"与"只读地看它"是两件事：加载器能读**不等于**可以安全重排
+    （缩进/转义/数字形态都可能被改写）⇒ 必须逐个命令显式开，写盘路径本段一律不开。
+
+    ⚠️ **报错文案保持"第一次 `parse_xwl` 的错"**：宽容面也失败时抛的仍是 strict 那次的异常
+    （`raise ... from exc`），否则同一份坏文件在 `params`／`dump` 上的 `rc=2` 文案会变 ——
+    那违反本段"除'原本读不了、现在能读'之外输出逐字节不变"的约束。
     """
     text, has_bom = read_xwl_text(path)
     try:
         return text, has_bom, parse_xwl(text)
     except Exception as exc:  # noqa: BLE001
-        raise XwlLoadError("无法按加载器规则解析 %s：%s" % (os.path.basename(path), exc)) from exc
+        if not loader:
+            raise XwlLoadError("无法按加载器规则解析 %s：%s" % (os.path.basename(path), exc)) from exc
+        try:
+            return text, has_bom, loader_parse(text)
+        except Exception:  # noqa: BLE001
+            raise XwlLoadError("无法按加载器规则解析 %s：%s" % (os.path.basename(path), exc)) from exc
 
 
 # --------------------------------------------------------------------------- #
@@ -907,7 +1090,9 @@ def _store_load_chain_issues(obj) -> list:
 # ⑩「configs 值类型」的判据（**FAIL、进 rc**；`--no-cfgtype` 可关）。**只在 `check` 生效** ——
 #   `_post_check`（写盘后自检）传 `checks={1..6}` ⇒ 本项不在其中，否则既有坏文件会让 `patch`
 #   写盘失败，属**行为突变**。
-#   依据：加载器按 **String** 取值 ⇒ `configs` 里任一值不是 `str` 必崩（生成脚本漏 `str()` 是主因）。
+#   依据：加载器按 **String** 取值 ⇒ `configs` 里任一值不是 `str`，**取值处拿到的就不是字符串**
+#     （生成脚本漏 `str()` 是主因）。⚠️ 措辞边界：**是否在加载期就崩，取决于取值处怎么用** ——
+#     把值当长度/样式用（如 `width`）会当场炸，只是透传则不炸 ⇒ ⛔ 别把这句写成"一定会崩"那种过强断言。
 #   ⚠️ **只判类型、不判语义**：`"300px"` 仍是 `str` ⇒ 不报 —— 判语义会把注释 / 表达式误杀。
 #   ⚠️ 遍历面 = 所有节点的 `configs`；`configs` **本身不是 dict** 的情形**本项不判** ——
 #      `_iter_controls` 取 `configs` 时已把非 dict 归一成 `{}` ⇒ 这类节点在这里看不到；
@@ -1095,96 +1280,6 @@ def _js_err_head(err: str) -> str:
     return "语法错误"
 
 
-def _check_wide_normalize(t: str) -> str:
-    """把加载器（org.json）接受、但 Python `json` 拒绝的**两类**形态归一到标准 JSON。
-
-    只做两件事（⛔ 不扩面）：
-      · 单引号串（键 / 值）⇒ 双引号串；
-      · `{` 或 `,` 之后「未加引号的标识符紧跟 `:`」⇒ 给该标识符补上双引号（键）。
-
-    字符串感知：字符串内部的 `{` `}` `,` `:` 一律不参与判定（只在串外换引号 / 补键引号）。
-    ⚠️ **转义原样透传**：`\\x` 这类非标准转义**不修**，交给 `json` 判错 —— 加载器同样拒绝它，
-    ⇒ ④ 该 FAIL，这一条是**故意**不宽松的。
-
-    ⛔ 它不是公共解析入口的一部分：`parse_xwl` / `_strip_trailing_commas` 一字不动（行为面隔离），
-    本函数只被 `cmd_check` 的 ④ 经 `_check_wide_parse_or_none` 调用。
-
-    ⚠️ **token 面限定**：本函数的 token 面只覆盖**标识符形态**（`[A-Za-z0-9_$.]`）；加载器的 token 面更宽，
-    **未引号「值」与含 `-` 的键不在本函数覆盖内** —— 当前语料实测**零实例**，属**已知能力边界**（见 `references/faq.md` ④）。
-    """
-    out: list[str] = []
-    i = 0
-    n = len(t)
-    in_quote = ""
-    after_sep = False          # 位于 `{` / `,` 之后（其间允许空白）
-    while i < n:
-        c = t[i]
-        if in_quote:
-            if c == "\\":
-                out.append(t[i:i + 2])      # 转义对原样透传（`\x` 就此保留，交给 json 判错）
-                i += 2
-                continue
-            if c == in_quote:
-                out.append('"')
-                in_quote = ""
-                i += 1
-                continue
-            out.append('\\"' if c == '"' else c)   # 单引号串里的裸 `"` 需转义后才能放进双引号串
-            i += 1
-            continue
-        if c == '"' or c == "'":
-            in_quote = c
-            out.append('"')
-            i += 1
-            after_sep = False
-            continue
-        if c == "{" or c == ",":
-            out.append(c)
-            i += 1
-            after_sep = True
-            continue
-        if after_sep and (c.isalnum() or c in "_$."):
-            j = i
-            while j < n and (t[j].isalnum() or t[j] in "_$."):
-                j += 1
-            k = j
-            while k < n and t[k] in " \t\r\n":
-                k += 1
-            if k < n and t[k] == ":":
-                out.append('"' + t[i:j] + '"')     # 未引号键 ⇒ 补引号
-            else:
-                out.append(t[i:j])
-            i = j
-            after_sep = False
-            continue
-        if c not in " \t\r\n":
-            after_sep = False
-        out.append(c)
-        i += 1
-    return "".join(out)
-
-
-def _check_wide_parse_or_none(text: str):
-    """`check` ④ 专用的**局部**宽容解析；任何异常一律返回 `None`（**不抛**）。
-
-    与 `parse_xwl` 只差一步：解析前多跑一次 `_check_wide_normalize`；**取值一律交回**
-    `parse_xwl` —— ⛔ 这里**不另做**解析（切片 / 剥尾逗号 / `json.loads`），否则对
-    `parse_xwl` 的收严变异会被这条"第二次机会"救活。第三类形态「相邻贪婪 `{...}{...}`
-    （`json.loads` 报 `Extra data`、加载器读到第一个闭括号就收工）由 `raw_decode`
-    **只量第一个对象的边界**（不判取值），再把 `{` 起的前缀原文交回 `parse_xwl`
-    ⇒ 前导内容仍留在输入里、收严变异照样爆；其余口径全部同源于公共入口。
-    """
-    try:
-        t = _strip_trailing_commas(_check_wide_normalize(loader_text(text)))
-        pos = t.find("{")
-        if pos < 0:
-            return None
-        end = json.JSONDecoder(strict=False, parse_constant=_reject_nonfinite).raw_decode(t[pos:])[1]
-        return parse_xwl(t[:pos + end])
-    except Exception:  # noqa: BLE001
-        return None
-
-
 def cmd_check(args) -> int:
     # ⚠️ `no_js` 一律 `getattr(..., False)` 取：本仓惯用「手工 Namespace」（`selftest._run_check`
     #    只带 `{files,node,no_js}`、`_post_check` 自带该键）⇒ 属性缺失时按 False，⛔ 别改回直取。
@@ -1313,10 +1408,12 @@ def cmd_check(args) -> int:
         try:
             obj = parse_xwl(text)
         except Exception as exc:  # noqa: BLE001
-            # 另外 3 类「加载器接受」的形态（单引号键/值、未引号键、相邻贪婪 `{...}{...}`）
-            #   只在 ④ 判定处这一次做局部宽容解析；⛔ 公共入口 `parse_xwl` 不改 ⇒ `params` 面行为不变。
+            # 宽容面（加载器接受、`json` 拒绝的那几类）由**公共入口** `loader_parse` 负责，
+            #   `check`／`params`／`dump` 共用同一份 ⇒ 三条命令不可能再对同一文件给出两套结论。
             #   ⚠️ `exc` 必须仍是**第一次** `parse_xwl` 的错 ⇒ 纯坏文件的 ④ 文案逐字不变。
-            wide = _check_wide_parse_or_none(text)
+            #   ⚠️ 这里调的是 `loader_parse`（内部**最后仍交回 `parse_xwl` 取值**）—— 所以把
+            #      `parse_xwl` 收严/改坏时，④ 会跟着红，不会被宽容面救活。
+            wide = loader_parse_or_none(text)
             if wide is not None:
                 obj = wide
             elif not text.strip():
@@ -1523,12 +1620,134 @@ def _cfg_nonstr_warn_line(obj) -> str:
 
 
 def _load_obj_quiet(file: str):
-    """尽力把文件解析成对象；失败 ⇒ `None`（**静默** —— 调用方只拿它做"顺带提示"，不判对错）。"""
+    """尽力把文件解析成对象；失败 ⇒ `None`（**静默** —— 调用方只拿它做"顺带提示"，不判对错）。
+
+    ⚠️ 走**宽容面**（`load_xwl(..., loader=True)`）：本函数只给 `_post_check` 的 `edit` 回读用，
+    而 `edit` 是**文本级**命令、合法地接受"非设计器产物"写法（单引号键等）——若这里仍用 strict，
+    那些文件写入后就读不回来 ⇒ 「本次写入含 `configs` 非字符串值」那条提示会**静默消失**。
+    ⛔ 它不参与任何判定（`patch`／`expand` 都显式传 `obj`，不会走到这里）。
+    """
     try:
-        _text, _has_bom, obj = load_xwl(file)
+        _text, _has_bom, obj = load_xwl(file, loader=True)
         return obj
     except Exception:  # noqa: BLE001
         return None
+
+
+def load_xwl_write(path: str):
+    """**写盘命令**（`patch`／`expand`）的读入口：先 strict，失败才探宽容面。
+
+    返回 `(text, has_bom, obj, wide)`：
+      · `wide=False` —— `parse_xwl` 就能读（**设计器产物**形态）⇒ 与改前**完全同一条路**，
+        后续重排/写回的字节一律不变；
+      · `wide=True`  —— 只有 `loader_parse` 能读（用了单引号键／未引号键／未引号值／相邻 `{...}{...}`
+        这类**非设计器产物**写法）⇒ 调用方**必须拒写**（见 `_reject_non_designer`）；
+      · 两边都读不了 ⇒ 抛 `XwlLoadError`，**文案取 strict 那次异常**（与改前逐字一致）。
+
+    起因（不这么做会漏什么）：`patch`／`expand` 是**整份重建**（解析 → 按设计器算法重排 → 写回）。
+    若把宽容面直接接进写盘路径，对这类文件"能读"就会变成"能写" ⇒ 写回时**顺带把格式全改了**，
+    `git diff` 被格式变更淹掉，真正的改动反而看不见 —— 那正是 diffguard 存在要防的那类事故。
+    ⚠️ 判据**按结果**取（先 `parse_xwl` 试成功、失败才 fallback），⛔ 不用正则猜"看起来像单引号键"。
+    """
+    text, has_bom = read_xwl_text(path)
+    try:
+        return text, has_bom, parse_xwl(text), False
+    except Exception as exc:  # noqa: BLE001
+        try:
+            obj = loader_parse(text)
+        except Exception:  # noqa: BLE001
+            raise XwlLoadError("无法按加载器规则解析 %s：%s" % (os.path.basename(path), exc)) from exc
+        return text, has_bom, obj, True
+
+
+def _wide_kinds(text: str) -> str:
+    """归因：这个文件**靠宽容面的哪几类写法**才读得动（**只用于拒写文案**，⛔ 不参与"是否需要"的判定）。
+
+    做法：把 `loader_normalize` 归一**前后**的文本做字符级 diff，按差异形态归类 ——
+    所以它同样**是结果判据**（没被改动过的文本不会凭空出现在归因里）：
+      · `'` → `"`：单引号键／值；
+      · 插入 `"` 且该 token 后面是 `:` ⇒ 未引号键；否则 ⇒ 未引号值；
+      · 归一后**第一个对象之后还有内容** ⇒ 相邻贪婪 `{...}{...}`（加载器只取第一个）。
+    归不出类时返回"未归类"，⛔ 不编一个好看的名字。
+
+    ⚠️ **两个踩过的坑**（都会把归因归错类／数错数量，而拒写本身照样生效 ⇒ 只有文案在骗人）：
+      1. **token 终止集必须含 `,`**。原集合是 `" \\t\\r\\n:}]"` —— 漏了逗号 ⇒ 扫
+         `{"title":abc,"iconCls":"x"}` 里那个未引号值 `abc` 时会**越过逗号一路吃到下个键的 `:`**，
+         于是把「未引号**值**」误报成「未引号**键**」（实测：`未引号键 ×2`）。同理补上 `[`／`{`
+         （它们出现在 token 之后只可能来自坏输入，但"扫飞"这个错误性质与逗号完全相同）。
+      2. **只数「开引号」那一次插入**。归一给一个未引号 token 补的是**一对**引号 ⇒ 字符级 diff 里
+         是**两次** insert 操作；两次都按"插入 `\"`"数 ⇒ 每个 token 被数两遍（实测 `×2`）。
+         开引号与闭引号靠**左侧字符**分辨：左侧是分隔符（`{ [ : , 空白` 或串首）⇒ 开引号；
+         左侧是 token 的末字符 ⇒ 闭引号，跳过。
+    """
+    src = loader_text(text)
+    try:
+        dst = loader_normalize(src)
+    except Exception:  # noqa: BLE001
+        return "未归类"
+    n_sq = n_key = n_val = 0
+    for tag, i1, i2, j1, j2 in difflib.SequenceMatcher(None, src, dst, autojunk=False).get_opcodes():
+        if tag == "equal":
+            continue
+        old, new = src[i1:i2], dst[j1:j2]
+        if old == "'" and new == '"':
+            n_sq += 1
+        elif not old and new == '"':
+            # 只数「开引号」：闭引号那一次插入的左侧是 token 的**末字符**（非分隔符）⇒ 跳过，
+            # 否则每个未引号 token 会被数成两处（见 docstring ⚠️ 第 2 条）。
+            _pv = src[i1 - 1] if i1 > 0 else "{"      # 串首视同分隔符（裸 token 文档）
+            if _pv not in " \t\r\n:,[{":
+                continue
+            j = i1
+            # 终止集必须含 `,`（见 docstring ⚠️ 第 1 条）；`]`/`}` 是原有的，`[`/`{` 一并收口。
+            while j < len(src) and src[j] not in " \t\r\n:,}]{}[":
+                j += 1
+            k = j
+            while k < len(src) and src[k] in " \t\r\n":
+                k += 1
+            if k < len(src) and src[k] == ":":
+                n_key += 1
+            else:
+                n_val += 1
+    labels = []
+    if n_sq:
+        labels.append("单引号键／值 ×%d" % n_sq)
+    if n_key:
+        labels.append("未引号键 ×%d" % n_key)
+    if n_val:
+        labels.append("未引号值 ×%d" % n_val)
+    # 相邻贪婪 `{...}{...}`：归一后第一个对象之后仍有内容
+    pos = dst.find("{")
+    if pos >= 0:
+        try:
+            end = json.JSONDecoder(strict=False, parse_constant=_reject_nonfinite).raw_decode(
+                dst[pos:])[1]
+            if dst[pos + end:].strip():
+                labels.append("相邻贪婪 `{...}{...}`（只取第一个）")
+        except Exception:  # noqa: BLE001
+            pass
+    return "、".join(labels) if labels else "未归类"
+
+
+def _reject_non_designer(cmd_name: str, path: str, text: str) -> int:
+    """写盘命令对「只有宽容面能读」的文件**拒写**：`[FAIL]` ＋ `rc=2`，目标文件一个字节都不动。
+
+    文案必须点明三件事（否则用户会以为工具坏了）：
+      ① 这文件用了**非设计器产物**的写法，并**点名是哪几类**；
+      ② 为什么拒 —— `patch`／`expand` 会**整份重建**，写回等于按设计器格式重排，
+         `git diff` 会被格式变更淹掉、真正改动反而看不见；
+      ③ 两条出路 —— 用文本级的 `xwl.py edit`，或先手工补引号再用本命令。
+    """
+    print("[FAIL] 拒绝写盘：`%s` 用了**非设计器产物**的写法（%s）"
+          % (os.path.basename(path), _wide_kinds(text)))
+    print("       为什么拒：`%s` 是**整份重建**（解析 → 按设计器算法重排 → 写回）；"
+          "对这些写法写回等于**顺带把格式全改了**" % cmd_name)
+    print("       ⇒ `git diff` 会被格式变更淹掉，真正的改动反而看不出来。")
+    print("       两条出路：")
+    print("         ① 用 `xwl.py edit`（**文本级**替换，本版已支持这类写法，不会重排文件）；")
+    print("         ② 先手工把键／值补上双引号（变成设计器产物写法），再用 `%s`。" % cmd_name)
+    print("       ⚠️ 该文件**没有**被写入（md5 不变）。")
+    return 2
 
 
 def _post_check(file: str, args, obj=None) -> int:
@@ -1730,7 +1949,7 @@ def cmd_edit(args) -> int:
 
     # `#73`：两个 `--*-file` 的**值**指向不存在（或不可读）的文件时，直接 `open()` ⇒ **裸 traceback**、
     #   `rc=1`；而 `patch --ops`／`new --from-json` 对同族情形是"**可读 `[FAIL]` ＋ `rc=2`**" ⇒ 口径不一。
-    #   ⚠️ 缺 **flag** 本就是 argparse `rc=2`（两参数 `required=True`，`xwl.py:4613-4614`）⇒ 本条只管
+    #   ⚠️ 缺 **flag** 本就是 argparse `rc=2`（两参数 `required=True`，`xwl.py:5778-5779`）⇒ 本条只管
     #   「**值**指向不存在文件」这一路。形态照 `cmd_patch` 的「读 ops 失败」。
     try:
         with open(args.old_file, "r", encoding="utf-8", newline="") as f:
@@ -1783,10 +2002,14 @@ def cmd_expand(args) -> int:
     所以输出与设计器保存结果**逐字节一致**（换行符按 --eol 决定）。
     """
     try:
-        text, has_bom, obj = load_xwl(args.file)
+        # 写盘读入口：只有**宽容面**读得动 ⇒ `wide=True` ⇒ 拒写（`expand` 同样是整份重建，
+        #   "单行源 → 设计器多行"对非设计器产物也会顺带把键/值写法全改掉）。
+        text, has_bom, obj, _wide = load_xwl_write(args.file)
     except XwlLoadError as exc:
         print(f"[FAIL] {exc}（先修格式再转换）")
         return 2
+    if _wide:
+        return _reject_non_designer("expand", args.file, text)
     if has_bom:
         print("[FAIL] 目标文件带 BOM；本工具不处理，请先确认它本来就不该有 BOM")
         return 2
@@ -2701,7 +2924,7 @@ def cmd_itemids(args) -> int:
 
     # `#74`（`itemids` 侧）：给了 `--controls` 但**读不动 / 不是注册表** ⇒ ⛔ 不再**静默**回退、
     #   且来源行**不再打印用户给的坏路径**（形态与 `params` 侧同一口径）。
-    #   ⚠️ 只改调用方 —— `controls_source_line`（`:1433`）三处复用，⛔ 不动它（否则连带 `check ⑦`）。
+    #   ⚠️ 只改调用方 —— `controls_source_line`（`:2151`）三处复用，⛔ 不动它（否则连带 `check ⑦`）。
     _i_ctl = getattr(args, "controls", None)
     ctl = _i_ctl or discover_controls(args.file)
     _ctl_bad = bool(_i_ctl) and _registry_configs(_i_ctl) is None
@@ -2813,10 +3036,14 @@ def cmd_patch(args) -> int:
     你不用碰续行符 / 转义 / 空白，全部由序列化器按 IDE.updateModule 的规则产生。
     """
     try:
-        text, has_bom, obj = load_xwl(args.file)
+        # 写盘读入口：strict 先试；只有**宽容面**读得动 ⇒ `wide=True` ⇒ 下面**拒写**
+        #   （`patch` 整份重建，写回等于按设计器格式重排 —— 见 `load_xwl_write` 的起因）。
+        text, has_bom, obj, _wide = load_xwl_write(args.file)
     except XwlLoadError as exc:
         print(f"[FAIL] {exc}")
         return 2
+    if _wide:
+        return _reject_non_designer("patch", args.file, text)
     if has_bom:
         print("[FAIL] 文件带 BOM；本工具不处理")
         return 2
@@ -3196,6 +3423,38 @@ def cmd_schema(args) -> int:
     return 0
 
 
+# --------------------------------------------------------------------------- #
+# paths：字段值预览（序 9）与重名告警归并（序 10）
+# --------------------------------------------------------------------------- #
+#: 预览行的**逐字**前缀（含前导 3 空格、`预览` 两侧各 3 空格）。⛔ 别动空格数 —— 有机器验收器按字面匹配。
+_PATH_PREVIEW_PREFIX = "   预览   : "
+#: 预览**整行**上限（含前缀）。超了就截断并带「（共 N 字符）」。
+_PATH_PREVIEW_MAX = 120
+#: 值里不短于这个长度就**必须**截断（与验收器的"没理由截"的界限一致）
+_PATH_NO_TRUNC_LIMIT = 100
+
+
+def _path_preview_body(v: str, decl_len: int) -> str:
+    """把一个字段值渲染成**单行**预览**正文**（不含前缀），必要时截断。
+
+    转义口径（本段的**选择**，⛔ 换口径要同步改验收器的期望）：
+      · `\\r` / `\\n` / `\\t` → **字面两字符**（`\\r` / `\\n` / `\\t`），所以预览里**永不出现真实控制符**；
+      · 其余字符原样（中文不转义、双引号不转义）—— 预览是给人看的，不是可回读的序列化。
+    ⚠️ **兜底**（代价：预览有损）：若转义后超出预算、而**原值本身 ≤ `_PATH_NO_TRUNC_LIMIT`**
+      （极端情形：短值里塞了一堆换行），改用**单个空格**替换 `\\r`/`\\n`/`\\t` ——
+      这样"短值"一定能在 120 字符内**完整**显示（验收器对此类有硬判据：≤100 的值不许截断）。
+    截断点按 `_PATH_PREVIEW_MAX - len(前缀)` 的预算算；**N 取字段行里声明的那个字符数**（不是转义后的长度）。
+    """
+    budget = _PATH_PREVIEW_MAX - len(_PATH_PREVIEW_PREFIX)
+    esc = v.replace("\r", "\\r").replace("\n", "\\n").replace("\t", "\\t")
+    if decl_len <= _PATH_NO_TRUNC_LIMIT:
+        if len(esc) <= budget:
+            return esc
+        return v.replace("\r", " ").replace("\n", " ").replace("\t", " ")[:budget]
+    suffix = "…（共 %d 字符）" % decl_len
+    return esc[:max(0, budget - len(suffix))] + suffix
+
+
 def cmd_paths(args) -> int:
     """列出可编辑字段的位置：sql / totalSql / serverScript / url（给 patch 的 path 用）。"""
     try:
@@ -3232,18 +3491,28 @@ def cmd_paths(args) -> int:
             else:
                 at = "（该节点无 itemId，只能用原路径）"
             dup = iid_count.get(iid, 0) if isinstance(iid, str) else 0
-            rows.append((k, t, iid, raw, at, len(v), dup))
+            rows.append((k, t, iid, raw, at, len(v), dup, v))
 
     if not rows:
         print("（没有 sql / totalSql / serverScript / url 字段）")
         return 1
 
     dup_any = False
-    for k, t, iid, raw, at, ln, dup in rows:
+    # ⭐ 序 10：**同一 `itemId` 只打一次**点名告警（按 itemId 归并）。
+    #   起因（不这么做会漏什么）：一个重名控件往往挂 3–15 个字段 ⇒ 逐字段各打一遍三行提示，
+    #     整份输出被同一段话刷屏、真正的字段位置反而被淹掉；而"信息量"并不因重复而增加。
+    #   ⛔ 归并**不许降信息量**（那三条要点全部保留），⛔ 也不许给后续行新造"无推荐"的第三种形态
+    #     （那会被 `@写法 : 需点名` 之外的标记误伤）—— 后续行就是**什么都不打**。
+    dup_warned: set = set()
+    for k, t, iid, raw, at, ln, dup, val in rows:
         print(f"{k}  ({t}, itemId={iid!r}, {ln} 字符)")
         print(f"   原路径 : {raw}")
+        print(_PATH_PREVIEW_PREFIX + _path_preview_body(val, ln))
         if dup > 1:
             dup_any = True
+            if iid in dup_warned:
+                continue                      # 同一 itemId：已经点过名，不再重复
+            dup_warned.add(iid)
             print(f"   ⚠ @写法 : 需点名 —— itemId {iid!r} 在全文件出现 {dup} 次，`@` 寻址不猜顺序")
             print(f"             · 若目标就是第 1 个：`@{iid}#1`（序号从 1 起）")
             print("             · 否则跑 `xwl.py itemids <file> --dups-only` 看候选清单（含建议改名）")
@@ -3618,6 +3887,192 @@ def cmd_folders(args) -> int:
 _FLAT_RATIO = 1.5      # 最长行至少变成原来的 1.5 倍
 _FLAT_DELTA = 40       # 且绝对增量至少 40 字符（避免短行上比值虚高）
 
+# 判据三（相似度档）的参数 —— 补的是「**压平的同时还把内容改了**」这一档：
+#   判据一要求拼接结果与工作区该行**逐字相等**，改过内容就拼不出等式；
+#   判据二只在"最长行暴增"时亮（改完仍不长 ⇒ 不亮）。
+#   故第三档：把基线里**连续 ≥2 行**的去续行符拼接，与工作区该行比相似度，够像就判疑似。
+#   ⛔ 必须 ≥2 行：1 行对 1 行的相似只是"改了内容"，不是压平。
+#
+# ⚠️ **长度门槛只许当性能优化，不许当"短行不可能压平"的判据**（本仓踩过的真缺陷）：
+#   原实现给**单行**设 40 字符下限（`if len(ln) >= 40` / `if a_len >= 40`），注释还写着理由
+#   「压平必然造长行」—— 那句是**错的**：三行短内容并成一行，合并后依然短（实测 18 字符）。
+#   于是「短行 + 压平 + 同时改了内容」这一格**永久静默漏报**（默认与 `--strict` 都 rc=0）。
+#   现改为两道**与行长无关**的闸：
+#     ① 窗口**总长度**下限 `_SIM_MIN_TOTAL`（多行拼接后的总长，⛔ 不是单行长度）；
+#     ② **逐行覆盖度** `_SIM_LINE_COV`：窗口里**每一行**都得有足够字符在工作区那一行里被对齐上。
+#   ② 才是"短行 ratio 不稳"那个真问题的正解 —— 它直接问「这行内容到底进没进到那一行里去」：
+#     · 真压平 ⇒ 每一行都被对齐上（覆盖率≈1）；
+#     · 「只改了内容、结构没动」⇒ 工作区那行只等于窗口里的**第一行**，第二行覆盖率≈0 ⇒ 不报
+#       （这类本来也已被调用方的前置条件 `pressed` 挡掉，这里是第二道保险）。
+_SIM_MIN_TOTAL = 12    # 窗口（连续 ≥2 行去掉续行符后拼接）的**总长度**下限
+_SIM_LINE_COV = 0.5    # 窗口内**每一行**至少要有这么大比例被对齐上（见上 ⚠️ ②）
+_FLAT_SIM = 0.9        # 相似度阈值（difflib.SequenceMatcher.ratio）
+_SIM_GATE = 0.5        # 3-gram Jaccard **松门**：只用来省掉昂贵比较（ratio ≥ 0.9 的对照远高于它）
+_SIM_MAX_CMP = 50000   # 昂贵比较（SequenceMatcher）次数硬上限；触顶打 [note]，⛔ 不静默
+_SIM_MAX_GATE = 400000 # 松门求交次数硬上限（同性质的有界手段：放开长度门槛后候选变多，得有兜底）；触顶同样打 [note]
+
+
+def _char_grams(s: str, k: int = 3) -> set:
+    """字符串的 `k`-gram 集合（`len < k` 时退化成单元素集合）。"""
+    if len(s) < k:
+        return {s}
+    return {s[i:i + k] for i in range(len(s) - k + 1)}
+
+
+def _line_coverage(sm, segs) -> float:
+    """窗口内**每一行**被匹配块覆盖的**最小**比例（0..1）。`segs` ＝ 每行在拼接串里的 `(起, 止)`。
+
+    只数 `get_matching_blocks()` 的**真匹配段**（`size > 0`），不数 gap —— 于是"内容只是**顺序上**
+    相似"不会被算成覆盖。空行（`n <= 0`）跳过，不参与取最小。
+    """
+    _blocks = [(a, a + sz) for a, _b, sz in sm.get_matching_blocks() if sz]
+    worst = 1.0
+    for s, e in segs:
+        n = e - s
+        if n <= 0:
+            continue
+        cov = 0
+        for s2, e2 in _blocks:
+            lo, hi = (s if s > s2 else s2), (e if e < e2 else e2)
+            if hi > lo:
+                cov += hi - lo
+        r = cov / n
+        if r < worst:
+            worst = r
+    return worst
+
+
+def _similar_merge_hits(head_text: str, wd_text: str, exact_hits=()):
+    """判据三（相似度档）：基线里**连续 ≥2 行**被压成工作区一行、**但内容已改**（逐字不等）。
+
+    返回 `(hits, n_cmp, capped)`：`hits` ＝ `[(起始行号, 结束行号, 工作区行号, 该行开头, 相似度)]`。
+
+    为什么要这一档：判据一（`_merged_line_hits`）判的是"**原样**压平"（拼接与工作区该行逐字相等）；
+    一旦压平时又顺手改了内容（补个分号、改个变量名），等式就拼不出来 —— 实测正是这一档**两头都不亮**。
+    判据二要求"最长行显著变长"，被压的内容若本来不长、或文件里已有更长的行，也不亮。
+
+    ⛔ **必须 ≥2 行**：单行对单行的相似属于"改了内容"，不是压平 —— 那类改动本就不该被 diffguard 拦。
+
+    **有界**（⛔ 不做全对全）：
+      · 只枚举"**以续行符结尾的行**"作起点、且只取**完整组**（组尾是不带续行符的行）—— 与判据一同一个几何；
+      · 窗口**总长度**过 `_SIM_MIN_TOTAL` 才进比较（`_SIM_MIN_TOTAL` 是**多行拼接后的总长**，⛔ 不是单行长度）；
+        工作区行按**长度分桶**（每 8 字符一桶），只对长度落在 `[0.75, 1.35]` 倍区间
+        （ratio ≥ 0.9 的必要条件）的候选做比较；
+      · ⭐ **两级闸**：先算 3-gram 集合的 Jaccard（`_SIM_GATE`，O(n)）作松门，过了才跑
+        `SequenceMatcher.ratio()`（O(n·m) 那一步才是贵的：最大样本上单跑 ratio 就要 ~1ms/对）；
+      · ⭐ **逐行覆盖闸**（`_SIM_LINE_COV`）：ratio 过线后还要问"窗口里**每一行**的内容到底进没进到
+        那一行里去" —— 覆盖率不够就否决（这是"短行 ratio 不稳"的正解，见文件上方 ⚠️）；
+      · 同一工作区行**只报最长的那一处**（首个命中即收，避免"同一组的不同起点"重复刷屏）；
+      · **内容去重**：同一份内容的多行只留一行当代表（结论只取决于内容）—— 大文件里成片的重复
+        结构行不再让候选数乘上重复倍数；
+      · 总体昂贵比较次数有 `_SIM_MAX_CMP` 硬上限、松门求交次数有 `_SIM_MAX_GATE` 硬上限
+        （任一触顶置 `capped`，由调用方打 `[note]`，⛔ 不静默）。
+
+    与判据一**不重复报**：已在 `exact_hits` 里的（同 起始/结束/工作区行）跳过。
+    """
+    hl = ANY_EOL_RE.split(head_text)
+    wl = ANY_EOL_RE.split(wd_text)
+    if not hl or not wl:
+        return [], 0, False
+
+    # 工作区行按长度分桶：桶号 = 长度 // 8。⛔ 不再按单行长度筛掉短行（见文件上方 ⚠️）——
+    #   短行正是要抓的那一格；省算力交给"总长下限 ＋ 长度区间 ＋ 两级闸 ＋ 硬上限"。
+    #   仅排除**零长行**（空行当候选只会白跑 ratio）。
+    # ⭐ **内容去重**（放开长度门槛后必须做的事）：ratio / 逐行覆盖**只取决于内容**，
+    #   同一份内容的多行结论完全相同 ⇒ 只留最先出现的那一行当代表。
+    #   实测收益：`big-ok.xwl` 里 4000 行同长同内容的 `    "text": "xxxx…"`，
+    #   去重后每窗口的候选从 4000 塌到 4（判据三整体 0.54s → 数毫秒）。
+    bucket: dict = {}
+    dups: dict = {}                           # 内容 → 该内容的全部行号（1-based，首行在首位）
+    for k, ln in enumerate(wl, 1):
+        if not ln:
+            continue
+        _seen = dups.get(ln)
+        if _seen is not None:
+            _seen.append(k)
+            continue
+        dups[ln] = [k]
+        bucket.setdefault(len(ln) // 8, []).append(k)
+    _wg: dict = {}                            # 工作区行的 3-gram 缓存（同一行会被多个窗口比到）
+    _wgl: dict = {}                           # 同上：`len(3-gram 集合)` 缓存（粗筛要用，别反复算）
+
+    def _wgrams(k):
+        if k not in _wg:
+            _wg[k] = _char_grams(wl[k - 1])
+            _wgl[k] = len(_wg[k])
+        return _wg[k]
+
+    done = {(a, b, k) for a, b, k, _h in exact_hits}
+    done_pairs = {(a, b) for a, b, _k in done}
+    hits: list = []
+    hit_k: set = set()
+    n_cmp = 0
+    n_gate = 0
+    capped = False
+    n = len(hl)
+    max_w = max((len(ln) for ln in wl), default=0)
+    for i in range(n - 1):
+        if not hl[i].endswith("\\"):
+            continue                          # 起点必须是续行（字符串内部的多行）
+        acc = hl[i][:-1]
+        segs = [(0, len(acc))]                # 每行在 `acc` 里的 `(起, 止)` —— 供逐行覆盖闸用
+        for j in range(i + 1, n):
+            _seg = hl[j][:-1] if hl[j].endswith("\\") else hl[j]
+            _s0 = len(acc)
+            acc = acc + _seg
+            segs.append((_s0, _s0 + len(_seg)))
+            if hl[j].endswith("\\"):
+                # 组还没结束：太长就没必要再拼（只会更长）
+                if len(acc) > max_w * 1.35:
+                    break
+                continue
+            # 组结束 ⇒ 该起点**唯一**的候选窗口就是这一段（与判据一同一个几何，
+            # ⛔ 不把"字符串后面的结构行"也拼进来 —— 那会造出永远不该成立的窗口）。
+            a_len = len(acc)
+            if a_len >= _SIM_MIN_TOTAL and (i + 1, j + 1) not in done_pairs:
+                _ga = None
+                lo, hi = int(a_len * 0.75) // 8, int(a_len * 1.35) // 8 + 1
+                for bno in range(lo, hi + 1):
+                    for k in bucket.get(bno, ()):
+                        if k in hit_k:
+                            continue
+                        wl_len = len(wl[k - 1])
+                        if not (0.75 * a_len <= wl_len <= 1.35 * a_len):
+                            continue
+                        if _ga is None:
+                            _ga = _char_grams(acc)
+                        _gb = _wgrams(k)
+                        n_gate += 1
+                        if n_gate > _SIM_MAX_GATE:
+                            capped = True
+                            break
+                        # 松门：`|∩| < 0.5·|∪|` ⇔ `3·|∩| < |a|+|b|`（代数等价，且省一次并集分配）
+                        _ia = _ga.intersection(_gb)
+                        if 3 * len(_ia) < len(_ga) + _wgl[k]:
+                            continue          # 松门没过 ⇒ 省掉昂贵比较
+                        n_cmp += 1
+                        if n_cmp > _SIM_MAX_CMP:
+                            capped = True
+                            break
+                        _sm = difflib.SequenceMatcher(None, acc, wl[k - 1],
+                                                      autojunk=False)
+                        r = _sm.ratio()
+                        if r < _FLAT_SIM:
+                            continue
+                        # 逐行覆盖闸：窗口里每一行都得真进到这一行里去（见文件上方 ⚠️ ②）。
+                        # ⚠️ 用同一个 `SequenceMatcher` 的匹配块，不另起一次比较（省一半）。
+                        if _line_coverage(_sm, segs) < _SIM_LINE_COV:
+                            continue
+                        hits.append((i + 1, j + 1, k, wl[k - 1][:70], r))
+                        hit_k.update(dups[wl[k - 1]])   # 同内容的行一并算已报（内容相同 ⇒ 结论相同）
+                        break
+                    if capped:
+                        break
+            break                             # 处理完这一段就该换下一个起点了
+        if capped:
+            break
+    return hits, n_cmp, capped
+
 
 def _merged_line_hits(head_text: str, wd_text: str) -> list:
     """精确判据：找出「基线里**连续多行**被拼成了工作区的某一行」的位置。
@@ -3929,20 +4384,40 @@ def cmd_diffguard(args) -> int:
         # 但它单独用会有两个漏报面（见 `_merged_line_hits` 注释），所以只当补充。
         grew = m_wd >= max(m_head * _FLAT_RATIO, m_head + _FLAT_DELTA)
         coarse = c_wd < c_head and grew
-        suspect = bool(hits) or coarse
+        # 判据三（相似度，补「压平**且**改了内容」）：只在 `pressed` 时启用 —— 「压平」的定义
+        #   就是行数 / 续行符至少有一个减少，⛔ 不绕开它（否则"只改内容"也会被这条抓进来）。
+        sim_hits, sim_cmp, sim_capped = ([], 0, False)
+        if pressed:
+            sim_hits, sim_cmp, sim_capped = _similar_merge_hits(head_text, wd_text, hits)
+        suspect = bool(hits) or coarse or bool(sim_hits)
 
         stat = (f"续行符 {c_head} → {c_wd}（{c_wd - c_head:+d}）| "
                 f"最长行 {m_head} → {m_wd} 字符 | 行数 {n_head} → {n_wd}")
         if suspect:
             n_suspect += 1
-            why = "精确命中" if hits else "粗筛命中"
+            _whys = []
+            if hits:
+                _whys.append("精确命中")
+            if sim_hits:
+                _whys.append("相似度命中（压平＋内容被改）")
+            if coarse and not hits and not sim_hits:
+                _whys.append("粗筛命中")
+            why = "、".join(_whys)
             print(f"  [warn] 疑似把多行内容压平（{why}）—— {stat}")
             for a, b, k, head70 in hits[:3]:
                 print(f"         基线第 {a}–{b} 行（{b - a + 1} 行）被合并成工作区第 {k} 行："
                       f"{head70!r}")
             if len(hits) > 3:
                 print(f"         （另有 {len(hits) - 3} 处精确命中）")
-            if not hits:
+            for a, b, k, head70, ratio in sim_hits[:3]:
+                print(f"         基线第 {a}–{b} 行（{b - a + 1} 行）被压成工作区第 {k} 行，"
+                      f"**且内容不再逐字相同**（相似度 {ratio:.2f}）：{head70!r}")
+            if len(sim_hits) > 3:
+                print(f"         （另有 {len(sim_hits) - 3} 处相似度命中）")
+            if sim_capped:
+                print(f"         [note] 相似度档触及有界上限（松门求交 {_SIM_MAX_GATE} 次 / 昂贵比较 "
+                      f"{_SIM_MAX_CMP} 次）⇒ 本文件**可能还有未报的**命中")
+            if not hits and not sim_hits:
                 print(f"         第 {line_no} 行突然变长，开头是："
                       f"{wd_text.splitlines()[line_no - 1][:70]!r}")
             print("         这类改动**格式校验查不出**（压平后仍是合法 JSON）："
@@ -4500,17 +4975,83 @@ def _mxwl_target(url: str):
 def _ref_kind36(tgt: str) -> str:
     """`#36` 对取数 url 目标键的分类：`placeholder` / `framework` / `dangling`。
 
-    · `placeholder` —— **显式占位**（`<…>` 角括号 / `…` 省略号 / `__MODULE__`）：有意待定，**永不判红**；
+    · `placeholder` —— **显式占位**（`<…>` 角括号 / `…` 省略号）：有意待定，**永不判红**；
     · `framework`   —— **框架端点**（首段 `common`）：平台自带、非业务载体；
     · `dangling`    —— 其余**具体键**：盘上若没这个文件 ⇒ **真·悬空**（整条取数链断掉）。
     ⭐ 依据（本仓「去项目化」守卫原文）：「`m?xwl=` 后面必须是占位符（`<…>` / `…`），只有框架端点 `common/` 例外」
     ⇒ 占位 / 框架端点**必须豁免**（否则批量页面对占位写法即大规模误判）。
+
+    ⚠️ **`__MODULE__` 不在这里判**（把它与 `<…>`/`…` 一起折成 `placeholder` 会⇒ 永不判红）：
+    它**有可解析的语义**（＝当前页所在模块目录），能解析到真实目录时就该被看见 ——
+    故改走 `_mod36_state()` 的**两段判**。本函数只留"没有可解析语义"的两类。
+
+    ⚠️ **已知逃逸面**（⛔ 别宣称"占位都查干净了"）：`__MODULE__/x` 这类取数目标在多数执行上下文下
+    **不指向真文件**（框架运行期才替换，且替换成什么取决于调用方）；工具只能按
+    「**当且仅当**能解析到真实目录时才判悬空」处理，解析不到就退回显式占位。
     """
-    if "__MODULE__" in tgt or "…" in tgt or "..." in tgt or ("<" in tgt and ">" in tgt):
+    if "…" in tgt or "..." in tgt or ("<" in tgt and ">" in tgt):
         return "placeholder"
     if tgt.replace("\\", "/").split("/")[0].lower() == "common":
         return "framework"
     return "dangling"
+
+
+def _is_mod36(tgt: str) -> bool:
+    """目标键里是否含 `__MODULE__` 段（含即走两段判，见 `_mod36_state`）。"""
+    return "__MODULE__" in tgt
+
+
+def _mod36_state(root, page_file, tgt, root_state):
+    """`__MODULE__` 的**两段判** → `(state, fp, why)`。
+
+    · `("resolved", fp, sub_dir)` —— 能把 `__MODULE__` 换成**真实目录**并据此定位到目标文件
+      （`fp` 是否存在由调用方 `os.path.exists` 判：存在 ⇒ 正常载体；不存在 ⇒ **真悬空**，
+      与普通 `m?xwl=` 同口径，`--strict` 下 `rc=1`）；
+    · `("unresolved", None, why)` —— 解析不到 ⇒ 调用方按**显式占位**（`[note]`）处理，
+      `why` 写明"为什么放过"（⛔ 不许只说"占位"不交代原因）。
+
+    语义（本工具的建模，**保守**）：`__MODULE__` ＝ **当前页所在目录**（相对模块根）。
+    故 `__MODULE__/x` ⇒ `<root>/<当前页目录>/x.xwl`。
+    ⚠️ 这是**推断**、不是框架文档的承诺：真机上 `__MODULE__` 由运行期替换、可能指向调用方模块，
+    ⛔ 所以只在"能解析到真实目录"时才敢下"悬空"的结论。
+
+    起因（不这么做会漏什么）：若把 `__MODULE__` 与 `<…>`/`…` 一起折成 `placeholder` ⇒
+    `__MODULE__/xxx` 这类目标指向一个**真实存在的模块目录下并不存在的文件**时，
+    整条取数链断掉却**永不判红**（`--strict` 也放过）—— 那是个静默面。
+    ⛔ 反过来也不行：无条件判悬空会在"没给模块根 / 根给错 / 页不在根下"时**批量冤枉**判红，
+    所以必须分成两支、并把"解析不到"的原因打到输出里。
+
+    解析失败的**五种**原因（都会原样回给调用方）：
+      ① 没给 `--module-root`（或它不是目录）；② 给了但**不像**模块根（`_module_root_state` ≠ ok）；
+      ③ 拿不到当前页路径 / 页不在模块根之下（`..`）；④ `__MODULE__` 不在首段、或其后没有子路径；
+      ⑤ `__MODULE__` 之后的段本身是**显式占位**（`<…>`／`…`）⇒ 按占位放过（判据与 `_ref_kind36` 同口径、
+         永不判红）—— ⛔ 否则 `<abc>` 在 Windows 下因非法文件名字符**恒**判悬空、把"有意待定"确定性判红。
+    """
+    if not tgt.startswith("__MODULE__"):
+        return "unresolved", None, "`__MODULE__` 不在**首段** ⇒ 无法按「当前页所在模块」定位"
+    rest = tgt[len("__MODULE__"):].lstrip("/")
+    if not rest:
+        return "unresolved", None, "`__MODULE__` 之后没有子路径 ⇒ 定位不到具体文件"
+    # `rest` 本身是**显式占位**（判据与 `_ref_kind36` 逐字同口径，⛔ 别自创一套）⇒ 与整键占位同样放过。
+    #   不判的话：`__MODULE__/<abc>` 会走到 `resolved`，而 Windows 下 `<`/`>` 是非法文件名字符 ⇒
+    #   `os.path.exists` 恒 False ⇒ 必进 `dangling36` ⇒ `--strict` 把"有意待定"确定性判红。
+    if "…" in rest or "..." in rest or ("<" in rest and ">" in rest):
+        return "unresolved", None, (
+            "`__MODULE__` 之后的 `%s` 是**显式占位**（`<…>`／`…`）⇒ 有意待定，按占位放过" % rest)
+    if not root or not os.path.isdir(root):
+        return "unresolved", None, "未定位模块根（没给 `--module-root`，或它不是一个目录）"
+    if root_state != "ok":
+        return "unresolved", None, "模块根不像模块根：%s" % root
+    if not page_file:
+        return "unresolved", None, "拿不到当前页路径 ⇒ 无法把 `__MODULE__` 换成它的目录"
+    pdir = os.path.dirname(os.path.abspath(page_file))
+    sub = os.path.relpath(pdir, os.path.abspath(root))
+    if sub.startswith(".."):
+        return "unresolved", None, "当前页不在模块根之下（%s）⇒ 无法替换" % pdir
+    subdir = os.path.abspath(root) if sub == "." else os.path.join(os.path.abspath(root), sub)
+    if not os.path.isdir(subdir):
+        return "unresolved", None, "替换后的目录不存在：%s" % subdir
+    return "resolved", os.path.join(subdir, rest.replace("/", os.sep) + ".xwl"), subdir
 
 
 def _module_root_state(root) -> str:
@@ -4540,11 +5081,16 @@ def _module_root_state(root) -> str:
     return "suspect"
 
 
-def _emit_36(args, dangling36, placeholder36) -> None:
+def _emit_36(args, dangling36, placeholder36, mod36_notes=None) -> None:
     """`#36` 判失败形态（`--strict` 下才出）：真·悬空取数 url **单列为失败项**。
 
     · `[warn]` —— 真·悬空取数 url（载体文件不存在）⇒ ⭐ **`--strict` 下判失败（rc=1）**；
-    · `[note]` —— 显式占位（`<…>` / `…` / `__MODULE__`），**永不判红**。
+      ⚠️ `__MODULE__` **能解析到真实目录**但目标文件不在 ⇒ 也走这一支（与普通 `m?xwl=` 同口径），
+      **除非该段（`__MODULE__` 之后的段）本身是显式占位** ⇒ 那样按下一句的 `[note]` 放过、⛔ 不进本支；
+    · `[note]` —— 显式占位（`<…>` / `…`），**永不判红**；
+    · `[note]`（另一句）—— `__MODULE__` **未落到具体载体**（目录解析不到，**或**其后是显式占位）
+      ⇒ 按**显式占位**处理，并逐条写出"为什么放过"（`mod36_notes`：`(目标, 原因)`）。
+      起因：只写"占位"而不交代原因，会让读者以为工具"验过了"，实际是"没敢判"。
     ⚠️ 本函数只负责**打印**；把 rc 抬到 1 的是两个出口（末行 ＋ 早返各一处）——
       两个 `return` 路径都调本函数 ⇒ 信号不因分支漏掉（⛔ 但 rc 必须在**出口**处理）。
     """
@@ -4555,9 +5101,16 @@ def _emit_36(args, dangling36, placeholder36) -> None:
               % (len(dangling36), ", ".join(sorted(set(dangling36)))))
         print("         ⚠️ `--strict` 下**判失败**（rc=1）；不加 `--strict` 仍只告警（rc 不变）。")
     if placeholder36:
-        print("\n  [note] `#36`：%d 处取数 url 为**显式占位**（`<…>` / `…` / `__MODULE__`，有意待定）"
+        print("\n  [note] `#36`：%d 处取数 url 为**显式占位**（`<…>` / `…`，有意待定）"
               "⇒ 只提示、**永不判红**：%s"
               % (len(placeholder36), ", ".join(sorted(set(placeholder36)))))
+    if mod36_notes:
+        print("\n  [note] `#36`：%d 处 `__MODULE__` 取数 url **未落到具体载体 ⇒ 按显式占位处理**"
+              "（不是「验过了」，是「没敢判」）：" % len(mod36_notes))
+        for _t, _why in mod36_notes:
+            print("         · %s —— %s" % (_t, _why))
+        print("         ⚠️ 已知逃逸面：`__MODULE__` 在多数执行上下文下由框架运行期替换、不指向真文件；"
+              "工具只在**能解析到真实目录**时才判悬空。")
 
 
 def _is_sql_carrier(obj) -> bool:
@@ -4785,7 +5338,8 @@ def cmd_params(args) -> int:
         return 2
 
     try:
-        text, _has_bom, obj = load_xwl(args.file)
+        # `loader=True`：`params` 是**只读**命令 ⇒ 与 `check` ④ / `dump` 走同一份宽容面；写盘命令（patch/edit/expand）**不切**。
+        text, _has_bom, obj = load_xwl(args.file, loader=True)
     except XwlLoadError as exc:
         print(f"[FAIL] {exc}")
         return 2
@@ -4861,6 +5415,8 @@ def cmd_params(args) -> int:
     # `#36`：收集"真·悬空"与"显式占位"的取数 url 目标（预告块在下方；⛔ 不改 rc）。
     dangling36: list[str] = []
     placeholder36: list[str] = []
+    # `#36`／`__MODULE__` 两段判：**解析不到**模块目录的那些（`(目标, 原因)`）—— 单独一句 `[note]`。
+    mod36_notes: list[tuple] = []
     # `#56`：`sql_files` 去重键从**原样字符串 `tgt`** 改为**物理文件身份**
     #   （`os.path.normcase(os.path.abspath(fp))`）—— 同一载体经不同文本形式（`a/b` vs `./a//b`、
     #   大小写差异）命中时，按原样字符串去重 ⇒ 会**重复登记同一段**、且引用计数**裂成多份**。
@@ -4891,6 +5447,22 @@ def cmd_params(args) -> int:
             if not tgt:
                 # `#36`：`m?xwl=` 目标为空 ⇒ 视为**无引用**（⛔ 不判 `dangling`、不产生假预告）。
                 line += "\n      url=(m?xwl= 目标为空) → 视为无引用，跳过分类"
+            elif _is_mod36(tgt):
+                # ⭐ `__MODULE__` **两段判**（见 `_mod36_state`）：能解析到真实目录 ⇒ 与普通 `m?xwl=` 同口径；
+                #   解析不到 ⇒ 按显式占位（`[note]`，并写明原因）。本支必须排在 `elif not root:` **之前** ——
+                #   否则"没给模块根"会被下面那句"未计入 `#36` 预告"吞掉，连"为什么放过"都不说。
+                _st36, _fp36, _why36 = _mod36_state(root, getattr(args, "file", None), tgt, _root_state36)
+                if _st36 != "resolved":
+                    line += f"\n      url={tgt} → **按显式占位处理**（{_why36}）"
+                    mod36_notes.append((tgt, _why36))
+                else:
+                    _ok36 = os.path.exists(_fp36)
+                    line += (f"\n      url={tgt} → {'存在' if _ok36 else '未找到'}"
+                             f"（`__MODULE__` → {_why36}）")
+                    if _ok36:
+                        _add_carrier(tgt, _fp36)
+                    else:
+                        dangling36.append(tgt)      # 能解析到目录、目标却不在 ⇒ **真悬空**
             elif not root:
                 # `#36`：**未定位模块根** ⇒ 无从判定载体是否存在 ⇒ ⛔ 不谎报"未找到/不存在"、
                 #   ⛔ 不进 `#36` 分类（若在此 `fp=None ⇒ ok=False` 落 `dangling` ⇒ 全量假 `[warn]`）。
@@ -4919,13 +5491,28 @@ def cmd_params(args) -> int:
         print(line)
 
     if direct:
-        # `#80`：**名不再误标** —— 该清单由 `_REQ_URL_RE`（`:3599`，只看 `url:` ＋ `m?xwl=`、
+        # `#80`：**名不再误标** —— 该清单由 `_REQ_URL_RE`（`:4646`，只看 `url:` ＋ `m?xwl=`、
         #   **不区分调用方**）喂 ⇒ 里面 `Wb.request` / `Wb.open` / `store.load` 三处**都有**。
         #   ⚠️ ⛔ **不含** store 的 `configs.url` 键 —— 该正则要求 `url` 后**直接**接 `:`，
         #   而 store 的 JSON 键形态 `"url":` **不匹配**（store 配置的 url 走另一条收集路径）。
         #   ⛔ 本段**只承诺"名不再误标"**、⛔ **不承诺"来源可分"**（那需要引入"调用方判定"＝结构改造）。
         print(f"\n=== `url:'m?xwl=…'` 引用的 m?xwl（{len(direct)} 个；**不区分调用方**）===")
         for tgt in direct:
+            if _is_mod36(tgt):
+                # 与 store 支**同口径**的两段判（`direct` 里这条可能是 `store.load` / `Wb.request` / `Wb.open`）。
+                _st36, _fp36, _why36 = _mod36_state(root, getattr(args, "file", None), tgt, _root_state36)
+                if _st36 != "resolved":
+                    print(f"  {tgt}.xwl → **按显式占位处理**（{_why36}）")
+                    mod36_notes.append((tgt, _why36))
+                    continue
+                _ok36 = os.path.exists(_fp36)
+                print(f"  {tgt}.xwl → "
+                      f"{'存在（纳入核对）' if _ok36 else '未找到（`__MODULE__` 已解析到真实目录）'}")
+                if _ok36:
+                    _add_carrier(tgt, _fp36)
+                else:
+                    dangling36.append(tgt)
+                continue
             if not root:
                 # `#36`：未定位模块根 ⇒ 无法判定 ⇒ ⛔ 不谎报"未找到"、⛔ 不进 `#36` 分类。
                 print(f"  {tgt}.xwl → 未定位模块根，无法判定（未计入 `#36` 预告）")
@@ -5037,13 +5624,13 @@ def cmd_params(args) -> int:
         #   "已核对完成" ⇒ **拆成两句**（本行属**默认面输出变更**，已列入本段声明的**默认面变更清单**）。
         # `#51`：这两句**无条件**前置 `[warn] ` 级别前缀 —— 原**无级别前缀** ⇒ 与"已核对完成"肉眼难分。
         #   ⚠️ `rc` 在**默认面**不变（不给 `--strict` 时本分支恒 `return 0`）；⭐ **但给了 `--strict`
-        #     且确悬空时**，本分支会由下方早返出口 `return 1`（原写「恒 `return 0`」与 `:4481` 矛盾，已改正）。
+        #     且确悬空时**，本分支会由下方早返出口 `return 1`（原写「恒 `return 0`」与下方早返 `return 1` 出口矛盾，已改正）。
         #   ⭐ 本行**是**默认面输出变更 ⇒ 已列入本段声明的**默认面变更清单**。
         if stores:
             print("\n[warn] （有 %d 个 store，但 SQL 侧没有 {?…?} / app.get，跳过交叉核对）" % len(stores))
         else:
             print("\n[warn] （未发现 store，跳过交叉核对）")
-        _emit_36(args, dangling36, placeholder36)
+        _emit_36(args, dangling36, placeholder36, mod36_notes)
         _print_params_tail(args, root, text, stores, field_set, target_is_carrier=_target_is_carrier)
         # `#36` 判失败（⭐ **早返出口**）：**"悬空-only"页**（页面无参数需求、只悬空）走的正是本出口
         #   ⇒ ⛔ 只改末行 ⇒ 该形态仍 `rc=0`。⚠️ 上方那两条「跳过交叉核对」的 `[warn]` **原文案一字不动**
@@ -5094,7 +5681,7 @@ def cmd_params(args) -> int:
     # `#36` 判失败（`--strict` 下；真·悬空单列为失败项）。⭐ **下方判定行已按本段"翻脸"改写** ——
     #   段 2 曾在此留「下方判定行**原样不动**」的注释（那是**预告期**的约定），本段正是要动它
     #   ⇒ 该旧注释**已同步作废**（⛔ 不要再按"原样不动"理解本行）。
-    _emit_36(args, dangling36, placeholder36)
+    _emit_36(args, dangling36, placeholder36, mod36_notes)
     _print_params_tail(args, root, text, stores, field_set, target_is_carrier=_target_is_carrier)
     # `#36` 判失败（⭐ **末行出口**）：原有「SQL 缺来源（`miss`）」＋ 本段新增「真·悬空取数 url」；
     #   ⛔ **显式占位不计入 `dangling36`**（分类见 `_ref_kind36`）⇒ 占位豁免继续生效。
@@ -5106,7 +5693,8 @@ def cmd_params(args) -> int:
 # --------------------------------------------------------------------------- #
 def cmd_dump(args) -> int:
     try:
-        _text, _has_bom, obj = load_xwl(args.file)
+        # `loader=True`：`dump` 是**只读**命令 ⇒ 与 `check` ④ / `params` 走同一份宽容面。
+        _text, _has_bom, obj = load_xwl(args.file, loader=True)
     except XwlLoadError as exc:
         print(f"[FAIL] {exc}")
         return 2

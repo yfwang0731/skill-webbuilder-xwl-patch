@@ -1,5 +1,3 @@
-> 发布面：随 skill 发布 ｜ 层归属：规格层
-
 # SQL 片段：结构、字段与传参
 
 > **什么算「SQL 片段」**：被别的 xwl 用 `store.configs.url = 'm?xwl=…'` 引用的 `.xwl`

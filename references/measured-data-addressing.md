@@ -1,5 +1,3 @@
-> 发布面：随 skill 发布 ｜ 层归属：依据层
-
 # 实测数据 · itemId 与 normalName（重名分级的数据依据）
 
 > 本文件由主文件 [`measured-data.md`](measured-data.md) 拆出（承载原「七」，节号不变）；索引见主文件。
