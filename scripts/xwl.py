@@ -1949,7 +1949,7 @@ def cmd_edit(args) -> int:
 
     # `#73`：两个 `--*-file` 的**值**指向不存在（或不可读）的文件时，直接 `open()` ⇒ **裸 traceback**、
     #   `rc=1`；而 `patch --ops`／`new --from-json` 对同族情形是"**可读 `[FAIL]` ＋ `rc=2`**" ⇒ 口径不一。
-    #   ⚠️ 缺 **flag** 本就是 argparse `rc=2`（两参数 `required=True`，`xwl.py:5778-5779`）⇒ 本条只管
+    #   ⚠️ 缺 **flag** 本就是 argparse `rc=2`（两参数 `required=True`，`xwl.py:5866-5867`）⇒ 本条只管
     #   「**值**指向不存在文件」这一路。形态照 `cmd_patch` 的「读 ops 失败」。
     try:
         with open(args.old_file, "r", encoding="utf-8", newline="") as f:
@@ -4200,11 +4200,15 @@ def _cap_run(cmd, *, cwd=None, timeout=None, env=None, input=None, binary=False)
 #   修法只动**超时路径**：成功 / 否定路径的返回类型与取值**一字未动**（⛔ 不动对外判定面）。
 _GIT_TIMEOUT = object()
 
-# `_git_show` 的 `why` 哨兵：把"必须报 `[FAIL]` 的基线不可用"从"跳过并说明"里分出来
+# `_git_show_batch` 的 `why` 哨兵：把"必须报 `[FAIL]` 的基线不可用"从"跳过并说明"里分出来
 #   （⛔ 内部哨兵，不是给用户看的文案；`cmd_diffguard` 见到它自行打印中文）。
 #   `"BADREV"`      ＝ `--rev` 本身解析不了（用法错）。
 #   `_GIT_REV_TIMEOUT` ＝ `git rev-parse` **超时**（⛔ 不是用法错，但同样"无法确认基线" ⇒ 保 rc=2）。
 _GIT_REV_TIMEOUT = "GITREVTIMEOUT"
+
+# 批量取内容的 `why` 哨兵：**批量超时／应答解析不了**时无法逐文件归因 ⇒ 走**显式降级**
+#   （一次红灯 ＋ `k/N` ＋ 未处理清单 ＋ 重跑命令，rc=2）。⛔ 不许把它混进"缺对象"或"不在仓库"。
+_BATCH_FAIL = "BATCHFAIL"
 
 
 @functools.lru_cache(maxsize=None)
@@ -4216,7 +4220,7 @@ def _git_prefix(cwd: str):
     路径与 `os.path.abspath` **不一定同源**。Windows 上 `TEMP` 常是 8.3 短名
     （`C:\\Users\\RUNNER~1\\…`），git 却把仓库根归一成长名 —— 前缀对不上时
     `os.path.relpath` 会算出 `..\\..\\XWL_SH~1\\…` 这种"绕行路径"。
-    实测：那种路径以 `..` 开头，被 `_git_show` 当成"逃逸"**静默跳过**，
+    实测：那种路径以 `..` 开头，被 `cmd_diffguard` 当成"逃逸"**静默跳过**，
     于是 diffguard 整组断言在 `windows-latest` 上全挂（ubuntu 正常）。
     让 **git 自己报**相对路径之后，盘符 / 短名 / MSYS 风格 / 大小写全都不再相关。
 
@@ -4252,33 +4256,59 @@ def _git_has_rev(rev: str, cwd: str):
     return p.returncode == 0
 
 
-def _git_show(rev: str, rel: str, cwd: str, in_repo: bool):
-    """取 `<rev>:<rel>` 的内容。返回 (ok, bytes|None, 失败原因|None)。
+def _git_show_batch(rev: str, rels: list, cwd: str, timeout: int = 60):
+    """一次 `git cat-file --batch` 取**多个** `<rev>:<rel>` 的内容（N 次 spawn → 1 次）。
 
-    找不到 git / 不在仓库 / 路径不在该 rev 里 —— 一律转成"跳过并说明"，
-    因为这几件事都不是使用者的用法错误。
-    `--rev` **本身不存在**是例外：那是用法错误，用哨兵 `"BADREV"` 报给调用方转成 rc=2。
-    git 探针**超时**也**不是**"基线不存在"，用哨兵 `_GIT_REV_TIMEOUT` 报给调用方
-    （⇒ 文案写"超时"，⛔ 不冒充 `"BADREV"`）。
+    `_git_show` 的批量形态：逐个文件起 `git show` 时，`rel` 每文件不同 ⇒ 缓存**无解**，
+    60 个文件就是 60 次进程（本机实测 13.4 s / 60 件）。本函数把 N 个 `<rev>:<rel>` 一次问完。
+
+    ⭐ **只合并进程、不合并语义**：三个状态**逐文件**交回给调用方，本函数不下结论：
+      · 命中 ⇒ `results[rel] = <bytes>`；
+      · **该 rev 里没有这个文件** ⇒ `results[rel] = None`（新增文件？）；
+      · 超时／解析不出 ⇒ `why` 非 `None`（调用方按**显式降级**处理，⛔ 不许混进上面两态）。
+    ⚠️ **`--rev` 本身坏**（`BADREV`）与**不在仓库**这两态**不在这里判** —— 前者的判据是
+      `_git_has_rev`（按 `(rev, cwd)` 缓存、不新增 spawn 面），后者的判据是 `_git_prefix`。
+      本函数保持"只答内容问题"，调用方的 rc 语义（`BADREV`／超时 ⇒ rc=2）**一字未变**。
+
+    返回 `(results: dict, why: str|None, done: int)`；`done` ＝ **已问完**的条数（超时降级报 `k/N` 用）。
+    `why` 只有两种取值来源（都**不可**逐文件归因，故由调用方统一降级）：
+      · `"超时（已终止）"` —— 批量请求超时；
+      · `"输出不可解析（git 版本？）"` —— 应答头不是 `<oid> <type> <size>` / `<name> missing`。
     """
-    if not in_repo:
-        return False, None, "不在 git 仓库里（或调不到 git）"
-    if not rel or rel.startswith(".."):     # 纯防御：rel 由 git 给出，正常不会含 ..
-        return False, None, "路径不在该仓库内"
+    if not rels:
+        return {}, None, 0
     try:
-        has = _git_has_rev(rev, cwd)
-        if has is _GIT_TIMEOUT:             # ⭐ rev-parse 超时 ≠ rev 坏。
-            return False, None, _GIT_REV_TIMEOUT
-        if not has:
-            return False, None, "BADREV"
-        got = _cap_run(["git", "show", f"{rev}:{rel}"], cwd=cwd,
-                       timeout=60, binary=True)
+        got = _cap_run(["git", "cat-file", "--batch"], cwd=cwd, timeout=timeout, binary=True,
+                       input="".join("%s:%s\n" % (rev, r) for r in rels))
     except (OSError, subprocess.SubprocessError) as exc:
-        return False, None, f"git show 失败（{type(exc).__name__}）"
-    if got.returncode != 0:
-        return False, None, ("git show 超时（已终止）" if got.timed_out else
-                             f"在 `{rev}` 里没有这个文件（新增文件？）")
-    return True, got.stdout, None
+        return {}, "调不到 git（%s）" % type(exc).__name__, 0
+    data = got.stdout if isinstance(got.stdout, (bytes, bytearray)) else b""
+    out: dict = {}
+    pos = 0
+    why = None
+    for rel in rels:
+        nl = data.find(b"\n", pos)
+        if nl < 0:                      # 应答没读全（超时被杀 / git 提前退出）
+            why = "超时（已终止）" if got.timed_out else "输出不可解析（git 版本？）"
+            break
+        head = bytes(data[pos:nl]).decode("utf-8", "replace")
+        parts = head.split(" ")
+        if len(parts) == 3 and parts[2].isdigit():
+            size = int(parts[2])
+            start = nl + 1
+            end = start + size
+            if end > len(data):         # 内容被截断
+                why = "超时（已终止）" if got.timed_out else "输出不可解析（git 版本？）"
+                break
+            out[rel] = bytes(data[start:end])
+            pos = end + 1               # 跳过内容后的那个换行
+        elif head.endswith(" missing") or head.endswith(" ambiguous"):
+            out[rel] = None
+            pos = nl + 1
+        else:
+            why = "输出不可解析（git 版本？）"
+            break
+    return out, why, len(out)
 
 
 def _expand_targets(targets: list) -> tuple:
@@ -4315,6 +4345,34 @@ def cmd_diffguard(args) -> int:
         print(f"[FAIL] 没找到可检查的 .xwl（{len(args.targets)} 个入参里没有文件）")
         return 2
 
+    # ⭐ 序 3（`ITEM-1104`）：**先把基线内容一次问完**，再进逐文件循环。
+    #   逐文件起 `git show` 时 `rel` 每件不同 ⇒ 缓存无解（60 件 ＝ 60 次进程，本机实测 13.4 s）；
+    #   改成**按目录一次 `git cat-file --batch`**：同一目录下 N 个文件共用 **1 次**进程。
+    #   ⚠️ 按 `cwd` 分组（不是全局一次）：入参可能跨目录／跨仓库，`cat-file` 只能在一个工作树里解析
+    #     `<rev>:<rel>`；分组后仍是"每目录 1 次"，不会退化成每文件 1 次。
+    #   ⚠️ **本阶段只取内容、不下结论、不打印任何行** ⇒ 逐文件的判定顺序与文案**逐字未变**。
+    _meta: dict = {}
+    _groups: dict = {}
+    for _p in files:
+        _ap = os.path.abspath(_p)
+        _cw = os.path.dirname(_ap) or "."
+        # 仓库内路径 = 「仓库根 → cwd」由 **git 自己**给出（带尾斜杠） + 文件名。
+        # `basename` 只涉及同一个字符串，不可能算出 `..`；盘符/短名一概不相关。
+        _pf = _git_prefix(_cw)
+        _rel = (f"{_pf}{os.path.basename(_ap)}"
+                if (_pf is not None and _pf is not _GIT_TIMEOUT) else "")
+        _meta[_p] = (_cw, _pf, _rel)
+        if _rel and not _rel.startswith(".."):     # 纯防御：rel 由 git 给出，正常不会含 ..
+            _groups.setdefault(_cw, []).append(_rel)
+    _got: dict = {}          # (cwd, rel) -> bytes | None（None ＝ 该 rev 里没有这个文件）
+    _batch_bad: dict = {}    # cwd -> (why, done, total)
+    for _cw, _rels in _groups.items():
+        _r, _why, _done = _git_show_batch(args.rev, _rels, _cw)
+        for _rel2, _val in _r.items():
+            _got[(_cw, _rel2)] = _val
+        if _why:
+            _batch_bad[_cw] = (_why, _done, len(_rels))
+
     n_suspect = n_skip = n_clean = 0
     for path in files:
         name = os.path.basename(path)
@@ -4326,16 +4384,31 @@ def cmd_diffguard(args) -> int:
             n_skip += 1
             continue
 
-        abs_path = os.path.abspath(path)
-        cwd = os.path.dirname(abs_path) or "."
-        # 仓库内路径 = 「仓库根 → cwd」由 **git 自己**给出（带尾斜杠） + 文件名。
-        # `basename` 只涉及同一个字符串，不可能算出 `..`；盘符/短名一概不相关。
-        prefix = _git_prefix(cwd)
+        cwd, prefix, rel = _meta[path]
         if prefix is _GIT_TIMEOUT:      # ⭐ 超时 ≠ 不在仓库：显式诊断，⛔ 不当成"不是仓库"
             ok, head_bytes, why = False, None, "git 调用超时（已终止）"
+        elif prefix is None:
+            ok, head_bytes, why = False, None, "不在 git 仓库里（或调不到 git）"
+        elif not rel or rel.startswith(".."):
+            ok, head_bytes, why = False, None, "路径不在该仓库内"
         else:
-            rel = f"{prefix}{os.path.basename(abs_path)}" if prefix is not None else ""
-            ok, head_bytes, why = _git_show(args.rev, rel, cwd, prefix is not None)
+            # `--rev` 是否存在：判据与逐文件版**同一处**（`_git_has_rev` 按 `(rev, cwd)` 缓存 ⇒
+            # 同一目录只 1 次 spawn）⇒「`BADREV` 直接 rc=2」「rev 探针超时也 rc=2」**一字未变**。
+            _has = _git_has_rev(args.rev, cwd)
+            if _has is _GIT_TIMEOUT:
+                ok, head_bytes, why = False, None, _GIT_REV_TIMEOUT
+            elif not _has:
+                ok, head_bytes, why = False, None, "BADREV"
+            elif cwd in _batch_bad:
+                ok, head_bytes, why = False, None, _BATCH_FAIL
+            elif (cwd, rel) in _got:
+                _val = _got[(cwd, rel)]
+                if _val is None:
+                    ok, head_bytes, why = False, None, f"在 `{args.rev}` 里没有这个文件（新增文件？）"
+                else:
+                    ok, head_bytes, why = True, _val, None
+            else:
+                ok, head_bytes, why = False, None, f"在 `{args.rev}` 里没有这个文件（新增文件？）"
 
         print(f"=== diffguard: {safe_relpath(path)}")
         if why == "BADREV":
@@ -4343,6 +4416,22 @@ def cmd_diffguard(args) -> int:
             return 2
         if why == _GIT_REV_TIMEOUT:      # ⭐ 超时 ≠ 基线不存在：文案说"超时"，但**仍 rc=2**（severity 未变）
             print(f"[FAIL] 调 git 校验基线超时（已终止） —— 无法确认基线 `{args.rev}` 是否存在")
+            return 2
+        if why == _BATCH_FAIL:
+            # ⭐ 批量下**不可逐文件归因** ⇒ **显式降级**：一次红灯 ＋ `k/N` ＋ 未处理清单 ＋ 可粘贴重跑命令。
+            #   ⛔ 不混进「缺对象」/「不在仓库」；⛔ 不做逐文件自动重跑（60 件最坏挂 1 小时）；`rc=2`。
+            _why_b, _done_b, _tot_b = _batch_bad[cwd]
+            _left = files[files.index(path):]
+            print(f"[FAIL] 批量取基线内容{_why_b}：本目录已问完 {_done_b}/{_tot_b} 个 —— "
+                  f"其余**无法逐文件归因**（⛔ 既不是「缺对象」也不是「不在仓库」）")
+            print(f"        未处理文件（{len(_left)} 个）：")
+            for _x in _left[:20]:
+                print(f"          - {safe_relpath(_x)}")
+            if len(_left) > 20:
+                print(f"          …另有 {len(_left) - 20} 个（完整清单即本目录入参的展开结果）")
+            print("        重跑：python -B scripts/xwl.py diffguard %s --rev %s%s"
+                  % (" ".join('%s' % _t for _t in args.targets), args.rev,
+                     " --strict" if args.strict else ""))
             return 2
         if not ok:
             print(f"  [note] 跳过：{why} —— 无法与基线 `{args.rev}` 比对")
@@ -5491,7 +5580,7 @@ def cmd_params(args) -> int:
         print(line)
 
     if direct:
-        # `#80`：**名不再误标** —— 该清单由 `_REQ_URL_RE`（`:4646`，只看 `url:` ＋ `m?xwl=`、
+        # `#80`：**名不再误标** —— 该清单由 `_REQ_URL_RE`（`:4734`，只看 `url:` ＋ `m?xwl=`、
         #   **不区分调用方**）喂 ⇒ 里面 `Wb.request` / `Wb.open` / `store.load` 三处**都有**。
         #   ⚠️ ⛔ **不含** store 的 `configs.url` 键 —— 该正则要求 `url` 后**直接**接 `:`，
         #   而 store 的 JSON 键形态 `"url":` **不匹配**（store 配置的 url 走另一条收集路径）。

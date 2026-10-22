@@ -1493,21 +1493,41 @@ def _check_subcommands(tmp, node, failures, write) -> None:
     if doc_fail:
         failures.extend(doc_fail)
 
+
+# ---- `_check_new_guards` 的原局部助手（`ITEM-1077` 拆函数时上提为模块级；四个族共用）----
+def _dump(obj, path):
+    """按设计器格式（缩进 1、CRLF）写一份 `.xwl` 夹具；父目录自动建。"""
+    os.makedirs(os.path.dirname(path), exist_ok=True)
+    with open(path, "w", encoding="utf-8", newline="") as f:
+        f.write(xwl.dumps_designer(obj, 1, CRLF))
+
+
+def _store(iid, url):
+    """造一个最小 `store` 节点（`configs.itemId` ＋ `url`）。"""
+    return {"configs": {"itemId": iid, "url": url}, "type": "store",
+            "expanded": False, "children": []}
+
+
 def _check_new_guards(tmp, node, failures, write) -> None:
-    """新近落地、**尚无守卫**的三个行为点：`--strict` / `--upstream` 汇总行量纲分离 / `folders` 结论行。
+    """新近落地、**尚无守卫**的行为点 —— **薄壳**（`ITEM-1077` 按判据族拆分，行为逐字未变）。
 
-    三条都是**秒级小夹具**（临时目录里现造，绝不扫工程）。
+    ⭐ 子函数按**文件内的连续区间**切：块内输出顺序也是行为（`--jobs` 并行档按块定义序
+    回放各块的 stdout）⇒ ⛔ 不许重排调用顺序、⛔ 不许把同一段判据拆到两个族里。
+    `_dump`／`_store` 已上提为模块级助手（四个族共用）。
     """
+    _ng_cli_readonly(tmp, node, failures, write)
+    _ng_check_controls(tmp, node, failures, write)
+    _ng_contract_and_unit(tmp, node, failures, write)
+    _ng_write_overwrite(tmp, node, failures, write)
+    _ng_params_defaults(tmp, node, failures, write)
+    _ng_platform(tmp, node, failures, write)
 
-    def _dump(obj, path):
-        os.makedirs(os.path.dirname(path), exist_ok=True)
-        with open(path, "w", encoding="utf-8", newline="") as f:
-            f.write(xwl.dumps_designer(obj, 1, CRLF))
 
-    def _store(iid, url):
-        return {"configs": {"itemId": iid, "url": url}, "type": "store",
-                "expanded": False, "children": []}
+def _ng_cli_readonly(tmp, node, failures, write) -> None:
+    """① `--strict`／② `--upstream`／③ `folders` 结论行 —— **只读命令的行为面**。
 
+    （`ITEM-1077` 从 `_check_new_guards` 原样搬出，判据一行未改。）
+    """
     # ---- ① `--strict` 选项存在，缺源时默认只告警、`--strict` 才阻塞 ----
     # 起因：`--strict` 是 params 缺源判定的逃生开关（默认 rc=0 只告警、给了才 rc=1），但**没有回归保护** ——
     #   日后若把 `--strict` 从解析器里删掉、或让 `cmd_params` 因夹具缺 `strict` 字段而崩、
@@ -1684,6 +1704,12 @@ def _check_new_guards(tmp, node, failures, write) -> None:
         print("[ok]  ③ `folders` 结论行：含「index 悬空项」「folder.json 损坏」、"
               "不含「未登记」（未登记只在明细）")
 
+
+def _ng_check_controls(tmp, node, failures, write) -> None:
+    """④ `check --controls`（⑨／⑥-ext／⑩／拒写归因）／⑤ ⑥-ext 行序确定 —— **`check` 的开关面**。
+
+    （`ITEM-1077` 从 `_check_new_guards` 原样搬出，判据一行未改。）
+    """
     # ---- ④ `check --controls`：⑨ 校 configs 键合法性（`[warn]`）＋ ⑥ 扩到 configs 内联 `[js]`（`[FAIL]`）----
     # 起因（`#48`/`#49` 落地后**整条无覆盖**）：`check` 的 ⑨/⑥-ext **只在显式给 `--controls` 时才跑**，
     #   而本文件**没有一条断言**碰 `--controls`（`_run_check` 的 NS 根本没有 `controls` 字段）⇒
@@ -2061,6 +2087,12 @@ def _check_new_guards(tmp, node, failures, write) -> None:
         else:
             print("[ok]  ⑤ `#71` ⑥-ext：同节点 ≥2 个坏 `[js]` 键时，换 5 个 `PYTHONHASHSEED` 输出规范化后逐字节一致")
 
+
+def _ng_contract_and_unit(tmp, node, failures, write) -> None:
+    """⑬ `_OPS_AUTH` 五处清单一致／⑭ `_js_err_head` 单元级 —— **契约与单元面**。
+
+    （`ITEM-1077` 从 `_check_new_guards` 原样搬出，判据一行未改。）
+    """
     # ---- ⑬ `#77`：op 清单**逐处**都须对齐写死的权威清单 `_OPS_AUTH`（不只是「两侧互恰」）----
     #   起因（按守卫维护纪律，不这么做会漏什么）：`insertKey` 落地后 5 处 op 清单各自漂移；首版判据只比
     #     「epilog 计数 vs `--ops` help 清单」⇒ **两侧同改（都退成 4 个）仍绿**（互恰 ≠ 符实），
@@ -2138,6 +2170,14 @@ def _check_new_guards(tmp, node, failures, write) -> None:
     else:
         print("[ok]  ⑭ `#78`：`_js_err_head` 单元级 —— 路径含 Error 时取真诊断、无诊断／空输入退化正确")
 
+
+
+
+def _ng_write_overwrite(tmp, node, failures, write) -> None:
+    """⑥ `#72`：`patch` 覆盖**已存在的容器键**且新值是标量 ⇒ 必须打 `[warn]`（rc 不变）。
+
+    （`ITEM-1077` 从 `_check_new_guards` 原样搬出，判据一行未改。）
+    """
     # ---- ⑥ `#72`（插队）：`patch` 覆盖**已存在的容器键**（dict/list）且新值是标量 ⇒ 必须可见 ----
     #   起因（按守卫维护纪律）：`set`/`insertKey` 的 path 末段命中一个**已存在的容器键**（`configs`／`children`）
     #     且新值为**标量**时，现行为是**静默把整个容器替换成标量** ⇒ **结构损坏**，却 rc=0、无任何 `[warn]`
@@ -2202,6 +2242,12 @@ def _check_new_guards(tmp, node, failures, write) -> None:
         print("[ok]  ⑥ `#72` 覆盖容器键（dict/list/insertKey 三形态）⇒ `[warn]` 可见且 rc 仍 0；"
               "标量→标量 与 容器→容器改键均静默")
 
+
+def _ng_params_defaults(tmp, node, failures, write) -> None:
+    """⑦–⑫ —— `params` 的剥注释／文案分句／`--upstream` 目标参数化／`--strict` 悬空（默认面 ＋ 开关面）。
+
+    （`ITEM-1077` 从 `_check_new_guards` 原样搬出，判据一行未改。）
+    """
     # ---- ⑦ `#50`（本段序 1）：`params` 需求侧提取 `{?名?}` **前剥注释**（与来源侧同口径）----
     #   起因（按守卫维护纪律）：需求侧（`module.serverScript` ＋ `dataprovider.sql/totalSql`）提取 `{?名?}` 时**不剥注释**
     #     ⇒ 注释里的占位符也计入 ⇒ **假阳性**（来源侧已剥、需求侧未剥 ⇒ 同工具内两套口径）。
@@ -2457,7 +2503,7 @@ def _check_new_guards(tmp, node, failures, write) -> None:
     _dump({"title": "p36final", "children": [
         {"configs": {"itemId": "viewport"}, "type": "viewport", "expanded": False,
          # ⭐ 末行出口的判据必须**只由 dangling 决定** ⇒ 该 store 用**字符串**形态的 `params`
-         #   （`xwl.py:5578`：只认字符串）把 SQL 侧的 `x` **给出来** ⇒ `miss` 为空。
+         #   （`xwl.py:5666`：只认字符串）把 SQL 侧的 `x` **给出来** ⇒ `miss` 为空。
          #   ⛔ 不给来源的话 `miss` 也会把 rc 顶到 1，那样"取消 dangling 判定"**测不出来**。
          "children": [{"configs": {"itemId": "st36v", "url": "m?xwl=sub/sel36",
                                    "params": "{x: 1}"},
@@ -2535,11 +2581,17 @@ def _check_new_guards(tmp, node, failures, write) -> None:
               "`common/` 端点 ⇒ 不出 `#36`；不给 `--strict` ⇒ 无 `#36` 行、**rc 仍 0（默认面不动）**；"
               "`__MODULE__` 三态 ⇒ 段内占位按占位 `[note]`（rc 0）／真悬空仍 `[warn]`（rc 1）／真存在 `resolved`")
 
+
+def _ng_platform(tmp, node, failures, write) -> None:
+    """⑮ `#75` 模块根／⑯ `#74` 坏 `--controls`／⑰ `#80` 分组名 —— **平台面**（⑮ 的夹具被⑯⑰ 复用）。
+
+    （`ITEM-1077` 从 `_check_new_guards` 原样搬出，判据一行未改。）
+    """
     # ---- ⑮ `#75`（本段序）：模块根「**存在但不像模块根**」⇒ store 支 / direct 支**两站点**都改「未核对」----
     #   起因（按守卫维护纪律）：`--module-root` 误指向（如 webapp 根而非 `…/wb/modules`）时，`#75` 判据随**目录规模**
     #     变（实测：1 文件 ⇒ `suspect`；400 文件 ⇒ `suspect`；放 1 个 `.xwl` ⇒ 翻 `ok`）—— 若仍按
     #     `os.path.exists` 判 ⇒ 会**谎报「未找到」**（那是"载体悬空"的意思、`--strict` 下还冤枉判红）。
-    #   ⭐ **两站点各一条**：store 支（`xwl.py:5475`）与 direct 支（`xwl.py:5524`）**独立** ⇒ 缺一即漏（故两处都造）。
+    #   ⭐ **两站点各一条**：store 支（`xwl.py:5563`）与 direct 支（`xwl.py:5612`）**独立** ⇒ 缺一即漏（故两处都造）。
     #   判据（先红后绿）：① 坏 root（非 `modules` 名、且**零 `.xwl`**）⇒ 两站点都出「未核对」＋原因；
     #     ② 正确 `modules` 根 ⇒ 两处**均无**「未核对」（防「永远未核对」）。
     #   ⚠️ 用 `_run` **直调**（实测 +0.02s；走 `_run_cli` 会 +1.0s 子进程启动）；本块不验异常隔离 ⇒ 直调可。
@@ -2568,9 +2620,9 @@ def _check_new_guards(tmp, node, failures, write) -> None:
     #   （都是 `→ **未核对**（模块根不像模块根：`）⇒ 若 A 只用那段公共尾，撤 store 支后仍会被
     #   **direct 支那行**满足（假绿，与"先红后绿"要求冲突）。B 用 `sub/d1.xwl` 前缀，天然只命中 direct 支。
     if "url=sub/missing → **未核对**（模块根不像模块根：" not in _o75b:
-        p75_fail.append("⑮ `#75`：坏 root 下 **store 支**未改「未核对」（`xwl.py:5475` 支失效）\n%s" % _o75b)
+        p75_fail.append("⑮ `#75`：坏 root 下 **store 支**未改「未核对」（`xwl.py:5563` 支失效）\n%s" % _o75b)
     if "sub/d1.xwl → **未核对**（模块根不像模块根：" not in _o75b:
-        p75_fail.append("⑮ `#75`：坏 root 下 **direct 支**未改「未核对」（`xwl.py:5524` 支失效）\n%s" % _o75b)
+        p75_fail.append("⑮ `#75`：坏 root 下 **direct 支**未改「未核对」（`xwl.py:5612` 支失效）\n%s" % _o75b)
     _rc75g, _o75g = _run(xwl.cmd_params, file=_p75, module_root=_r75ok, controls=None,
                          list_fields=False, upstream=False)
     if "未核对" in _o75g:
@@ -2587,8 +2639,9 @@ def _check_new_guards(tmp, node, failures, write) -> None:
     #     先说读失败、来源按「**未找到**」。
     #   ⭐ 本守卫**只钉"坏 `--controls` 的行为"**：① 输出含 `[warn] 读注册表失败：`；
     #     ② **来源行 == 手写「未找到」文案**、且**不含**那个坏路径（⛔ 不再回退后仍打用户给的坏路径）。
-    #   ⛔ 不重复 `f11`（`selftest.py:6389` 一带）已钉的**文案字面** —— 直接引用**手写**常量
-    #      `_REG_SRC_LINE_UNFOUND`（`:6219`）；⛔ 不改 `controls_source_line`（`xwl.py:2151`，三处复用）。
+    #   ⛔ 不重复 `f11`（见 `_ok("itemids / params / check ⑦ 打印同一句注册表来源…")` 那一支已钉的**文案字面**）
+    #      —— 直接引用**手写**常量 `_REG_SRC_LINE_UNFOUND`（⚠️ 这里**有意不写行号**：函数已拆、行号整体前移，
+    #      写死数字下一刻就又漂；按符号名／文案锚找才稳）；⛔ 不改 `controls_source_line`（`xwl.py:2151`，三处复用）。
     #   ⚠️ 坏 `--controls` 的**两种坏法都算**：`_registry_configs` 在「`json.load` 抛异常」**或**
     #      「能解析但一个控件 type 都没有（`{}` / `[]` / `{"foo":1}`）」时都返回 `None` ⇒ 两站点都会
     #      warn。夹具取最直白的一种（**非 JSON** 内容）。
@@ -2638,6 +2691,116 @@ def _check_new_guards(tmp, node, failures, write) -> None:
     else:
         print("[ok]  ⑰ `#80`：默认面 `params` 的 `m?xwl` 分组名 = **手写**"
               "「`url:'m?xwl=…'` 引用的 m?xwl（1 个；**不区分调用方**）」（⛔ 不加任何开关）")
+
+
+# ---- 序 2（`ITEM-1040`）：`rules_lint` —— **仓外**规则文件的「候选待办」机检 ----
+#   制度正本 ＝ 开发者规则 `rules/webbuilder-xwl-patch.md` 的 `11.4`（行首自标位 `todo:y` ＋ 登记 id 表）。
+#   ⚠️ 要校的标记在**仓外**（`rules/README.md` 首行逐字「不随任何 skill 包发布」），而本文件在
+#     `git ls-files` 内 ＝ **分发面** ⇒ 发布包／CI 里没有 `rules/` ⇒ 扫描根**只能**由环境变量给。
+#   ⭐ 三态**必须分开**（⛔ 缺根就静默跳过 ＝ 恒绿 —— 「要么假红／要么恒绿」正是本块落不了地的成因）：
+#     已设且目录存在 ⇒ 真校验｜**未设** ⇒ 未执行（`[note]` ＋ 汇总行单列「未执行 N 块」）｜
+#     已设但目录不存在 ⇒ `[FAIL]`（配置错误，⛔ 不许当成"跳过"）。
+RULES_DIR_ENV = "XWL_RULES_DIR"
+
+# `11.4①` 候选行的判定（逐字沿用制度里那条 grep 的语义：行首 ＋ 可选列表符 ＋ 可选人读标记 ＋ `todo:y`）
+_RULES_CANDIDATE_RE = re.compile(
+    r"^[ \t]*(?:[-*+>]|[0-9]+\.)?[ \t]*(?:\*\*(?:待办|TODO|待确认)\*\*[ \t]*)?todo:y\b")
+# `11.4②` 登记 id 表的**首列**（`| **<登记 id>** | … |`）；⚠️ 宽容到不带 `**` —— 表头 `| ID |` 也会命中（无害）
+_RULES_REG_ROW_RE = re.compile(r"^\|[ \t]*\*{0,2}([A-Za-z][A-Za-z0-9_-]*)\*{0,2}[ \t]*\|")
+_RULES_ID_RE = re.compile(r"\bid:([A-Za-z][A-Za-z0-9_-]*)")
+_RULES_DONE_RE = re.compile(r"\bdone_when:(.*)$")
+
+
+def _rules_dir_state():
+    """规则目录三态：`(root|None, 理由|None, 是否配置错误)`。
+
+    返回 `root` ⇒ 可校验；`(None, 理由, False)` ⇒ **未执行**（变量没设，分发面常态）；
+    `(None, 理由, True)` ⇒ **配置错误**（设了但目录不在 ⇒ 判红，⛔ 不许降级成"跳过"）。
+    """
+    _raw = (os.environ.get(RULES_DIR_ENV) or "").strip()
+    if not _raw:
+        return None, "未设置 %s（rules 不随 skill 分发）" % RULES_DIR_ENV, False
+    if not os.path.isdir(_raw):
+        return None, "%s 指向的目录不存在：%s" % (RULES_DIR_ENV, _raw), True
+    return _raw, None, False
+
+
+def _check_rules_lint(tmp, node, failures, write) -> None:
+    """`rules_lint`：仓外规则文件的「候选待办」机检（制度 ＝ 开发者规则 `11.4` 的 ①／②／③）。
+
+    判据三条，全部**逐条列文件:行**（⛔ fail-loud：不许汇总成"有 N 处"）：
+      ① 候选行必须同行带 `id:`；
+      ② 候选行的 `done_when:` 必须**非空**（⚠️ 制度正本只要求"非空"；更严的 `cmd:`／`state:` 起头
+         形态**不在本块射程** —— 现行正本两条候选都不是那个形态，硬加会当场假红）；
+      ③ `11.4③` 弱一致性：候选行引用的 id ⊆ **同一文件**「登记 id 表」首列的 id 集合。
+    ⚠️ **只扫一个目录、不递归**：`rules/` 是扁平结构；递归会把 `archive/` 一类历史件卷进来。
+    """
+    root, why, fatal = _rules_dir_state()
+    if fatal:
+        failures.append("本块配置错误：%s —— 本块**没有执行**（⛔ 不能算通过）" % why)
+        return
+    if root is None:
+        print("[note] 本块未执行：%s" % why)
+        return
+    try:
+        _names = sorted(_n for _n in os.listdir(root) if _n.endswith(".md"))
+    except OSError as exc:
+        failures.append("本块配置错误：读不了规则目录 %s（%s）—— 本块**没有执行**" % (root, exc))
+        return
+    if not _names:
+        # 空扫描面**不许算通过** —— 那与"校验通过"在输出上分不开（本仓「静默无效」判缺陷）
+        failures.append("本块配置错误：%s 下没有任何 `*.md`（⚠️ 目录指错了？）—— 空的扫描面不算通过"
+                        % root)
+        return
+    _bad: list[str] = []
+    _n_cand = 0
+    for _nm in _names:
+        _fp = os.path.join(root, _nm)
+        try:
+            _ls = io.open(_fp, encoding="utf-8", newline="").read().splitlines()
+        except (OSError, UnicodeDecodeError) as exc:   # UnicodeDecodeError 是 ValueError 子类 ⇒ 必须并列
+            _bad.append("%s 读不出 UTF-8 文本（%s）—— 本份**没校验**（⛔ 不算通过）" % (_nm, exc))
+            continue
+        _reg = {_m.group(1) for _l in _ls for _m in [_RULES_REG_ROW_RE.match(_l)] if _m}
+        for _i, _l in enumerate(_ls, 1):
+            if not _RULES_CANDIDATE_RE.match(_l):
+                continue
+            _n_cand += 1
+            _ids = _RULES_ID_RE.findall(_l)
+            if not _ids:
+                _bad.append("%s:%d 候选待办缺 `id:`（`11.4①` 要求同行带登记 id）" % (_nm, _i))
+                continue
+            _done = _RULES_DONE_RE.search(_l)
+            if _done is None or not _done.group(1).strip():
+                _bad.append("%s:%d 候选待办 `%s` 的 `done_when:` 缺失或为空"
+                            "（`11.4①` 要求非空完成判据）" % (_nm, _i, _ids[0]))
+            for _idv in _ids:
+                if _idv not in _reg:
+                    _bad.append("%s:%d 候选待办引用的 id `%s` 在**本文件的登记 id 表**里找不到"
+                                "（`11.4③`：候选 ⊆ 登记）" % (_nm, _i, _idv))
+    if _bad:
+        failures.extend(_bad)
+    else:
+        print("[ok]  rules_lint：%d 份规则文件、%d 条候选待办（`todo:y`）全部带非空 `done_when`"
+              " ＋ **本文件登记表内**的 id" % (len(_names), _n_cand))
+
+
+# 「块 → 未执行前置」：登记在这里的块，前置不满足时打 `[note] 本块未执行：…` 并跳过，
+# 汇总行据此**单列**「未执行 N 块」（⛔ 不许把"没跑"混进"通过"）。配置错误（判红）不进这一桶。
+_BLOCK_PRECONDITIONS = {"rules_lint": _rules_dir_state}
+
+
+def _blocks_unexecuted(blocks) -> list:
+    """返回 `[(块名, 理由)]`：本次**没执行**（前置不满足）的块。"""
+    _out = []
+    for _bn, _bf in blocks:
+        _pre = _BLOCK_PRECONDITIONS.get(_bn)
+        if _pre is None:
+            continue
+        _root, _why, _fatal = _pre()
+        if _root is None and not _fatal:
+            _out.append((_bn, _why))
+    return _out
 
 
 # ---- 跨守卫分工表（**原寄居 `_check_docs` 函数体**；#15「减负」时移出，函数体只留指向本常量的指针）----
@@ -4464,17 +4627,34 @@ def _docs_layers_and_distribution(_S) -> None:
     #     SKILL.md；到了上限就该问"这条是不是该下沉到 references/"。数字留了余量，
     #     正常的小幅增补不会触发。
     #     起因：压缩过一轮后，新增内容很容易又堆回 SKILL.md —— 到上限该下沉到 references/，不该抬数字（防回弹护栏）。
-    #     ⚠️ **软上限 600**（下条 `elif`；硬上限 700 仍归上一条 —— 两条**独立报出**，并成一条会丢信息）：
-    #       起因①：600 是**拍的**阈值 —— 落笔时 SKILL.md ＝ 582 行（缓冲 18）；越过 ＝「该外移了」的信号、非错误。
+    #     ⚠️ **两条上限独立报出**（⛔ 不合并 —— 并成一条会丢信息）：硬上限 **32 000 字符**、
+    #       软上限 **28 000 字符**（越过 ＝「该外移了」的信号）；两条都进 `doc_fail`。
+    #       ⭐ 换算依据（⛔ 别只写数，否则下批会以为是拍的）：**700 行 × 46.31 ≈ 32 418 ⇒ 取 32 000**；
+    #       **600 行 × 46.31 ≈ 27 786 ⇒ 取 28 000**；46.31 ＝ 27 091 字符 ÷ 585 行（同一份 `SKILL.md`
+    #       的两把量法；⚠️ 密度**随内容漂** ⇒ 只作换算依据，⛔ 不作判据）。
+    #     ⚠️ **单位**：`SKILL.md` 按**字符数**（行数在中英混排里量不出 token，且与 `references/` 的
+    #       字符口径不同单位 ⇒ 会造出"看着还有余量"的错觉）；`README.md` 仍按**行数** ——
+    #       ⛔ 本格**没换单位**：它没有实测密度可换算（46.31 是 `SKILL.md` 的，⛔ 不可挪用），
+    #       连带换等于又改了一条判据。
+    #     ⚠️ **12 000 字符是远期目标、⛔ 不进判据**：只由通过态的 `[note]` 报差距。
+    #       起因①：阈值须有缓冲 —— 越过上限是「该外移了」的**信号**，但 **severity 是真红**（走 `doc_fail`、`rc=1`），
+    #              ⛔ 别读成"可以不管"；硬／软两条**各自报出**、⛔ 不合并。
     #       起因②：改阈值**必须走版本位 ＋ 写明起因**（防"顺手抬上限"）。
     #       起因③：**它证明不了"本次新增没让它涨"**（**跨版本**属性、单树判不了）；且**不为它引 git 历史**
     #              （多一条 `git ls-files` 门控守卫 ⇒ **非 git 时红** ⇒ zip 假报警，与既有方向冲突）。
-    for _nm, _cap in (("SKILL.md", 700), ("README.md", 150)):
-        _n = len(docs.get(_nm, []))
-        if _n > _cap:
-            doc_fail.append("%s 已 %d 行，超过 %d 行上限（新增内容请考虑下沉到 references/）"
-                            % (_nm, _n, _cap))
-        elif _nm == "SKILL.md" and _n > 600:
+    _SK_HARD, _SK_SOFT, _SK_GOAL = 32000, 28000, 12000
+    try:
+        # ⚠️ 直接读文件取字符数（＝ `wc -m` 的口径）；不从 `docs` 的行数折算 —— 那正是要摆脱的旧尺子。
+        _sk_chars = len(io.open(os.path.join(root, "SKILL.md"), encoding="utf-8",
+                                newline="").read())
+    except (OSError, UnicodeDecodeError) as _sk_exc:   # UnicodeDecodeError 是 ValueError 子类 ⇒ 必须并列
+        _sk_chars = None
+        doc_fail.append("篇幅上限：读不出 SKILL.md（%s）—— 报错，不算通过" % _sk_exc)
+    if _sk_chars is not None:
+        if _sk_chars > _SK_HARD:
+            doc_fail.append("SKILL.md 已 %d 字符，超过硬上限 %d 字符"
+                            "（新增内容请考虑下沉到 references/）" % (_sk_chars, _SK_HARD))
+        elif _sk_chars > _SK_SOFT:
             try:
                 _rf = sorted(f for f in os.listdir(os.path.join(root, "references")) if f.endswith(".md"))
                 _rl = sum(len(open(os.path.join(root, "references", f), encoding="utf-8").read().splitlines()) for f in _rf)
@@ -4482,7 +4662,15 @@ def _docs_layers_and_distribution(_S) -> None:
                          % (len(_rf), _rl, sum("references/" in _l for _l in docs.get("SKILL.md", []))))
             except (OSError, UnicodeDecodeError):   # UnicodeDecodeError 是 ValueError 子类、非 OSError ⇒ 必须并列
                 _stat = "统计不出（references/ 不可读）"
-            doc_fail.append("SKILL.md 行数 %d 已超软上限 600（硬上限 700）⇒ **新增内容默认走 `references/`**（%s）。" % (_n, _stat))
+            doc_fail.append("SKILL.md %d 字符已超软上限 %d（硬上限 %d）⇒ **新增内容默认走 "
+                            "`references/`**（%s）。" % (_sk_chars, _SK_SOFT, _SK_HARD, _stat))
+        print("[note] SKILL.md %d 字符（硬上限 %d／软上限 %d；远期目标 %d，尚差 %d）"
+              % (_sk_chars, _SK_HARD, _SK_SOFT, _SK_GOAL, max(0, _sk_chars - _SK_GOAL)))
+    # `README.md` 仍按**行数**（未换单位的理由见上）
+    _rd_n = len(docs.get("README.md", []))
+    if _rd_n > 150:
+        doc_fail.append("README.md 已 %d 行，超过 150 行上限（新增内容请考虑下沉到 references/）"
+                        % _rd_n)
 
     #     同类护栏（篇幅族）第 3 小条：`CHANGELOG.md` **文首区**（首个 `## [` 之前）的非空行 ≤ 14。
     #       起因：文首区该只放**使用者向**内容（介绍段 ＋ 数字说明）；一旦把"只有维护者
@@ -5020,8 +5208,9 @@ def _docs_tail_scaffold(_S) -> None:
     #   起因（不这么做会漏什么）：这类"该拆了"的约定只写在注释里 ⇒ 没人量、也没人拦，
     #     实测 `_check_docs` 一路长到 1200+ 行；等它长回来了再拆，成本远高于现在就钉一条上限。
     #   量法：`ast` 的 `end_lineno - lineno + 1`（⛔ 不是数空行/注释的近似值）。
-    #   ⚠️ **`_check_new_guards` 有意排除**：它现在 1000+ 行，收口已排到条目 `ITEM-1077`（下一版），
-    #     本版不动它 —— ⛔ 别把这里当成"漏了一个"，那是**有意的**，加了就得先拆它。
+    #   ⚠️ **`_check_new_guards` 仍不在本表**：拆分前它 1000+ 行，已由 `ITEM-1077` 在本轮拆成
+    #     薄壳 ＋ 6 个判据族子函数；但"把拆完的它收进上限表"属**新增覆盖**（须带先红后绿证据）
+    #     ⇒ ⛔ 不在拆分那一序里顺手改判据，⛔ 也别把这里当成"漏了一个"。
     _FN_CAP = 400
     _CAP_FNS = ("_check_docs", "_docs_xfile_consistency", "_docs_numbers_and_tables",
                 "_docs_layers_and_distribution", "_docs_tail_scaffold", "_check_subcommands")
@@ -6613,6 +6802,9 @@ def _blocks() -> list[tuple[str, object]]:
         ("eol_and_guards", _check_eol_and_guards),
         ("diffguard", _check_diffguard),
         ("bc_contract", _check_bc_contract),
+        # 序 2（`ITEM-1040`）新增：排在**末位** —— 块序即输出序，插在中间会让既有块的展示行整体后移
+        # （拆分那一序的"拆分前后逐行 diff 为空"对照会因此不可比）。
+        ("rules_lint", _check_rules_lint),
     ]
 
 
@@ -6874,9 +7066,13 @@ def main(argv: list[str] | None = None) -> int:
         if args.result is None:
             # 人工单跑：**不许静默收窄** —— 明写"只跑了哪块／未跑哪些块"（对齐"收窄必显式打印"的既有口径）
             _others = [n for n, _f in _blk_named if n != args.only]
-            _shown = "，".join(_others[:12])
-            if len(_others) > 12:
-                _shown += "，另有 %d 块未列" % (len(_others) - 12)
+            # ⚠️ 名单上限**必须 ≥ 块总数**（现 14 块）：封顶 12 时第 13 个只显示「另有 1 块未列」，
+            #    被隐掉的恰是末位新增的 `rules_lint` ⇒ 「收窄必显式」在这条路径上等于失效。
+            #    ⚠️ 两个数（切片与下面的判断）必须**同一来源**，否则会既列全又谎报"另有未列"。
+            _NAME_CAP = 20
+            _shown = "，".join(_others[:_NAME_CAP])
+            if len(_others) > _NAME_CAP:
+                _shown += "，另有 %d 块未列" % (len(_others) - _NAME_CAP)
             print("[note] 只跑了 `%s`：1/%d 块；未跑 %d 块：%s"
                   % (args.only, len(_blk_named), len(_others), _shown))
         failures = _run_block(args.only, fn, args.node or None)
@@ -6912,7 +7108,17 @@ def main(argv: list[str] | None = None) -> int:
             print(f"[FAIL] {f}")
         print(f"=== selftest FAIL（{len(failures)} 项）")
         return 1
-    print("=== selftest ALL OK")
+    # ⭐ 「未执行」必须出现在**汇总行**（序 2 的硬约束）：缺根就静默跳过 ＝ 恒绿，
+    #   而「要么假红／要么恒绿」正是本块落不了地的成因 ⇒ ⛔ 不许把"没跑"算进"全部通过"。
+    #   ⚠️ 保留 `=== selftest ALL OK` 这个**词头**（模块头 :66 与多处验收引它当末行锚）；
+    #   未执行时在同一行补计数，读者一眼能看出"通过几块、几块没跑"。
+    _unrun = _blocks_unexecuted(blocks)
+    if _unrun:
+        print("=== selftest ALL OK（%d 块通过，%d 块未执行：%s）"
+              % (len(blocks) - len(_unrun), len(_unrun),
+                 "；".join("%s（%s）" % (n, w) for n, w in _unrun)))
+    else:
+        print("=== selftest ALL OK")
     return 0
 
 
