@@ -1,6 +1,6 @@
-# 事件 JS 里的四条引用通路（怎么写、怎么收）
+# 事件 JS 的四条引用通路 ＋ 变更集（怎么写、怎么收）
 
-本文是 [`SKILL.md`](../SKILL.md) 第五章 5.4 的展开 —— 四条引用通路的完整写法。
+本文是 [`SKILL.md`](../SKILL.md) 第五章 5.4 的展开 —— 四条通路的完整写法，另加**一节变更集**（`Wb.getModified`，见本文第 6 节）。
 **选哪条通路**看 SKILL.md 第五章的总表与 5.2–5.3；`m?xwl=` 引用的读法见 [`sql-fragments.md`](sql-fragments.md) §3.3；本文给每条的**完整写法、回传处理与坑**。
 
 | 通路 | 一行概要 | 代码写在 |
@@ -9,6 +9,8 @@
 | `Wb.open` | 打开子页面（列表页 / 弹窗） | `events.*` |
 | `Wb.upload` | 文件上传 / 导入 | `events.*` |
 | `Wb.requestAg` | 调后台 Spring 方法 | `events.*` |
+
+> ⚠️ 上面四条都是**引用通路**（都要请求服务端）。**取 grid 的变更集**不属于通路 ⇒ 单独一节，见 §6 的 `Wb.getModified`。
 
 > 事件 JS 一律用**单引号** —— xwl 的字符串里 `"` 必须写成 `\"`（见 [`faq.md`](faq.md) §一）。
 
@@ -21,6 +23,7 @@
 - [3. `Wb.upload`](#3-wbupload--文件上传--导入入口)
 - [4. `Wb.requestAg`](#4-wbrequestag--调后台-spring-方法)
 - [5. 窗口：`createInstance` / `closeAction` 与 `app._X`](#5-窗口createinstance--closeaction-与-app_x)
+- [6. `Wb.getModified` —— 取 grid 的变更集（用法约定，非平台契约）](#6-wbgetmodified--取-grid-的变更集用法约定非平台契约)
 
 ## 1. `Wb.request` —— 请求一个服务端片段
 
@@ -218,3 +221,47 @@ Wb.requestAg({
 **出处**：框架侧为 `ExtControl`（服务端生成那对孪生键）与 ExtJS 注册器（按注册键注销）；
 平台自带示例 `examples/basic/import-module.xwl` 的注释把两种用法都演示了。
 实测分布见 [`measured-data-designer.md`](measured-data-designer.md) §十二。
+
+## 6. `Wb.getModified` —— 取 grid 的变更集（用法约定，非平台契约）
+
+> 取证：2026-10-24 · 样本工程（内部语料，事件 JS 全量）· 依据 `Wb.getModified` 的调用形态与返回值取用方式 · 口径＝实现细节、非对外契约
+
+**它取什么**：一个 grid 里**改动过、还没落库**的行 —— 哪些是新增、哪些改过、哪些删了。
+"只提交变化"与"没改就别发请求"这两类写法都靠它；取到之后再交给 §4 的 `Wb.requestAg` 去落库。
+
+### 6.1 三类键（有实现可证，按约定用）
+
+返回对象按**变更类型**分桶，键名固定三个：
+
+| 键 | 含义 | 怎么用 |
+|---|---|---|
+| `create` | 新增的行 | 逐行取业务键，拼插入参数 |
+| `update` | 改过的行 | 逐行取主键 ＋ 改过的列 |
+| `destroy` | 删掉的行 | 逐行取主键 |
+
+```js
+// 拦截：一条都没改就不发请求
+if (Wb.isEmpty(Wb.getModified(app.<grid>).update)) {
+  Wb.warn('没有改动，无需保存');
+  return;
+}
+
+// 分桶：三个桶各拼一份参数
+Wb.each(Wb.getModified(app.<grid>).create, function (row) { /* 新增 */ });
+Wb.each(Wb.getModified(app.<grid>).update, function (row) { /* 更新 */ });
+Wb.each(Wb.getModified(app.<grid>).destroy, function (row) { /* 删除 */ });
+```
+
+- **入参传 grid 句柄**（`app.<grid>`）；返回的是**变更集对象**，⛔ 不是行数组 —— 要行数组就取它的桶。
+- ⚠️ 桶**可能是空数组**（该类变更没发生）⇒ ⛔ 别假定一定有元素。
+- 近亲：store 侧的 `store.getModifiedRecords()`（原始行数组形态，判空常用）。
+
+### 6.2 提交前的标记（半证：取决于后端签名）
+
+- `update`／`destroy` 提交时，"**哪些列真要写回**"可以由一个标记表达；标记在**第二参**给出。
+- ⚠️ **标记怎么解释、是否生效，取决于后端签名**（存 SQL 与 bean 方法各一套）⇒ 本节只说明这层依赖存在，**不承诺具体写法**。
+- ⚠️ 本机语料**未覆盖**该写法（全部调用点为单参）⇒ 这一层属**半证**：知道有这件事，用之前到后端那一侧确认。
+
+### 6.3 它不是引用通路
+
+`Wb.getModified` **不请求服务端**，只读本地变更状态 ⇒ 它负责"取"；提交仍走 §1 的 `Wb.request` 或 §4 的 `Wb.requestAg`。

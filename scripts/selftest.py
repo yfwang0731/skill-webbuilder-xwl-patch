@@ -3355,6 +3355,19 @@ _pt_tail = re.compile(r"[）)的\s]{0,2}「([^」]{2,60})」")
 
 
 _fence_ph = re.compile(r"[<>]|…|%[sd]|\.\.\.")
+_VOLATILE_RE = re.compile(r"0x[0-9a-fA-F]{2}|position\s*\d+|第\s*\d+\s*行|\bline\s*\d+")
+"""`17j-14` 的**可变段**占位。
+
+实测：参与判定的围栏行里，`references/faq.md` 那条 `[FAIL] 不是 UTF-8 文本…` 一旦从
+「前 16 字前缀」收紧到「整句」就红，成因有两层：① 该行后半截是**示意拼接**（工具实际分两行打印）；
+② 真输出里的 `0xff` / `position 0` 这类**样本相关数字**换样本必变。
+⇒ 本常量抹掉第 ② 类；第 ① 类由文档侧改正（⛔ 守卫不能替文档编）。
+"""
+
+
+def _vn(_s):
+    """抹掉可变段。⚠️ 比对**两侧都要过**本函数，⛔ 只抹一侧（那会把"文案被改坏"也一起豁免掉）。"""
+    return _VOLATILE_RE.sub("«V»", _s)
 
 
 _trig = ["加删控件", "挂改事件", "改网格列", "SQL 片段", "传参链路", "重名", "从零新建页面",
@@ -3558,6 +3571,39 @@ def _doc_guard_xfile_pt(docs, doc_fail, real_out):
         if any(_idxs[_z] >= _idxs[_z + 1] for _z in range(len(_idxs) - 1)):
             doc_fail.append("17j-13 %s 目录条目顺序与正文小节顺序不一致" % _nm)
 
+        # 目录完整性（**与 17j-13 同族、⛔ 不新开编号**）：带 `## 目录` 的文件里，每个 `## N.`
+        #   必须有**恰好一条**目录项。
+        #   起因（不这么做会漏什么）：`17j-13` 只 `for _t in _toc` 遍历**已存在**的条目 ⇒ 条目被**删掉**
+        #     时没有可遍历对象、无从判红（实测：删掉一条目录项后 `--only docs` 与**全量 14 块**均
+        #     `rc=0`、`[FAIL] 0`）⇒ 本臂补的正是"条目缺失"这一面。
+        #   ⛔ **顺序仍归 17j-13**：此处只判"有没有／重复几条"，不复判单调（重复判会让一处缺陷报两行）。
+        #   ⚠️ **本臂无独立守卫编号** ⇒「把这段整块删掉」**不会被块名基线抓到** —— 属**已知盲区**。
+        #     不开 `17j-15` 的理由：块名基线要求"基线外新块名须在 `CHANGELOG.md` 被独立提及"，
+        #     而未发布的批不许写版本段 ⇒ 开号会当场撞红。这是**制度互斥、不是漏做**。
+        #   ⚠️ 覆盖面**只到阿拉伯编号节**（`## N.`）：本仓另有 6 份带目录文件用的是中文序号／无编号标题
+        #     ⇒ 它们的目录条目缺失**本臂抓不到**（已知盲区，⛔ 别据此说"目录完整性已全覆盖"）。
+        #   ⭐ **配对方式：按锚点解析结果（`_idxs`）判，⛔ 不按 TOC 标签的前导整数判** ——
+        #     标签**允许缩写**（`- [\`Wb.request\`](#1-wbrequest)` 就是合法写法，去掉后半句也不算错），
+        #     按整数配对会把这种合法写法判成"第 1 节没有目录条目"（假红）；而且 `3.1` 这类**子条目**
+        #     的前导整数是 3，会跟 `## 3.` 撞车（假重复）。⇒ 只认"这个正文小节有没有被某条目录项命中"。
+        _tc_num_bi = []
+        _tc_k = -1
+        for _tcx in _ls[_j:]:
+            _tch = re.match(r"^#{1,6}\s*(.+?)\s*$", _tcx)
+            if not _tch:
+                continue
+            _tc_k += 1                      # 与 `_body` 同一构造顺序 ⇒ 下标一一对应
+            if re.match(r"^##\s*\d+\s*[.、]", _tcx):
+                _tc_num_bi.append((_tc_k, _tch.group(1)))
+        for _tcbi, _tctitle in _tc_num_bi:
+            _tcc = _idxs.count(_tcbi)
+            if _tcc == 0:
+                doc_fail.append("17j-13 %s 小节「%s」**没有目录条目**（每个 `## N.` 须恰好一条）"
+                                % (_nm, _tctitle[:28]))
+            elif _tcc > 1:
+                doc_fail.append("17j-13 %s 小节「%s」的目录条目**重复 %d 条**"
+                                % (_nm, _tctitle[:28], _tcc))
+
     # 17j-14 把 17j-6 扩到**围栏块**：围栏里以 `[note]/[warn]/[FAIL]/[ok]` 开头的**示例输出**，
     #   其文案前缀也必须在工具**真跑出来的输出**里找得到（oracle 同 17j-6：来自 `_real_out_corpus()`）。
     #   扫描面 = `docs` 的围栏块（**含** 11 份正文 md，**不含 `CHANGELOG.md`** —— 它是历史记录，
@@ -3574,6 +3620,7 @@ def _doc_guard_xfile_pt(docs, doc_fail, real_out):
     #     2 条被检查且都在真实输出里 ⇒ 全绿（这档 = 加白名单）。
     #   ⚠️ 边界：本臂用**前缀匹配**（`_nf[:16]`），**验不了运行期拼接**出来的文案 —— 拼接结果在真跑
     #     语料里没有字面前缀，所以这类**不是漏扫、是扫了会错**（故排除）。
+    _real_vn = _vn(real_out)      # 抹一次就够：⛔ 别放进逐行循环里重复抹（纯浪费，且容易改错一侧）
     for _nm, _ls in docs.items():
         if _nm == "CHANGELOG.md":       # 历史记录：按写入时的事实记，不按当前 xwl.py 校验
             continue
@@ -3594,10 +3641,59 @@ def _doc_guard_xfile_pt(docs, doc_fail, real_out):
             _nf = re.sub(r"\s+", "", _body2)
             if len(_nf) < 8:
                 continue
-            if _nf[:16] not in real_out:
+            _vn_body = _vn(_nf)
+            # ⚠️ **抹完只剩可变段**的行验不了：`[note] position9876543` 抹后是 `[note]«V»`，
+            #   而「[note]«V»」这种串在语料里必然存在 ⇒ 恒真。这种行**判红**（"该写实词"），
+            #   ⛔ 不许用"整句都是 0x??/position N"来占位 —— 那等于把一行免检。
+            if len(_vn_body.replace("«V»", "")) < 8:
+                doc_fail.append("17j-14 %s:%d 围栏输出行抹掉可变段后只剩 %d 个字 —— "
+                                "这一行验不了（占位把判据掏空了），请写实词"
+                                % (_nm, _i, len(_vn_body.replace("«V»", ""))))
+            elif _vn_body not in _real_vn:
                 doc_fail.append("17j-14 %s:%d 围栏块输出文案 `%s…` 在工具的**真实输出**里找不到"
                                 "（若确为工具会打印的新文案，请在 `_real_out_corpus()` 里补一次真实调用）"
                                 % (_nm, _i, (_tag + _body2)[:34]))
+
+    # 行号锚点四形：现值面一律 0 命中（本函数第 4 臂，与 17j-12／17j-13／17j-14 同族）。
+    #   起因（不这么做会漏什么）：行号随平台版本漂移、且**本机不可复核**（同一工程不同版本
+    #     行号必不相同）⇒ 本仓早把它列为「已证伪的维护手段」，却一直只是**说法** —— 没有任何
+    #     一条判据管它，于是现值面残留 4 处行号 ＋ 2 处「行号取自样本工程版本」的免责句。
+    #   ⭐ 面切（最重要的一条）：**只扫现值面**，⛔ 不扫 `plan/`／`rules/` —— 那两面是**历史记录**，
+    #     改它等于改写那一刻的结论。判据是「同一个数字，位置决定它是现值还是历史」。
+    #   ⚠️ `doc_names` 的扫描面**含 `CHANGELOG.md`**（历史面，实测四形 **6 行 / 8 处**）⇒ 必须**显式排除**，
+    #     否则守卫上线即红。⛔ 别把这条排除删掉"求干净"。
+    #   ⚠️ 已知盲区：`examples/README.md` 有 1 处四形命中，而它**不在** `doc_names` 里 ⇒ 本臂不扫
+    #     （示例说明允许写形态示例）；⛔ 别据此说"全仓 0 命中"。
+    #   ⚠️ **本臂无独立守卫编号**（并入 `17j` 家族、不开 `17j-15`）⇒「把这段整块删掉」**不会被
+    #     块名基线抓到**（块名基线只认 `# 17<字母>` 块头，本臂挂在 `_doc_guard_xfile_pt` 体内）。
+    #     不开号的理由是制度互斥：基线外新块名须在 `CHANGELOG.md` 被独立提及，而未发布的批不许写
+    #     版本段 ⇒ 开号当场撞红。⇒ 这是**已知盲区、不是漏做**；翻掉它要等发布批连带开号。
+    #   第 3 形取**5 类扩展名**（`js|py|md|json|xwl`）：只禁恰好撞见的那一种 ＝ 下一个人写 `.py:`
+    #     就静默通过。⚠️ `.sql`／`.ts`／无扩展名**不在面内**（扩到全扩展名会与 `a.com:8080` 的
+    #     host:port 撞车）⇒ ⛔ 别读成"任何 文件:行号 都禁"。
+    #   ⚠️ 第 3 形的**唯一已知误伤**：URL 带端口（`https://a.com/x.js:8080`，匹配文本以 `//` 开头）
+    #     ⇒ 含 `//` 的匹配直接放过（真正的行号引用不会含 `//`）。
+    _ln4 = (
+        ("裸行号 `:N`", re.compile(r"`:[0-9]{1,5}`")),
+        ("`L` 编号", re.compile(r"`L[0-9]{1,4}`")),
+        ("文件:行号", re.compile(r"[A-Za-z0-9_./-]+\.(?:js|py|md|json|xwl):[0-9]+")),
+        ("中文「第 N 行」", re.compile(r"第\s*[0-9]+\s*行")),
+    )
+    for _nm4, _ls4 in docs.items():
+        if _nm4 == "CHANGELOG.md":     # 历史记录：按写入时的事实记，不按现值面判
+            continue
+        for _i4, _l4 in enumerate(_ls4, 1):
+            for _lab4, _rx4 in _ln4:
+                _m4 = _rx4.search(_l4)
+                if _m4:
+                    # ⚠️ 第 3 形的**唯一已知误伤**：URL 带端口（`https://a.com/x.js:8080`）会被
+                    #   `文件:行号` 形命中（匹配文本以 `//` 开头）。URL 与"行号锚点"是两回事 ⇒
+                    #   含 `//` 的匹配直接放过（真正的行号引用不会含 `//`）。
+                    if "//" in _m4.group(0):
+                        continue
+                    doc_fail.append("行号锚点（%s）%s:%d 出现 `%s` —— 现值面不写行号"
+                                    "（行号随平台版本漂移、本机不可复核）；要定位就写**符号名**"
+                                    % (_lab4, _nm4, _i4, _m4.group(0)))
 
 
 def _q_scan(_lines):
@@ -5208,12 +5304,12 @@ def _docs_tail_scaffold(_S) -> None:
     #   起因（不这么做会漏什么）：这类"该拆了"的约定只写在注释里 ⇒ 没人量、也没人拦，
     #     实测 `_check_docs` 一路长到 1200+ 行；等它长回来了再拆，成本远高于现在就钉一条上限。
     #   量法：`ast` 的 `end_lineno - lineno + 1`（⛔ 不是数空行/注释的近似值）。
-    #   ⚠️ **`_check_new_guards` 仍不在本表**：拆分前它 1000+ 行，已由 `ITEM-1077` 在本轮拆成
-    #     薄壳 ＋ 6 个判据族子函数；但"把拆完的它收进上限表"属**新增覆盖**（须带先红后绿证据）
-    #     ⇒ ⛔ 不在拆分那一序里顺手改判据，⛔ 也别把这里当成"漏了一个"。
+    #   ⚠️ **`_check_new_guards` 薄壳（13 行）不入本表**；但它那 6 个判据族子函数**现已入表** ——
+    #     拆分只治"单函数过长"，治不了"子函数各长一截、无人拦"：`_ng_check_controls` 381 行、
+    #     `_ng_params_defaults` 337 行，都在 400 之下却没人管 ⇒ 纳管当场仍是**绿**，价值是防反弹。
     _FN_CAP = 400
-    _CAP_FNS = ("_check_docs", "_docs_xfile_consistency", "_docs_numbers_and_tables",
-                "_docs_layers_and_distribution", "_docs_tail_scaffold", "_check_subcommands")
+    _CAP_FNS = ("_check_docs", "_docs_xfile_consistency", "_docs_numbers_and_tables", "_docs_layers_and_distribution", "_docs_tail_scaffold", "_check_subcommands",
+                "_ng_cli_readonly", "_ng_check_controls", "_ng_contract_and_unit", "_ng_write_overwrite", "_ng_params_defaults", "_ng_platform")
     import ast as _ast          # 本块专用：量函数体行数（模块头没有 import ast，就近引入）
     try:
         _cap_tree = _ast.parse(io.open(os.path.join(HERE, "selftest.py"), encoding="utf-8").read())
@@ -5233,8 +5329,8 @@ def _docs_tail_scaffold(_S) -> None:
     except (OSError, SyntaxError) as _cap_exc:  # noqa: BLE001
         doc_fail.append("函数行数上限：读不了或解析不了 selftest.py（%s）—— 报错，不算通过" % _cap_exc)
 
-    if doc_fail:
-        failures.extend(doc_fail[:12])
+    if doc_fail:                # ⚠️ 截断必须显式（不说"还有 N 条"⇒ 读者以为"就这些"）。⛔ 别再加行。
+        failures.extend(doc_fail[:12] + (["文档守卫：另有 %d 条失败**未展开**（上面只列前 12 条）" % (len(doc_fail) - 12)] if len(doc_fail) > 12 else []))
     else:
         # 非 git 时把"没跑的臂"**显式标在汇总大绿行上**（由上方两处分支收集的 `_nogit_arms`）。
         #   ⚠️ 该句现在**只在 `--allow-nogit` 降级路径下**才可能非空 —— 默认非 git 已判红、走不进本分支。
@@ -5253,7 +5349,7 @@ def _docs_tail_scaffold(_S) -> None:
               "**规模数字出自权威层** / **`--help` 行数上限（顶层 36 / 子命令实测+5）** / "
               "**支持矩阵 OS 行（SKILL 适用范围表 + metadata.json limitations）** / "
               "**跨文件节号指针可解析（17j-12）** / **目录顺序与实际小节一致（17j-13）** / "
-              "**围栏块输出文案符实（17j-14）**"
+              "**围栏块输出文案符实（17j-14）** / **行号锚点四形（现值面 0 命中）** / **目录条目完整性（每个 `## N.` 恰好一条）**"
               % (_blk_total, sum(_DOC_GUARD_BLOCK_BASE.values()))
               + _nogit_suffix)
 
@@ -5765,6 +5861,39 @@ def _check_diffguard(tmp, node, failures, write) -> None:
     os.makedirs(repo, exist_ok=True)
     BS = chr(92)
 
+    # ⑩ **超时降级：有界返回、不许挂死**（四态里唯一没有常驻用例的那一态）。
+    #   ⚠️ **必须放在本块最前面**：下面建 git 夹具时有两处 `return`（建库超时 / 建库失败），
+    #     放在函数末尾的话，那两条路径会让本臂**根本不执行**，而块内其余断言仍可能全绿 ⇒ 看着"过了"。
+    #     本臂只依赖 `_cap_run` 与 `_git_show_batch`、**不需要一个可用的仓库** ⇒ 前置无害。
+    #   起因（不这么做会漏什么）：`_cap_run` 弃用 `capture_output` 的全部理由就是"管道下等 EOF
+    #     永不返回" —— 但那条结论只有一次性脚本验过；用例一旦缺失，把实现改回 `capture_output`
+    #     也能全绿（"杀了 ≠ 守住了"）。
+    #   ⚠️ 阈值取**毫秒级**（0.001s）：真跑满 60s 才验到一次超时的用例没人会留着。
+    dg: list[str] = []
+    import time as _time       # 本块专用：量"是否按时返回"（模块头无 time，就近引入）
+    _t0 = _time.monotonic()
+    _to = xwl._cap_run([sys.executable, "-c", "import time; time.sleep(5)"], timeout=0.001)
+    _el = _time.monotonic() - _t0
+    if not _to.timed_out:
+        dg.append("超时降级：1ms 阈值下 `_cap_run` 没标 `timed_out`（退化成无界等待 ⇒ 会挂死）")
+    if "[TIMEOUT]" not in (_to.stderr or ""):
+        dg.append("超时降级：`_cap_run` 超时后没在 stderr 写 [TIMEOUT]（静默降级 —— "
+                  "用户分不清「超时」与「跑完了但失败」）")
+    if _el > 2:
+        dg.append("超时降级：1ms 阈值却耗时 %.1fs —— 超时没生效（子进程被真跑满）" % _el)
+    #    diffguard 自己那条路径：只钉「**不能静默**」，⛔ 不钉「必须是超时」。
+    #    ⚠️ 为什么不能钉分支：1ms 阈值下走哪一支**取决于机器** —— Windows 上 git 起进程 > 1ms ⇒ 必超时；
+    #      Linux 上 `cat-file` 在非仓库里**秒退**（rc≠0、stdout 空）⇒ 拿到的是「输出不可解析」。
+    #      钉"必须超时"＝**断言一个竞态**：档 2 在 ubuntu 上 5 个 job 全红就是它（本机 Windows 全绿）。
+    #      ⇒ 只要 `why` 落在闭集里且**不是 None**，就说明"没比成"被**显式说出来了**，这正是本臂要保的。
+    #      "拆掉 timeout 会不会漏"由上面 `_cap_run` 那两条钉住（同一机制、且完全确定性）。
+    _bres, _bwhy, _bdone = xwl._git_show_batch("HEAD", ["dg.xwl"], repo, timeout=0.001)
+    if _bwhy is None:
+        dg.append("超时降级：`_git_show_batch` 在 1ms 阈值下没给 `why`（超时被当成「正常取到」⇒ "
+                  "diffguard 会把「没比成」读成「没改动」）")
+    elif not ("超时" in _bwhy or "不可解析" in _bwhy or "调不到 git" in _bwhy):
+        dg.append("超时降级：`_git_show_batch` 的降级原因不在闭集里（why=%r）" % _bwhy)
+
     def _git(*a):
         return _cap_run(["git", *a], cwd=repo, timeout=120)
 
@@ -5807,13 +5936,19 @@ def _check_diffguard(tmp, node, failures, write) -> None:
         failures.append("diffguard 夹具：`git` 调用超时（已终止，timeout=120s）—— "
                         "≠「无法建立临时 git 仓库」；超时**不得静默跳过**"
                         "（diffguard 断言未执行 ⇒ 判红）")
+        if dg:      # ⑩ 不依赖仓库：已经拿到的结论必须带走，⛔ 别跟着一起丢
+            failures.extend(dg)
         return
     if _g_commit.returncode != 0:
         print("[note] 无法建立临时 git 仓库，跳过 diffguard 断言")
+        # ⚠️ 这条 `return` 是"整块跳过"的**出口**：⑩ 超时臂不依赖仓库，它的结论必须在这里带走，
+        #   否则"建库失败 ＋ 超时判据真的坏了"会表现成一句无害的 [note]（静默降级）。
+        if dg:
+            failures.extend(dg)
         return
     BASE = SRC                                  # dg.xwl 的当前基线（= 最近一次提交的内容）
 
-    dg: list[str] = []
+    # `dg` 已在函数开头初始化（⑩ 超时臂先跑）—— ⛔ 别在这里再 `dg = []`，那会把 ⑩ 的结论清掉。
 
     def _flat(s):
         return s.replace(BS + "\r\n", "")
@@ -6000,12 +6135,14 @@ def _check_diffguard(tmp, node, failures, write) -> None:
         dg.append("判为内容移动时没给 [note] 说明 —— 用户无从知道它为什么不计入告警")
     _mk("dg.xwl", BASE)
 
+    # （⑩ 超时臂已前置到本块最前面 —— 放在这里会被"建库超时／建库失败"两处 `return` 挡住。）
     if dg:
         failures.extend(dg)
     else:
         print("[ok]  压平必报 / 合法删减与单行变长不误报 / patch 改动不误报 / "
               "新文件与非仓库干净跳过 / --strict 与 --rev 的退出码正确 / "
-              "短名与长名两种 cwd 写法都能比对 / **计数未变时判为内容移动而不报压平**")
+              "短名与长名两种 cwd 写法都能比对 / **计数未变时判为内容移动而不报压平** / "
+              "**1ms 阈值下超时有界返回且原因显式**")
 
 
 def _check_patch_contract(tmp, node, failures, write) -> None:
@@ -6808,6 +6945,61 @@ def _blocks() -> list[tuple[str, object]]:
     ]
 
 
+# 自检块名基线：`_blocks()` 里那一组名字（即 `--list-blocks` 的输出）的**机器基线**。
+#   起因（不这么做会漏什么）：`_blocks()` 只是"定义序"的清单 —— 删掉一个块 ⇒ 该块**连同它的
+#     全部判据一起消失**，而剩下的块照旧全绿、汇总行照样 `ALL OK` ⇒ **整块删除没有任何守卫会响**
+#     （与文档守卫那一族同病；那族已由 `_DOC_GUARD_BLOCK_BASELINE` 治过，本清单治的是**自检块**这一层）。
+#   判据：① **少一块** ⇒ 红并**点名缺哪个**（丢块必须响；确系有意退役时改本基线并在 `CHANGELOG` 写明）；
+#     ② **多一块** ⇒ 基线外的名字必须已在 `CHANGELOG.md` 被**独立提及**，否则红（新增＝显式；口径同
+#     文档守卫那一族 —— 已声明的新块**放行**，否则谁都加不了块）；
+#     ③ 只换块内实现、块名不动 ⇒ 绿（⛔ 别把正常重构判红）。
+#   ⛔ **块序也是基线的一部分**：块序 ＝ 输出序，重排会让"拆分前后逐行 diff 为空"的对照失效。
+#   📌 有意增删块时：先改 `_blocks()`，再按 `--list-blocks` 的输出**重抄**本清单（⛔ 别手抄）。
+_BLOCKS_BASELINE = (
+    "basics", "params_paths", "itemids", "patch_contract", "subcommands", "new_guards",
+    "docs", "platform", "write_failures", "edit_eol", "eol_and_guards", "diffguard",
+    "bc_contract", "rules_lint",
+)
+
+
+def _blocks_baseline_problem():
+    """把 `_blocks()` 的块名集合/顺序与基线比对；通过 ⇒ `None`，否则返回一句可打印的原因。"""
+    _cur = [n for n, _f in _blocks()]
+    _base = list(_BLOCKS_BASELINE)
+    _miss = [n for n in _base if n not in _cur]
+    if _miss:
+        return ("自检块少于基线：缺 %s —— 有自检块被整块删掉 / 从 `_blocks()` 摘除"
+                "（丢块必须响）。确系**有意退役**时，按 `--list-blocks` 现取重抄 `_BLOCKS_BASELINE`，"
+                "并在 `CHANGELOG.md` 写明退役项与被撤下的判据。" % "，".join(_miss))
+    _extra = [n for n in _cur if n not in _base]
+    if _extra:
+        try:
+            with open(os.path.join(os.path.dirname(HERE), "CHANGELOG.md"),
+                      encoding="utf-8", newline="") as _cf:
+                _cl = _cf.read()
+        except OSError as _exc:
+            return ("自检块多了基线外的 %s，但读不出 `CHANGELOG.md`（%s）—— 判红"
+                    % ("，".join(_extra), _exc))
+        # ⚠️ 声明必须写成**反引号包裹**（`` `块名` ``）：词边界匹配**太松** —— 本文件 231 KB，
+        #   一个叫 `patch`／`platform`／`schema` 的新块名会在正文里随便撞到，等于"零门槛声明"。
+        _und = [n for n in _extra if ("`%s`" % n) not in _cl]
+        if _und:
+            return ("新增了**未在 `CHANGELOG.md` 声明**的自检块：%s —— 新增＝显式"
+                    "（写一行含 `` `该块名` ``（反引号包裹）的话即可；词边界不算，"
+                    "否则常见单词会白送声明）。" % "，".join(_und))
+        # ⚠️ 已声明的新块**放行**，但**基线名之间的相对顺序仍要判** —— 否则"加一个新块 ＋ 顺手重排
+        #   既有块"会从这条分支静默溜过去（块序 ＝ 输出序，重排同样会让逐行 diff 对照失效）。
+        _proj = [n for n in _cur if n in _base]
+        if _proj != _base:
+            return ("自检块**顺序**与基线不一致（块序 ＝ 输出序，重排会让逐行 diff 对照失效）："
+                    "按基线名投影后为 %s" % "，".join(_proj))
+        return None
+    if _cur != _base:
+        return ("自检块**顺序**与基线不一致（块序 ＝ 输出序，重排会让逐行 diff 对照失效）：现序 %s"
+                % "，".join(_cur))
+    return None
+
+
 # `--fast` 跳过的两块：最贵、且与「编辑动作」无直接关系（本地快回路让位给速度）。
 FAST_SKIP = ("diffguard", "eol_and_guards")
 
@@ -7052,6 +7244,12 @@ def main(argv: list[str] | None = None) -> int:
             "[note] 以上 %d 个是**自检块**（`_blocks()` 定义序，供 `--only <块名>`）——"
             "区别于 `_check_docs` 内部的 `17b`–`17v` **守卫编号**（那些不是块名）。\n"
             % len(_blk_named))
+        # ⚠️ 本清单同时被当作"重抄基线"的来源（见 `_BLOCKS_BASELINE` 的注释）⇒ 若当前状态与基线
+        #   已不一致，必须**在这里也说一句**，否则维护者会照着这份"已漂移的清单"把基线抄歪
+        #   （顺手把一次误删固化成新基线）。
+        _lb_prob = _blocks_baseline_problem()
+        if _lb_prob:
+            sys.stderr.write("[warn] 本清单与 `_BLOCKS_BASELINE` **不一致**：%s\n" % _lb_prob)
         return 0
 
     # ---- 单跑模式（`--only <块名>`）：人工最小子集回归；`--jobs>1` 派生的子进程也走此入口 ----
@@ -7077,6 +7275,12 @@ def main(argv: list[str] | None = None) -> int:
                   % (args.only, len(_blk_named), len(_others), _shown))
         failures = _run_block(args.only, fn, args.node or None)
         if args.result is None:
+            # 人工单跑也过一遍块名基线：**删块正是"没跑到"的那类失败**，只在全量档判就抓不到它。
+            # ⚠️ 只在 `--result is None`（人工单跑）时并入：并行派发的 worker 也走这条分支，
+            #    若不加这个门 ⇒ 同一句话会被每个 worker 各报一遍。
+            _blk_prob = _blocks_baseline_problem()
+            if _blk_prob:
+                failures = [_blk_prob] + list(failures)
             # 人工单跑、未给 `--result` ⇒ 只跑并打印、不落 JSON；rc 据本次结果
             print("[note] 未给 `--result` ⇒ 只跑并打印、不落 JSON；要落 JSON 才加 `--result <路径>`")
             if failures:
@@ -7101,6 +7305,11 @@ def main(argv: list[str] | None = None) -> int:
 
     jobs = args.jobs if args.jobs is not None else min(6, os.cpu_count() or 4)
     failures = _run_serial(blocks, node) if jobs <= 1 else _run_parallel(blocks, node, jobs)
+    # 块名基线：**与 `--only` 选哪块无关**地生效（删块正是"没跑到"的那种失败，
+    # 只挂进某个块里就永远抓不到它自己）⇒ 在汇总前统一并入 failures。
+    _blk_prob = _blocks_baseline_problem()
+    if _blk_prob:
+        failures = [_blk_prob] + list(failures)
 
     print()
     if failures:

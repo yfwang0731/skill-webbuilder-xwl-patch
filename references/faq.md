@@ -86,7 +86,8 @@ A：文件被存成了别的编码（中文 Windows 上最常见的是 **GBK / A
 即"另存为"时选错了编码）。报错形如：
 
 ```text
-[FAIL] 不是 UTF-8 文本（xwl 必须是无 BOM 的 UTF-8）：'utf-8' codec can't decode byte 0xb3 in position 236
+[FAIL] 不是 UTF-8 文本（xwl 必须是无 BOM 的 UTF-8）。**工具不猜编码** —— 猜错会写成乱码，而乱码文件本身是合法 UTF-8、会一路放行；请另存为 UTF-8 或用 `iconv` 转换后覆盖
+       （原始错误：'utf-8' codec can't decode byte 0xb2 in position 13: invalid start byte）
 ```
 
 **修法**：用编辑器**另存为 UTF-8（无 BOM）**；或在 Git Bash / WSL 里转一次再覆盖：

@@ -107,14 +107,13 @@ unregister: function (item) {
 },
 ```
 
-> 行号按某个版本的 `ext-all-debug.js`（实测为 `:21689`）——
 > **换版本请按符号名 `ComponentManager.register` 去搜**，别按行号找。
 
 为什么会"取不到值"的机制见本文 §7.5（上面源码）；规则本身（谁优先、`normalName` 为什么优先）见 `SKILL.md` §7.1。
 
 `unregister` 的 `delete` 是"重复会取不到值"的**确切机制**：任一重复项被销毁，
 整个名字就从页面作用域消失，哪怕另一个同名控件还活着。
-（另见 `ext-all-debug.js:453` 起：`appScope` 在 `Ext.clone` / `Ext.merge` 里被**特意保留引用、不深拷贝**。）
+（另见 `ext-all-debug.js` 里 `Ext.clone` / `Ext.merge` 那段：`appScope` 被**特意保留引用、不深拷贝**。）
 
 ### 7.6 命名惯例的实测证据（供 `itemids` 的建议值参考）
 

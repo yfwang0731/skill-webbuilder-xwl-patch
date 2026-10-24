@@ -224,15 +224,15 @@
 | `report` | supcan | 原生 |  | — | 1 | 硕正报表：报表控件 |
 
 ## 四、层级结构：设计器不管，但有三种"约定"
-> 下文的 `wb-debug.js` / `ide-debug.js` 是**项目自带的** WebBuilder 前端脚本；所注**行号取自样本工程版本**，
-> 换版本要按**符号名**（`append` / `setNewNode`）搜，别按行号找。
+> 下文的 `wb-debug.js` / `ide-debug.js` 是**项目自带的** WebBuilder 前端脚本；换版本要按**符号名**
+> （`append` / `setNewNode`）搜，别按行号找。
 
-**先说硬事实**：设计器**不校验**父子关系 —— `Wb.append(parentNode, node)` 就是直接 `parentNode.appendChild(node)`（`wb-debug.js:2633`），拖到哪都行。
+**先说硬事实**：设计器**不校验**父子关系 —— `Wb.append(parentNode, node)` 就是直接 `parentNode.appendChild(node)`（`wb-debug.js`），拖到哪都行。
 
 所以"能不能这么挂"由**运行时（ExtJS）**决定，改 xwl 时要靠下面三条约定判断：
 
 1. **`container`**：只有 29 个是容器。非容器挂子控件运行时直接报错/被忽略。
-2. **`autoNames`**：声明"我该挂在谁下面、挂上后叫什么"。例如 `toolbar` 的 `{"grid":"tbar","tree":"tbar"}` 表示挂在 grid 下时自动成为 `tbar`；`store` 的 `{"any":"store"}` 表示挂在任何容器下都叫 `store`。设计器逻辑见 `ide-debug.js:4397`（`setNewNode`）：`autoNames[父type] || autoNames.any`，且**父节点是 root（module/folder）时不用 `any`**。
+2. **`autoNames`**：声明"我该挂在谁下面、挂上后叫什么"。例如 `toolbar` 的 `{"grid":"tbar","tree":"tbar"}` 表示挂在 grid 下时自动成为 `tbar`；`store` 的 `{"any":"store"}` 表示挂在任何容器下都叫 `store`。设计器逻辑见 `ide-debug.js`（`setNewNode`）：`autoNames[父type] || autoNames.any`，且**父节点是 root（module/folder）时不用 `any`**。
 3. **实测频次**：下面这张表是 2777 个真实 xwl 统计出来的**事实标准**。
 
 ### 4.1 实际父子结构（Top 45）

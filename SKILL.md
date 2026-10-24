@@ -2,7 +2,7 @@
 name: webbuilder-xwl-patch
 slug: skill-webbuilder-xwl-patch
 displayName: webbuilder-xwl-patch
-version: 1.7.2
+version: 1.7.3
 license: MIT
 metadata:
   category: development-tools
@@ -75,6 +75,7 @@ WebBuilder 的页面与查询定义都写在 `.xwl` 里。它**看起来像 JSON
 | 查子命令 / 退出码 / 环境依赖 | 第四章 |
 | 改引用、传参、写 `events` 里的 JS | 第五章 + [`references/js-api.md`](references/js-api.md) |
 | 加 / 改窗口（`createInstance`、`closeAction`、`app._X`） | [`references/js-api.md`](references/js-api.md) §5 |
+| 提交前取 grid 的变更集（新增 / 修改 / 删除） | [`references/js-api.md`](references/js-api.md) §6《`Wb.getModified` —— 取 grid 的变更集（用法约定，非平台契约）》 |
 | 改 SQL 片段（`serverScript` ↔ `dataprovider`） | 第六章 + [`references/sql-fragments.md`](references/sql-fragments.md) |
 | 处理注册键重名 / `@itemId#N` 寻址 | 第七章 |
 | 出问题了（按症状查） | 第八章 + [`references/faq.md`](references/faq.md) |
