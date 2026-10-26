@@ -80,5 +80,258 @@ jobs:
           fi
           echo "OK：无 .git 默认判红（符合预期）"
 
-      - name: --allow-nogit degrades to note（降级路径须退出 0）
-        run: python scripts/selftest.py --allow-nogit
+      # 断言**两个面**：① 降级路径本身必须 rc=0；② 必须**打印**那句降级清单。
+      #   ⚠️ 断的是**那一句**「本次 … 未执行：无 git」：只 grep "未执行" 会被两处无关输出蒙过 ——
+      #     `[note] 本块未执行：未设置 XWL_RULES_DIR`（未设变量时每跑必打）与汇总行末尾的「N 块未执行」
+      #     ⇒ 等于没有断言。⛔ 也不加 `|| true`：降级路径本身**必须 rc=0**，红了要看得见。
+      #   ⚠️ 这条断言**只能落在本 job**：本 job 是**完整检出**（有 `metadata.json`）后 `rm -rf .git`，
+      #     而 `install-layout` 跑的是安装副本 —— 安装器按设计不拷 `metadata.json`（`copyDirectory` 的
+      #     `EXCLUDE_FILES`）⇒ 副本天生不是可自检的完整树，"依据层"为空、自检恒红。断言选对树才成立。
+      - name: --allow-nogit degrades to note（rc=0 ＋ 必须打印降级清单）
+        run: |
+          set -eu
+          set +e
+          python scripts/selftest.py --allow-nogit > "$RUNNER_TEMP/nogit.txt" 2>&1
+          rc=$?
+          set -e
+          if [ "$rc" -ne 0 ]; then
+            echo "::error::\`--allow-nogit\` 应当 rc=0，实得 $rc"
+            tail -40 "$RUNNER_TEMP/nogit.txt"
+            exit 1
+          fi
+          if ! grep -q "未执行：无 git" "$RUNNER_TEMP/nogit.txt"; then
+            echo "::error::没有打印「本次 … 未执行：无 git」—— 无 git 时的降级清单是盲区的唯一可见处，不许缺"
+            tail -40 "$RUNNER_TEMP/nogit.txt"
+            exit 1
+          fi
+          grep -n "未执行：无 git" "$RUNNER_TEMP/nogit.txt"
+
+  # 安装布局冒烟（`--copy` 那条链路）：隔离环境 → 装到 **≥2 个 agent** → 断言 agent 目录是真实文件
+  #   → 从**业务目录**执行 → 逐文件比对安装副本 → 清场。
+  #   ⛔ 不新建 workflow 文件（分发面会再多 1）；⛔ 不测第二仓库的 update 端到端（边际收益抵不上维护成本）。
+  #   ⚠️ 两个 agent 必须是**两个不同目录**：`codex`／`cline` 都落在 `~/.agents/skills`
+  #     ⇒ 只选它们俩时"唯一目录 ≤1"，安装器**默认就走复制**、`--copy` 成了空操作 ⇒ 注入"删 --copy"不红。
+  #     故用 `codex`（`~/.agents/skills`）＋ `codebuddy`（`~/.codebuddy/skills`）两个**不同**目录。
+  #   ⚠️ 而"两个不同目录"恰恰意味着：**不带 `--copy` 时 CLI 走 symlink 档**（`installMode = options.copy ? "copy" : "symlink"`），
+  #     只给**非 canonical 的 agent 目录**建链接，链接指向的那份是真副本 ⇒ **只判"子项是不是链接"会全绿**。
+  #     ⇒ 断言必须判**目录本身**是不是链接；另注意 CLI 在"多目录且未给 `--copy`／`--yes`"时会弹交互式选择
+  #       （CI 无 TTY ⇒ 行为不确定），所以 `--copy` 在这里既是"被测对象"、也是"能跑下去的前提"。
+  #   ⚠️ 盲区说明（⛔ 不许把绿读成"自包含已验证"）：安装副本**必然没有 `.git`**，且安装器按设计不拷
+  #     `metadata.json`（`copyDirectory` 的 `EXCLUDE_FILES`）⇒ 副本**不是可自检的完整树**，
+  #     在这里跑自检会因"依据层"为空而恒红（≠ 实现缺陷，是断言选错了树）。
+  #     ⇒ 本 job **不再跑自检**，只看安装布局本身；"无 git 降级清单必须打印"那条断言已搬到
+  #       `no-git-layout` job —— 它在**完整检出**上 `rm -rf .git` 后跑，覆盖面不丢。
+  #     内容自包含由下面的逐文件比对补齐。
+  install-layout:
+    name: install layout（--copy 冒烟）
+    runs-on: ubuntu-latest
+    env:
+      # 不抑制遥测 ⇒ 每次 push 都在给平台记一次安装（CI 只加 `ci=1` 标记、照常上报）。
+      DISABLE_TELEMETRY: "1"
+      DO_NOT_TRACK: "1"
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          path: src          # 源树放子目录：隔离 cwd 时仍能引用到它
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+
+      # 隔离 HOME ＋ 临时 cwd。
+      #   ⚠️ 真正会被写的是 **`$HOME` 下的锁**（`-g` 时不落 cwd 锁，落 `$HOME/.agents/.skill-lock.json`）
+      #     ＋ 各 agent 目录；`node_modules/` 落 npm 缓存。⚠️ 本仓 `.gitignore` **既没排除锁文件也没排除
+      #     `node_modules/`** ⇒ 只要有任何一份落进仓根，就会污染分发面扫描（`git ls-files ∪ 未跟踪`）。
+      #   ⇒ HOME 与 cwd 全指到临时区；最后再核一遍源仓与 workspace 根（见末尾那步）。
+      - name: 隔离 HOME ＋ 临时 cwd
+        run: |
+          set -eu
+          mkdir -p "$RUNNER_TEMP/home" "$RUNNER_TEMP/work"
+          {
+            echo "HOME=$RUNNER_TEMP/home"
+            echo "XDG_CONFIG_HOME=$RUNNER_TEMP/home/.config"
+            echo "NPM_CONFIG_CACHE=$RUNNER_TEMP/home/.npm"
+          } >> "$GITHUB_ENV"
+
+      # 版本钉法：**两段号**在编年守卫（三段号）的射程之外 ⇒ 仓内零三段字面量。
+      #   ⛔ 不用 `${{ vars.… }}`：变量未设时展开成空串（`npx skills@` 直接断链），且 fork／PR 上恒为空。
+      #   ⛔ 不为这条去收窄编年守卫的文件面（那是改判据、要版本位）。
+      - name: 打印实际解析到的 CLI 版本
+        working-directory: ${{ runner.temp }}/work
+        run: npx -y "skills@^1.7" --version
+
+      # 硬要求①：`--copy` ＋ **≥2 个不同 agent 目录**（单目录时安装器默认复制 ⇒ `--copy` 是空操作）。
+      - name: --copy 安装到 2 个 agent
+        working-directory: ${{ runner.temp }}/work
+        run: |
+          set -eu
+          if ! npx -y "skills@^1.7" add "$GITHUB_WORKSPACE/src" \
+                 --skill webbuilder-xwl-patch -g -a codex -a codebuddy --copy -y; then
+            echo "::error::安装失败 —— 先看上面的 CLI 原始输出（网络失败请如实保留，⛔ 不靠重试抹成绿）"
+            exit 1
+          fi
+          ls -la "$HOME/.agents/skills" "$HOME/.codebuddy/skills"
+
+      # 硬要求②③：断言 **agent 目录那一层是真实文件**（POSIX `islink` 为假），⛔ 不是断 canonical。
+      #   `--copy` 分支只写 agent 目录、不建 canonical ⇒ 断 canonical 会"路径不存在 ⇒ islink 为 False"⇒ 空断言通过。
+      #   ⚠️ 本断言只能防"后人删掉 `--copy`"；⛔ **防不了**"建链失败静默回退成复制"（产物同形）。
+      - name: 断言非链接 ＋ 逐文件比对副本（三态可区分）
+        working-directory: ${{ runner.temp }}/work
+        run: |
+          python - <<'PY'
+          import hashlib, os, sys
+
+          HOME = os.environ["HOME"]
+          SRC = os.path.join(os.environ["GITHUB_WORKSPACE"], "src")
+          TARGETS = {"codex": os.path.join(HOME, ".agents", "skills", "webbuilder-xwl-patch"),
+                     "codebuddy": os.path.join(HOME, ".codebuddy", "skills", "webbuilder-xwl-patch")}
+          # 安装器按设计**不拷** metadata.json（copyDirectory 的排除清单）⇒ 比对必须排除它，
+          #   否则**正确实现也恒红**（阳性对照做不出来）。
+          SKIP = {"metadata.json"}
+          # 必须逐字节一致的功能面（相对源树）。
+          NEED_DIRS = ("references", "examples", "scripts")
+          NEED_FILES = ("SKILL.md",)
+
+          def md5(p):
+              try:
+                  with open(p, "rb") as fh:
+                      return hashlib.md5(fh.read()).hexdigest(), None
+              except OSError as exc:
+                  return None, str(exc)      # 读不了要**报出来**，⛔ 不许当成"没问题"
+
+          def _linked(fp):
+              # POSIX 符号链接 ＋ Windows 目录联接（junction）。⚠️ `islink` 对 junction **返回 False**
+              #   ⇒ 只查 islink 会在 Windows 上把"建链成功"当成真实文件（`isjunction` 需 3.12+）。
+              return os.path.islink(fp) or getattr(os.path, "isjunction", lambda _p: False)(fp)
+
+          # ① 路径问题：目录不存在 ／ **目录本身**是链接 ／ 目录下出现链接（文件与目录两种，链接目录要剪掉不跟进）
+          #   ⚠️ **必须判目录本身**：`--copy` 与默认档的差别恰好在这一层 —— CLI 不带 `--copy` 时
+          #     `installMode="symlink"`，只给**非 canonical 的 agent 目录**建链接（`createSymlink(canonicalDir, agentDir)`），
+          #     而链接指向的那份是真副本 ⇒ 只判"子项是不是链接"会**全部通过**（穿透链接看到的都是真文件）。
+          bad_path = []
+          for name, d in TARGETS.items():
+              if not os.path.isdir(d):
+                  bad_path.append("%s：目录不存在（%s）—— --copy 未装到该 agent？" % (name, d))
+                  continue
+              if _linked(d):
+                  bad_path.append("%s：**目录本身**是链接（%s）—— --copy 没生效（默认 symlink 档只给非 canonical 的 agent 建链接）"
+                                  % (name, d))
+                  continue
+              for dp, dns, fns in os.walk(d):
+                  for _x in list(dns):
+                      _xp = os.path.join(dp, _x)
+                      if _linked(_xp):
+                          bad_path.append("%s：目录 %s 是链接 —— --copy 失效"
+                                          % (name, os.path.relpath(_xp, d)))
+                  dns[:] = [_x for _x in dns if not _linked(os.path.join(dp, _x))]
+                  for fn in fns:
+                      fp = os.path.join(dp, fn)
+                      if _linked(fp):
+                          bad_path.append("%s：%s 是链接（符号链接／junction）—— --copy 失效"
+                                          % (name, os.path.relpath(fp, d)))
+          if bad_path:
+              print("三态＝**路径问题**")
+              for b in bad_path:
+                  print("  - " + b)
+              sys.exit(1)
+
+          # ② 缺资源 ／ ③ 内容变化（分开报，⛔ 不混成一句"测试失败"）
+          want = [f for f in NEED_FILES]
+          for d in NEED_DIRS:
+              base = os.path.join(SRC, d)
+              for dp, _dn, fns in os.walk(base):
+                  for fn in fns:
+                      want.append(os.path.relpath(os.path.join(dp, fn), SRC).replace(os.sep, "/"))
+          missing, changed, unreadable = [], [], []
+          for rel in sorted(want):
+              if rel in SKIP:
+                  continue
+              src_fp = os.path.join(SRC, rel.replace("/", os.sep))
+              _s, _se = md5(src_fp)
+              if _s is None:
+                  # 源树自己列出来的文件却读不到 ⇒ 路径问题（⛔ 不许当成"副本没问题"）
+                  unreadable.append("源树 %s 读不了：%s" % (rel, _se))
+                  continue
+              for name, d in TARGETS.items():
+                  tgt = os.path.join(d, rel.replace("/", os.sep))
+                  if not os.path.exists(tgt):
+                      missing.append("%s：副本缺 %s" % (name, rel))
+                      continue
+                  _t, _te = md5(tgt)
+                  if _t is None:
+                      unreadable.append("%s：副本 %s 读不了（%s）" % (name, rel, _te))
+                  elif _s != _t:
+                      changed.append("%s：副本 %s 与源树内容不同" % (name, rel))
+          listed = ["%s：%d 个文件" % (n, len(want)) for n in TARGETS]
+          print("逐文件比对（源树 %d 个必需文件，已排除 %s）：%s" % (len(want) - len(SKIP & set(want)),
+                                                              "／".join(sorted(SKIP)), "；".join(listed)))
+          # ⚠️ **单向下限**：上面只判"这些必须在且逐字节相同"。反向（副本多出／少掉 **必需清单之外** 的文件，
+          #   例 `LICENSE`／`test-prompts.json`／`.github/**`）**只报 [note]、不进 rc** —— 理由：拷贝范围由
+          #   安装器自己定（`copyDirectory` 的排除清单会变），判死会造"正确实现也恒红"的假红。
+          #   ⇒ 属**已知覆盖缺口**（已登记）；要闭环得先做一次真装确认拷贝范围，再改成双向比对。
+          _all_src = set()
+          for _dp, _dn, _fns in os.walk(SRC):
+              _dn[:] = [x for x in _dn if x not in (".git", "__pycache__")]
+              for _fn in _fns:
+                  _all_src.add(os.path.relpath(os.path.join(_dp, _fn), SRC).replace(os.sep, "/"))
+          _all_src -= SKIP
+          for name, d in TARGETS.items():
+              _have = set()
+              for _dp, _dn, _fns in os.walk(d):
+                  for _fn in _fns:
+                      _have.add(os.path.relpath(os.path.join(_dp, _fn), d).replace(os.sep, "/"))
+              _extra = sorted(_have - _all_src - SKIP)          # 副本里出现源树没有的
+              _missing_note = sorted(_all_src - _have)          # 上面已按 miss 判过，这里只做对账展示
+              print("[note] %s：必需清单之外 —— 副本多出 %d 个 %s；源树 %d 个功能文件里副本没有 %d 个 %s"
+                    "（仅记录、不进 rc）"
+                    % (name, len(_extra), _extra[:6], len(_all_src), len(_missing_note), _missing_note[:6]))
+          if unreadable:
+              print("三态＝**路径问题**（源树侧，%d 条）" % len(unreadable))
+              for m in unreadable[:20]:
+                  print("  - " + m)
+          if missing:
+              print("三态＝**缺资源**（%d 条）" % len(missing))
+              for m in missing[:20]:
+                  print("  - " + m)
+          if changed:
+              print("三态＝**内容变化**（%d 条）" % len(changed))
+              for c in changed[:20]:
+                  print("  - " + c)
+          sys.exit(1 if (unreadable or missing or changed) else 0)
+          PY
+
+      # 硬要求③：**从业务目录执行**（cwd 不是 skill 根 —— 这正是"裸相对路径在业务工程里跑不通"的场景）。
+      - name: 从业务目录执行（cwd 不是 skill 根）
+        run: |
+          set -eu
+          mkdir -p "$RUNNER_TEMP/biz/wb/modules/demo"
+          cd "$RUNNER_TEMP/biz"
+          ROOT="$HOME/.agents/skills/webbuilder-xwl-patch"
+          python "$ROOT/scripts/xwl.py" --help > /dev/null
+          python "$ROOT/scripts/xwl.py" new "$RUNNER_TEMP/biz/wb/modules/demo/p.xwl" --kind page --title "示例页面"
+          python "$ROOT/scripts/xwl.py" check "$RUNNER_TEMP/biz/wb/modules/demo/p.xwl"
+
+      # 硬要求⑤：无法证明"没在仓里留东西"就不算通过。
+      #   ⚠️ `--porcelain` **看不见被忽略的产物**（本仓 `.gitignore` 忽略 `__pycache__/`、`*.log`）⇒ 加 `--ignored`；
+      #     另核 `$GITHUB_WORKSPACE` **根**（它不属于任何仓库，`git status` 完全覆盖不到）除 `src` 外为空。
+      - name: 源仓必须干净（skills-lock.json / node_modules 都别落进去）
+        run: |
+          set -eu
+          cd "$GITHUB_WORKSPACE/src"
+          if [ -n "$(git status --porcelain --ignored)" ]; then
+            echo "::error::安装过程在源仓里留下了文件（含被 .gitignore 忽略的）："
+            git status --porcelain --ignored
+            exit 1
+          fi
+          _stray="$(ls -A "$GITHUB_WORKSPACE" | grep -v '^src$' || true)"
+          if [ -n "$_stray" ]; then
+            echo "::error::\$GITHUB_WORKSPACE 根出现了 src 之外的东西（git status 覆盖不到这一层）："
+            echo "$_stray"
+            exit 1
+          fi
+          echo "OK：源仓 git status（含 ignored）为空，且 workspace 根只有 src"
+

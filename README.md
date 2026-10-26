@@ -2,8 +2,10 @@
 
 [![selftest](https://github.com/yfwang0731/skill-webbuilder-xwl-patch/actions/workflows/selftest.yml/badge.svg)](https://github.com/yfwang0731/skill-webbuilder-xwl-patch/actions/workflows/selftest.yml)
 
-处理 **WebBuilder（wb）平台 `.xwl` 定义文件**的 WorkBuddy Skill ——
+处理 **WebBuilder（wb）平台 `.xwl` 定义文件**的 Agent Skill ——
 **用结构级 `patch` 改 xwl，不碰文本层。**
+面向**支持 Agent Skills 规范**的客户端（Codex / Cline / CodeBuddy 等）；WorkBuddy 同样可用 ——
+把目录放进它读取的 skill 目录即可，装法见 [`references/distribution.md`](references/distribution.md)。
 
 `.xwl` 看起来像 JSON，但**不是严格 JSON** —— 磁盘上是「字面反斜杠 + 真实换行」的多行字符串。
 直接拿编辑器改，**第一刀就会把文件改坏**（运行时解析失败、页面白屏）。
@@ -16,6 +18,18 @@
 > **只含其中一个模块**的 xwl（各 webapp 独立部署），所以"在别的 webapp 里找得到"≠"本根可用"；
 > 也**不适用于**其他低代码平台的页面定义、`.vue`、普通 `.json`。
 
+## 安装
+
+```bash
+npx skills add yfwang0731/skill-webbuilder-xwl-patch --skill webbuilder-xwl-patch -g -a codex
+```
+
+装到哪个目录取决于 `-a`，而 **CLI 的 agent 表里没有 `workbuddy`** ⇒ WorkBuddy 请**手工装**：
+把目录放到 `~/.workbuddy/skills/<name>`。另两条命令（`update`／`remove`）、「`check` 与 `update`
+是同一套实现 ⇒ 执行前假定它会写」这条注记、手工安装细节与环境依赖，全在
+[`references/distribution.md`](references/distribution.md)。
+⚠️ **别往安装目录写** ops／业务 `.xwl`／备份／临时夹具 —— 它会被 `update` 覆盖，也可能只读。
+
 ## 核心工作方式：结构级 `patch`
 
 **不碰文本层。** 你只提供「值 / 子树」，工具按**设计器自己的算法**重建整份文件 ——
@@ -23,8 +37,8 @@
 
 ```bash
 # 改标题 + 给工具栏加一个带多行 JS 的按钮：只写"要什么"，不写"怎么排版"
-python scripts/xwl.py patch page.xwl --ops ops.json --dry-run   # 先看 diff
-python scripts/xwl.py patch page.xwl --ops ops.json --backup    # 确认后落盘
+python <skill根>/scripts/xwl.py patch page.xwl --ops ops.json --dry-run   # 先看 diff
+python <skill根>/scripts/xwl.py patch page.xwl --ops ops.json --backup    # 确认后落盘
 ```
 
 ```json
@@ -58,20 +72,18 @@ python scripts/xwl.py patch page.xwl --ops ops.json --backup    # 确认后落�
 ## 三分钟上手
 
 ```bash
-git clone <this-repo> ~/.workbuddy/skills/webbuilder-xwl-patch   # 或直接把目录拷进去
-
 # 造新文件（内置设计器真实顶层键序，不需要种子文件）
-python scripts/xwl.py new wb/modules/<模块>/myPage.xwl --kind page --title "我的页面"
-python scripts/xwl.py new wb/modules/<模块>/xxxSql/queryXxx.xwl --kind sql --title "出库单查询"
-python scripts/xwl.py folders wb/modules/<模块>/myPage.xwl --register   # 登记（否则设计器里看不到）
+python <skill根>/scripts/xwl.py new wb/modules/<模块>/myPage.xwl --kind page --title "我的页面"
+python <skill根>/scripts/xwl.py new wb/modules/<模块>/xxxSql/queryXxx.xwl --kind sql --title "出库单查询"
+python <skill根>/scripts/xwl.py folders wb/modules/<模块>/myPage.xwl --register   # 登记（否则设计器里看不到）
 
 # 改已有文件：0 check 基线 → 1 paths 拿路径 → 2 --dry-run → 3 --backup → 4 check 复核 → 5 diffguard
-python scripts/xwl.py check     page.xwl
-python scripts/xwl.py paths     page.xwl                            # 改 SQL/数据源时；其余改动用 dump 看层级
-python scripts/xwl.py patch     page.xwl --ops ops.json --dry-run
-python scripts/xwl.py patch     page.xwl --ops ops.json --backup
-python scripts/xwl.py check     page.xwl
-python scripts/xwl.py diffguard page.xwl                            # 有没有把多行内容悄悄压平？
+python <skill根>/scripts/xwl.py check     page.xwl
+python <skill根>/scripts/xwl.py paths     page.xwl                            # 改 SQL/数据源时；其余改动用 dump 看层级
+python <skill根>/scripts/xwl.py patch     page.xwl --ops ops.json --dry-run
+python <skill根>/scripts/xwl.py patch     page.xwl --ops ops.json --backup
+python <skill根>/scripts/xwl.py check     page.xwl
+python <skill根>/scripts/xwl.py diffguard page.xwl                            # 有没有把多行内容悄悄压平？
 ```
 
 > 最后一步补的是**唯一有自动化防线**的静默损坏：把「反斜杠 + 换行」直接删掉之后，
@@ -115,7 +127,7 @@ webbuilder-xwl-patch/
 ├── references/               # 参考材料（每份的条数与作用见 SKILL.md 首页那张索引表）
 └── scripts/
     ├── xwl.py                # 全部子命令（纯标准库，零依赖）
-    ├── selftest.py           # 内置样本自检：python scripts/selftest.py
+    ├── selftest.py           # 内置样本自检：python <skill根>/scripts/selftest.py
     ├── privacy_scan.py       # 维护者发布前扫描器（本仓自身；结构面 / --patterns 外置清单面）
     └── privacy_patterns.example.json  # **占位示例**：外置清单模板，不能当有效清单用
 ```
@@ -125,8 +137,11 @@ webbuilder-xwl-patch/
 
 ## 依赖与许可
 
-- **Python 3.9+**（纯标准库，零第三方依赖）
-- （可选）**Node.js** —— 仅用于事件 JS 语法校验；缺失时自动降级为警告。
-  可用 `--node <path>` 或环境变量 `NODE_BIN` 指定。
+三件事分开算（缺哪件、后果不同）：
+
+- 跑 `xwl.py` ⇒ **Python 3.9+**（纯标准库，零第三方依赖）；
+- 事件的 JS 语法校验（`check` 第 ⑥ 项）⇒ **Node.js 可选** —— 缺失时该项降级为警告、少守一层，
+  可用 `--node <path>` 或环境变量 `NODE_BIN` 指定；
+- 用 `npx skills` 装／更新 ⇒ **Node ＋ npm**，这条**不是可选**。
 
 MIT，见 [LICENSE](LICENSE)。

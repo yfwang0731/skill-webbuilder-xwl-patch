@@ -2,7 +2,7 @@
 name: webbuilder-xwl-patch
 slug: skill-webbuilder-xwl-patch
 displayName: webbuilder-xwl-patch
-version: 1.7.3
+version: 1.7.4
 license: MIT
 metadata:
   category: development-tools
@@ -62,7 +62,7 @@ WebBuilder 的页面与查询定义都写在 `.xwl` 里。它**看起来像 JSON
 | 入口 | 怎么进 |
 |---|---|
 | **① 对话里直接说**（推荐） | 在 Agent 对话中描述任务即可，不必记命令。以下说法都会命中本 skill：<br>「改 xxx.xwl / 加个按钮 / 挂个点击事件 / 改页面上的 SQL / 这个页面白屏了 / 报解析错误 / `app.X` 取不到值 / 新建一个页面或 SQL 文件 / 新建的页面在设计器里找不到 / 把 xwl 里的 SQL 抽出来灌库跑一遍」 |
-| **② 命令行直调** | 不经过 Agent、要自己跑或写进脚本时：`python <本 skill 目录>/scripts/xwl.py <子命令>`；`--help` 看全部子命令 |
+| **② 命令行直调** | 不经过 Agent、要自己跑或写进脚本时：`python <skill根>/scripts/xwl.py <子命令>`（`<skill根>` ＝ 本 skill 的**安装目录**，⛔ 别写裸 `scripts/xwl.py` —— 你的 cwd 是业务工程）；`--help` 看全部子命令；⛔ 别往安装目录写 ops／业务 `.xwl`／备份／临时夹具（会被更新覆盖、且可能是只读） |
 
 **本 skill 不提供 GUI / 菜单入口** —— 它是命令行工具 + Agent 指令集。非技术用户让 Agent 代跑就行。
 
@@ -87,6 +87,7 @@ WebBuilder 的页面与查询定义都写在 `.xwl` 里。它**看起来像 JSON
 | 脚本化生成：什么时候该写脚本、`configs` 归一、双层闸、换行对齐 | [`references/generation.md`](references/generation.md) |
 | **HTML → xwl 转写**：默认做法 / 必须回问 / 不预设 | [`references/transcription-defaults.md`](references/transcription-defaults.md) |
 | 想看一次完整实操（从零造页面 + SQL 载体） | [`references/walkthrough.md`](references/walkthrough.md) |
+| **装到本机 / 升级卸载 / 命令该在哪个 cwd 跑** | [`references/distribution.md`](references/distribution.md) |
 | 想跑最小示例（每条命令都真跑过） | [`examples/README.md`](examples/README.md)（示例 `.xwl` 用 `xwl.py new` 现场生成，不在仓库里预置） |
 | 数字从哪来（引用次数 / 分布 / 统计口径） | [`references/measured-data.md`](references/measured-data.md) |
 | **为什么这么定**（判据依据、踩过的坑、已作废的做法） | [`references/workflow-notes.md`](references/workflow-notes.md) |
@@ -222,9 +223,9 @@ hidden, children, roles, title, iconCls, inframe, pageLink
 
 ```bash
 # 独立页面：顶层 7 把钥匙 + 一个空 module 节点
-python scripts/xwl.py new wb/modules/<模块>/myPage.xwl --kind page --title "我的页面"
+python <skill根>/scripts/xwl.py new wb/modules/<模块>/myPage.xwl --kind page --title "我的页面"
 # SQL 载体：module(serverScript) → dataprovider(sql)，被页面用 store.url='m?xwl=…' 引用
-python scripts/xwl.py new wb/modules/<模块>/xxxSql/queryXxx.xwl --kind sql --title "出库单查询"
+python <skill根>/scripts/xwl.py new wb/modules/<模块>/xxxSql/queryXxx.xwl --kind sql --title "出库单查询"
 ```
 
 `new` 内置了 1.3 那套**设计器真实键序**，所以：
@@ -313,9 +314,9 @@ python scripts/xwl.py new wb/modules/<模块>/xxxSql/queryXxx.xwl --kind sql --t
 
 ```bash
 # 先看将产生的 diff（不写入）
-python scripts/xwl.py patch <file.xwl> --ops ops.json --dry-run
+python <skill根>/scripts/xwl.py patch <file.xwl> --ops ops.json --dry-run
 # 真改（--backup 会先写 <file>.bak）
-python scripts/xwl.py patch <file.xwl> --ops ops.json --backup
+python <skill根>/scripts/xwl.py patch <file.xwl> --ops ops.json --backup
 ```
 
 **报错怎么办** —— `patch` 的失败都是**拒绝写盘**，不会留下坏文件：
@@ -342,7 +343,7 @@ python scripts/xwl.py patch <file.xwl> --ops ops.json --backup
 用它就得自己守两条硬要求：`newline=''` 保留原换行 + **替换前断言锚点唯一**。
 
 ```bash
-python scripts/xwl.py edit <file.xwl> --old-file old.txt --new-file new.txt --expect 1 --dry-run
+python <skill根>/scripts/xwl.py edit <file.xwl> --old-file old.txt --new-file new.txt --expect 1 --dry-run
 ```
 
 > 「锚点出现次数」是**信息**不是障碍：工具会报出实际次数。出现多次时把锚点**扩到足够上下文**
@@ -362,9 +363,9 @@ python scripts/xwl.py edit <file.xwl> --old-file old.txt --new-file new.txt --ex
 [`references/faq.md`](references/faq.md)；不通过时先用 `--backup` 的 `<file>.bak` 回退再排查。**另**：给了 `--controls` 时**另校 `configs` 键（⑨）与内联 `[js]`**（缺省不校、也不自动找）—— **⑨ 只在显式给 `--controls` 时跑、只 `warn`、不进 `rc`，不计入上面九项**。
 
 ```bash
-python scripts/xwl.py check <file.xwl> [more.xwl ...]
-python scripts/xwl.py check <file.xwl> --no-js              # 本机没有 node 时跳过 JS 校验
-python scripts/xwl.py check <file.xwl> --no-itemid          # 跳过注册键重名分级（只查格式）
+python <skill根>/scripts/xwl.py check <file.xwl> [more.xwl ...]
+python <skill根>/scripts/xwl.py check <file.xwl> --no-js              # 本机没有 node 时跳过 JS 校验
+python <skill根>/scripts/xwl.py check <file.xwl> --no-itemid          # 跳过注册键重名分级（只查格式）
 ```
 
 三点必须记住：
@@ -390,8 +391,8 @@ python scripts/xwl.py check <file.xwl> --no-itemid          # 跳过注册键重
 提交前补这一刀：
 
 ```bash
-python scripts/xwl.py diffguard <改过的文件或目录>            # 默认只告警
-python scripts/xwl.py diffguard <改过的文件或目录> --strict    # CI / pre-commit：让它阻塞
+python <skill根>/scripts/xwl.py diffguard <改过的文件或目录>            # 默认只告警
+python <skill根>/scripts/xwl.py diffguard <改过的文件或目录> --strict    # CI / pre-commit：让它阻塞
 ```
 
 - **判据、已知边界与退出码都在 [`references/faq.md`](references/faq.md) §三** —— 这里不重复。

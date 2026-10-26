@@ -52,8 +52,8 @@
   **events 为 0 个**（dataprovider 挂不了事件）。
 
 ```bash
-python scripts/xwl.py schema dataprovider --controls <工程>/wb/system/controls.json
-python scripts/xwl.py schema module       --controls <工程>/wb/system/controls.json
+python <skill根>/scripts/xwl.py schema dataprovider --controls <工程>/wb/system/controls.json
+python <skill根>/scripts/xwl.py schema module       --controls <工程>/wb/system/controls.json
 ```
 
 ## 三、引用机制（核心）
@@ -266,9 +266,9 @@ queryBizList.xwl
 ## 六、配套检查工具
 
 ```bash
-python scripts/xwl.py paths   <file.xwl>                  # 列出 sql / totalSql / serverScript / url 的位置
-python scripts/xwl.py sqlrefs <file.xwl>                  # {#名字#} 与 serverScript 是否自洽
-python scripts/xwl.py params  <page.xwl> [--controls …]   # 页面 → store → SQL 的传参链路交叉核对
+python <skill根>/scripts/xwl.py paths   <file.xwl>                  # 列出 sql / totalSql / serverScript / url 的位置
+python <skill根>/scripts/xwl.py sqlrefs <file.xwl>                  # {#名字#} 与 serverScript 是否自洽
+python <skill根>/scripts/xwl.py params  <page.xwl> [--controls …]   # 页面 → store → SQL 的传参链路交叉核对
 ```
 
 - **`paths`** —— 同时给出「原路径」与「`@写法`」，改 SQL 前先跑它拿路径。

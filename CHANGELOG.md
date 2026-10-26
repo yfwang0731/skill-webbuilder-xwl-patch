@@ -14,6 +14,10 @@
 
 ---
 
+## [1.7.4] - 2026-10-26
+
+分发面适配 ＋ 内部判据（patch）：**无新子命令、无新参数**（`git diff` 里 `sub.add_parser` 增删 0，退出码/`rc=` 行增删 0，`--help` 行数表未动）。① 分发面：`README.md` 首段由"WorkBuddy Skill"改为"**Agent Skill**（面向支持 Agent Skills 规范的客户端；WorkBuddy 同样可用）"，新增「安装」节（主命令 ＋ WorkBuddy 手工装 ＋ 指针 ＋ "⛔ 别往安装目录写 ops／业务 `.xwl`／备份"）；新增 `references/distribution.md`（两渠道 `npx skills` 五条命令、`check` 与 `update` **同源**的行为注记、环境依赖三件、cwd 口径、升级与卸载）；`metadata.json` 的 `references`／`layers` 同批 +1（`spec`）、`SKILL.md` 索引表 +1 行 ⇒ 分发面 **41 → 42**（`rules` 现量表同步，口径改「`ls-files` ∪ 未跟踪」）。② 对外文案（**输出变、能力不变**）：`xwl.py` 两处提示（`itemids` 全量重名报告、`diffguard` 重跑）由 `python scripts/xwl.py …` 改为**绝对入口 ＋ 逐参引号**（新增 `script_entry()`／`quote_arg()`／`cmd_hint()`；三档引号覆盖尾反斜杠与含 `"` 两种难例，15 组经 `shlex.split` 原样还原）；`SKILL.md`／`README.md`／`examples/README.md` 的调用形态统一为 `python <skill根>/scripts/xwl.py …`，并连带修正 `references/sql-fragments.md` 的 5 处**从未被任何守卫覆盖**的存量裸形态。③ CI：`selftest.yml` **并入** `install-layout` job（8 step：隔离 `HOME`／临时 cwd、`--copy` 装到 `codex` 与 `codebuddy` 两个**不同**目录、断言 agent 目录本身非链接、逐文件比源树且排除 `metadata.json`、缺资源／路径／内容变化三态、`DISABLE_TELEMETRY=1`、`git status --ignored` 为空、`skills@^1.7` 钉版本并打印实际解析版本）—— ⛔ 不新建 workflow 文件。④ 内部判据（六条）：函数行数上限判据搬出 `_docs_tail_scaffold` 到模块级 `_fn_cap_check`（**399 → 375 行**，解自指）；"集合不一致"与"超标"由 `if/elif` 拆成**两条独立 `if`**（联合注入下两条具名句同现）；`_run_block` 补 `except SystemExit`／`KeyboardInterrupt: raise`／`BaseException`（崩溃时仍打汇总行并点名该块，⛔ 不改汇总行与末行锚）；目录族补「该有目录却没有」（登记表 7 份 ＋ 结构特征，覆盖**整块删**与**2 条＋改名**两种原静默形态）；围栏臂宣称改准为 **整句** 比对（`16 字前缀` 属行内反引号臂，此前被串用）；目录完整性从 `## N.` 扩到**所有 `##` 级** ＋ 4 条一次性豁免 ＋ 盲区登记。⑤ 新增入口形态守卫（源码静态面／`cmd_hint()` 运行时面／文档面三面合判，15 组写法矩阵 15/15）。⚠️ 已知与待办：`ITEM-1130` 裁定**维持 5 类扩展名**不动（现值面三类命中 0，扩面只有回归风险）；`install-layout` 的首跑结论待 CI；`ITEM-1140`（围栏收紧到逐字＋四类占位符各注入一条）另立、不在本版。
+
 ## [1.7.3] - 2026-10-24
 
 > 版本位 ＝ **patch**：**无新子命令、无新参数、无输出格式变化**，对外契约一个字节未改。

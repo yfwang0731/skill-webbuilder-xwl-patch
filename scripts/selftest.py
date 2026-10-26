@@ -87,6 +87,7 @@ import sys
 import tempfile
 import time
 import tokenize
+import traceback
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 _spec = importlib.util.spec_from_file_location("xwl", os.path.join(HERE, "xwl.py"))
@@ -2954,8 +2955,8 @@ _ver_re = re.compile(r"\d+\.\d+\.\d+")
 #     **依据层 → `evidence`**、**规格层 → `spec`**。
 #     ⚠️ 代码里的符号名（`_DECL_LAYER` / `_auth_*` / `_authority_files` / `_auth_layer_misfits`）
 #       **沿用旧名不改** —— 它们说的是"依据层"这个**概念**，不是字面值。
-#   起因（为什么从"每份首行"搬到这里）：同一个事实原写在 18 份参考材料各自的第 1 行
-#     「层归属：…」里 ⇒ 对外可见的层归属有 **19 处**（18 份首行 ＋ 打包元数据），任何一处漂移都没有
+#   起因（为什么从"每份首行"搬到这里）：同一个事实原写在每份参考材料各自的第 1 行
+#     「层归属：…」里 ⇒ 对外可见的层归属＝「参考材料份数 ＋ 1（打包元数据）」，任何一处漂移都没有
 #     守卫能发现（`17u` 只逐份看"自己那份写没写"，看不到"两份互相矛盾"）。搬迁后只剩 1 处，
 #     且「`references` 数组 ↔ `layers` 键集」可机械双向对账（见 `17x` 的同名对账臂）。
 #   为什么不用「层归属」这两个中文字面值当键：字面值必须与文档措辞一致、改措辞就得改数据；
@@ -3472,6 +3473,36 @@ def _toc_key(_t):
     return re.sub(r"[-]", "", _s).replace(" ", "")
 
 
+# 目录完整性臂的**一次性豁免清单**：标题**有意不进目录**的小节，逐条写全（文件 ＋ 标题逐字，锚点式）。
+#   ⛔ 不建"免目录登记机制"：那等于写死名单（与"⛔ 不许退化成写死的名单"那条明令相撞），且每条都要人填。
+#   ⚠️ 这是**一次性**清单，不是扩充口子 —— 新增带 `## 目录` 的文件时本臂会把它的小节当缺失判红，
+#     需人工确认"该补目录项"还是"该补豁免"，⛔ 别默认往这里加。
+_TOC_HEAD_EXEMPT = {
+    ("references/anti-patterns.md", "速查"),
+    ("references/anti-patterns.md", "只记三条的话"),
+    ("references/measured-data.md", "主题文件索引"),
+    ("references/walkthrough.md", "一句话回顾"),
+}
+
+# 「**这份文件必须有 `## 目录`**」的登记表。⛔ 它与上面的豁免清单**不是**同一件事：
+#   豁免清单管"某个小节有意不进目录"，本表管"整份文件的目录**标题**不许消失"。
+#   起因（不这么做会漏什么）：目录族的四臂（锚点解析／顺序／完整性／新加的"条目在而标题没了"）
+#     **全部**从一个 `## 目录` 标题出发；把标题**连同全部条目**一起删掉，四臂会一起静默 ——
+#     实测 `--only docs` 得 `rc=0 / FAIL 0`。而"条目段还在"这条反推兜不住它（段没了就无从反推）。
+#   ⇒ 只有**登记为必须有**的文件，才判得出"整块被删"。⚠️ 已知盲区：本表是**写死的清单** ——
+#     新增一份带目录的文件时它**不会**自动被要求（⛔ 别据此说"目录完整性已全覆盖"），
+#     反向也不会假红；文件被改名时下面的"登记了但文件不在"会报出来，不会静默失效。
+_TOC_REQUIRED = frozenset({
+    "references/anti-patterns.md",
+    "references/controls.md",
+    "references/faq.md",
+    "references/js-api.md",
+    "references/measured-data.md",
+    "references/sql-fragments.md",
+    "references/walkthrough.md",
+})
+
+
 # ---- #15「有界下沉」续 3：`17j-12`／`17j-13`／`17j-14` 三臂（原寄居 `_check_docs` 函数体）----
 #   起因（按守卫维护纪律，不这么做会漏什么）：`_check_docs` 函数体逼近 1300 行阈值（余量只剩 5、
 #     低于「余量 < 20 先下沉」的设计下限）⇒ 再加任何一条文档守卫都会越阈判红。这三臂编号连续、
@@ -3542,11 +3573,36 @@ def _doc_guard_xfile_pt(docs, doc_fail, real_out):
     #   ⚠️「标题不跳级」由 17h 按同一判据守，此处不再重复（曾作冗余双保险，会让**一处缺陷报两行**）。
     #   目录：带 `## 目录` 的文件，TOC 条目（`- [label](#anchor)`）必须**逐个**对得上正文小节
     #     （锚点按标题 slug **前缀**匹配 —— 标签可缩写），且顺序与正文出现顺序**单调一致**。
-    #   现状全绿（7 个带目录文件 52 条目录项全部解析且单调）⇒ 纯**防回归**。
+    #   现状全绿（带目录文件里每个目录项都能解析、且顺序单调）⇒ 纯**防回归**。
     #     起因：章节被搬动后，目录条目顺序若与正文不一致，读者按目录跳会到错处；此臂只作防回归（现状全绿）。
     for _nm, _ls in docs.items():
         _ti = next((_k for _k, _l in enumerate(_ls) if re.match(r"^##\s*目录\s*$", _l)), None)
         if _ti is None:
+            # ⭐「该有目录却没有」两臂（**一处缺陷只报一行**）：
+            #   ① 登记表里点名要有的文件 ⇒ 直接判"整份文件的目录没了"（这条兜"标题 ＋ 条目一起删"，
+            #     另一种臂兜不住：段没了就无从"由条目反推"）；
+            #   ② 未登记的 ⇒ 看"目录条目还在、标题没了"这个结构特征。
+            #   起因（不这么做会漏什么）：下面三臂（锚点解析／顺序单调／完整性）**都从这个 `_ti` 出发**
+            #     ⇒ 标题一改名就同时 `continue`，实测改名后 `rc=0`、`FAIL 0`（整族**静默失效**）。
+            if _nm in _TOC_REQUIRED:
+                doc_fail.append("17j-13 %s **登记为必须有目录**，却找不到 `## 目录` 标题"
+                                "（标题被改名／整块删掉了）—— 本族各臂都靠它定位，缺了会整族静默失效"
+                                % _nm)
+                continue
+            # 判据：连续 ≥3 条「`- [label](#anchor)`」是目录条目的**结构特征**（与标题怎么写无关）⇒
+            #   有这种段却没有 `## 目录` 标题，就是标题被改坏了。⛔ 不逐个追近义写法
+            #   （`## 目 录`／`## 目录表`／`## 索引`）：条目段在、标题不对即红，改名成什么都不影响判定。
+            _run = _mx = 0
+            for _l2 in _ls:
+                if re.match(r"^\s*[-*]\s*\[[^\]]+\]\(#[^)]+\)", _l2):
+                    _run += 1
+                    _mx = max(_mx, _run)
+                else:
+                    _run = 0
+            if _mx >= 3:
+                doc_fail.append("17j-13 %s 有 %d 条连续的目录条目（`- [x](#y)`）却找不到 `## 目录` 标题"
+                                "—— 标题被改名／删掉了？（锚点解析／顺序／完整性三臂都靠它定位，"
+                                "缺了会整族静默失效）" % (_nm, _mx))
             continue
         _j = _ti + 1
         _toc = []
@@ -3571,8 +3627,8 @@ def _doc_guard_xfile_pt(docs, doc_fail, real_out):
         if any(_idxs[_z] >= _idxs[_z + 1] for _z in range(len(_idxs) - 1)):
             doc_fail.append("17j-13 %s 目录条目顺序与正文小节顺序不一致" % _nm)
 
-        # 目录完整性（**与 17j-13 同族、⛔ 不新开编号**）：带 `## 目录` 的文件里，每个 `## N.`
-        #   必须有**恰好一条**目录项。
+        # 目录完整性（**与 17j-13 同族、⛔ 不新开编号**）：带 `## 目录` 的文件里，每个 `##` 级小节
+        #   必须有**至少一条**目录项命中它。
         #   起因（不这么做会漏什么）：`17j-13` 只 `for _t in _toc` 遍历**已存在**的条目 ⇒ 条目被**删掉**
         #     时没有可遍历对象、无从判红（实测：删掉一条目录项后 `--only docs` 与**全量 14 块**均
         #     `rc=0`、`[FAIL] 0`）⇒ 本臂补的正是"条目缺失"这一面。
@@ -3580,8 +3636,9 @@ def _doc_guard_xfile_pt(docs, doc_fail, real_out):
         #   ⚠️ **本臂无独立守卫编号** ⇒「把这段整块删掉」**不会被块名基线抓到** —— 属**已知盲区**。
         #     不开 `17j-15` 的理由：块名基线要求"基线外新块名须在 `CHANGELOG.md` 被独立提及"，
         #     而未发布的批不许写版本段 ⇒ 开号会当场撞红。这是**制度互斥、不是漏做**。
-        #   ⚠️ 覆盖面**只到阿拉伯编号节**（`## N.`）：本仓另有 6 份带目录文件用的是中文序号／无编号标题
-        #     ⇒ 它们的目录条目缺失**本臂抓不到**（已知盲区，⛔ 别据此说"目录完整性已全覆盖"）。
+        #   ⚠️ 覆盖面**只到 `##` 级**：`###` 及更深的子标题**不进目录也不判**（本仓的目录只索引到二级）；
+        #     另有一处**已知盲区**：新增一份带 `## 目录` 的文件时，本臂**不知道**它里面哪些小节是
+        #     "有意不进目录"的 ⇒ 会当缺失判红，需人工确认后再决定是否补豁免（⛔ 别据此说"已全覆盖"）。
         #   ⭐ **配对方式：按锚点解析结果（`_idxs`）判，⛔ 不按 TOC 标签的前导整数判** ——
         #     标签**允许缩写**（`- [\`Wb.request\`](#1-wbrequest)` 就是合法写法，去掉后半句也不算错），
         #     按整数配对会把这种合法写法判成"第 1 节没有目录条目"（假红）；而且 `3.1` 这类**子条目**
@@ -3593,20 +3650,33 @@ def _doc_guard_xfile_pt(docs, doc_fail, real_out):
             if not _tch:
                 continue
             _tc_k += 1                      # 与 `_body` 同一构造顺序 ⇒ 下标一一对应
-            if re.match(r"^##\s*\d+\s*[.、]", _tcx):
+            if re.match(r"^##\s", _tcx):    # 二级标题（`###` 起不匹配：`##` 后须紧跟空白）
                 _tc_num_bi.append((_tc_k, _tch.group(1)))
         for _tcbi, _tctitle in _tc_num_bi:
+            # 一次性豁免清单：**标题有意不进目录**的小节，逐条写全（文件 ＋ 标题逐字，锚点式）。
+            #   ⛔ 不建"免目录登记机制" —— 那等于写死名单（与"⛔ 不许退化成写死的名单"那条明令相撞），
+            #     且每条都要人填，与"制度靠人记"同病 ⇒ 只豁免现网这几处，⛔ 不预留扩充机制。
+            if (_nm, _tctitle) in _TOC_HEAD_EXEMPT:
+                continue
             _tcc = _idxs.count(_tcbi)
             if _tcc == 0:
-                doc_fail.append("17j-13 %s 小节「%s」**没有目录条目**（每个 `## N.` 须恰好一条）"
+                doc_fail.append("17j-13 %s 小节「%s」**没有目录条目**（每个 `##` 级小节须至少一条；"
+                                "若是有意不进目录，请登记到模块级 `_TOC_HEAD_EXEMPT`）"
                                 % (_nm, _tctitle[:28]))
             elif _tcc > 1:
                 doc_fail.append("17j-13 %s 小节「%s」的目录条目**重复 %d 条**"
                                 % (_nm, _tctitle[:28], _tcc))
 
+    # 登记表自校验：登记了却读不到的 ⇒ 报红（⛔ 不许静默跳过）。**没有它**，文件一改名，
+    #   `_TOC_REQUIRED` 就悄悄变成一条什么都管不着的死条目 —— 而"少判一份"不会有任何症状。
+    _toc_absent = sorted(_TOC_REQUIRED - set(docs))
+    if _toc_absent:
+        doc_fail.append("17j-13 目录登记表里有读不到的文件：%s —— 改名了？（⛔ 别把死条目留在表里）"
+                        % _toc_absent)
+
     # 17j-14 把 17j-6 扩到**围栏块**：围栏里以 `[note]/[warn]/[FAIL]/[ok]` 开头的**示例输出**，
     #   其文案前缀也必须在工具**真跑出来的输出**里找得到（oracle 同 17j-6：来自 `_real_out_corpus()`）。
-    #   扫描面 = `docs` 的围栏块（**含** 11 份正文 md，**不含 `CHANGELOG.md`** —— 它是历史记录，
+    #   扫描面 = `docs` 的围栏块（**含**全部正文 md，**不含 `CHANGELOG.md`** —— 它是历史记录，
     #     按写入时的事实记，与全族其它臂的"历史豁免"口径一致；**也不含 `examples/README.md`**）。
     #     ⚠️ **跳 `CHANGELOG.md`**：本臂若**无**该跳过 ⇒ CHANGELOG 的历史围栏输出会按**当前** `xwl.py`
     #       校验（历史文案早于现实现的即被误判）。现围栏内标签行实测为 0 ⇒ 属**潜伏误报源**，非现网红。
@@ -3982,6 +4052,136 @@ def _src_line_ref_fails(root: str) -> list[str]:
 _ABSENT_S_PROBE = [False]
 
 
+# ---- 入口形态守卫（并入 `17j` 家族、⛔ 不开独立编号）----
+#   起因（不这么做会漏什么）：工具失败时打印的"重跑"提示是现场**唯一自救手段**，而它一旦写裸相对
+#     路径（`python scripts/xwl.py …`），调用方的 cwd 是业务工程时必然找不到脚本；路径带空格／中文
+#     又不加引号时还粘不上。同一条口径在文档里另有 40 余处，逐处靠人抄对没人拦得住。
+#   ⛔ 无独立守卫编号的理由：块名基线要求"基线外新块名须在 `CHANGELOG.md` 被独立提及"，而**未发布的
+#     批不许写版本段** ⇒ 开号当场撞红（制度互斥、不是漏做）。⇒ **已知盲区**：整段删掉不会被块名基线抓到。
+#   ⚠️ `examples/README.md` **有意不进** `_doc_names`（该文件有运行期 f-string 拼出的示意输出，纳入会让
+#     8 个文档守卫的逐字比对臂误报）⇒ 它的调用形态由本臂**独立只读**判，⛔ 别把它塞进 `_doc_names`。
+#   ⚠️ 扫描面 ＝ 文档守卫的扫描面（`_doc_names`，**排除 `CHANGELOG.md`** —— 历史记录按写入时的事实记）
+#     ＋ `examples/README.md`（后者**有意不进** `_doc_names`：它有运行期 f-string 拼出的示意输出，
+#     纳入会让 8 个文档守卫的逐字比对臂误报）。⛔ 别把 `examples/README.md` 塞进 `_doc_names`。
+#   ⚠️ 已知盲区：本臂**没有**"某份文件必须先抽到样例"的要求（只有"全仓一条都抽不到"才判红）——
+#     把命令样例整体下沉到 `references/` 是**被预算守卫鼓励**的动作，逼每份文件必须有样例会与之相撞。
+_ENTRY_SKIP = ("CHANGELOG.md",)
+
+# 入口形态的**唯一判据**：`python` 家族命令里，`scripts/xwl.py` 前必须有**路径前缀**
+#   （占位符 `<…>` ／ Unix 绝对 `/…` ／ 盘符绝对 `X:…`）。写成"整条命令能命中本正则"而非手工找斜杠，
+#   是因为手工写法要先剥引号、再处理空格与反斜杠，三处任一漏掉就假绿（实测栽过两处）。
+_ENTRY_OK_RE = re.compile(r"""(?:\A|[\s"'])(?:<[^>\n]*>|/|[A-Za-z]:)[^"\n]*?/scripts/xwl\.py""")
+
+# `python` 家族的命令头：`python`／`python3`／`py -3`／`uv run python`。
+#   ⚠️ 只认 `python ` 会让后三种写法**完全不在射程内**（实测抽取数 0 ⇒ 绿得毫无道理）。
+_ENTRY_HEAD_RE = re.compile(
+    r"^\$?\s*(?:python[\d.]*|py(?:\s+-[\d.]+)?|uv\s+run(?:\s+python[\d.]*)?)\s+")
+
+
+def _entry_cmds(line: str) -> list:
+    """从一行里抽「以 `python` 家族命令起头的调用原文」（容忍 `$ ` 提示符、`> ` 引用块、行内反引号）。"""
+    _t = line.strip()
+    if _t.startswith(">"):
+        _t = _t.lstrip(">").strip()
+    _out = []
+    if _ENTRY_HEAD_RE.match(_t):
+        _out.append(_t)
+    for _m in re.finditer(r"`([^`]+)`", _t):
+        _c = _m.group(1).strip()
+        if _ENTRY_HEAD_RE.match(_c):
+            _out.append(_c)
+    return _out
+
+
+def _entry_prefix_missing(cmd: str) -> bool:
+    """命令里的 `scripts/xwl.py` 是否**缺路径前缀**（`<…>` 占位符／Unix 绝对／盘符绝对都不算缺）。
+
+    ⚠️ 两处归一化缺一即错：① **反斜杠视同 `/`**（Windows 写法；否则 `scripts\\xwl.py` 会被上层的
+    "含 `scripts/xwl.py`"过滤整条跳过 ⇒ 判绿）；② **引号包裹必须放行**（`python "<skill根>/scripts/xwl.py"`
+    正是文档教人"路径带空格就加引号"时的写法，不放行会假红）。
+    """
+    _c = cmd.replace("\\", "/")
+    if "scripts/xwl.py" not in _c:
+        return False
+    return not _ENTRY_OK_RE.search(_c)
+
+
+def _entry_form_problems(root: str) -> list:
+    """入口形态：① `xwl.py` 两处提示的实际打印形态 ② 文档里的 `python …xwl.py` 是否都带路径前缀。"""
+    _bad = []
+    # ① 静态面：源码里任何 `python [-B] <前缀>scripts/xwl.py` 都必须带前缀（裸形态即旧文案回潮）
+    try:
+        with io.open(os.path.join(HERE, "xwl.py"), encoding="utf-8") as _fh:
+            _src = _fh.read()
+    except OSError as _exc:
+        _bad.append("入口形态：读不出 scripts/xwl.py（%s）—— 报错，不算「没命中」" % _exc)
+        _src = ""
+    for _m in re.finditer(r"python\s+(?:-B\s+)?(\S*?)scripts[/\\]xwl\.py", _src):
+        if not _m.group(1):
+            _bad.append("入口形态 scripts/xwl.py：提示文案仍写**裸相对路径**（`%s`）—— 调用方 cwd 不是"
+                        " skill 根，照抄必然找不到脚本；须走 `cmd_hint()` 打成绝对路径"
+                        % _m.group(0).strip()[:70])
+    # ⚠️ 计数要**排除 `def cmd_hint(` 那一行**：把 `def` 也算进来时，"def ＋ 1 处调用"就能满足 `< 2`，
+    #   另一处退回自拼路径不会红（实测计数 3 = 1 个 def ＋ 2 处调用）。
+    _hint_calls = len([_l for _l in _src.splitlines()
+                       if "cmd_hint(" in _l and not _l.lstrip().startswith("def ")])
+    if _src and _hint_calls < 2:
+        _bad.append("入口形态 scripts/xwl.py：`cmd_hint(` 的**调用**只有 %d 处（应为 2）—— 两处提示"
+                    "（重名报告 / diffguard 重跑）必须都经它拼入口，别各拼一份" % _hint_calls)
+    # ② 运行时面：`cmd_hint()` 打出来的实际形态（绝对路径 ＋ `scripts/xwl.py` 尾段 ＋ 可被 shell 切开）
+    for _tail in ("itemids <file> --dups-only", "diffguard <文件>"):
+        try:
+            _h = xwl.cmd_hint(_tail)
+        except AttributeError as _exc:
+            _bad.append("入口形态：`xwl.cmd_hint()` 不见了（%s）—— 两处提示改回自拼路径就等于把"
+                        "「换 cwd 就粘不上」这个病根带回来" % _exc)
+            break
+        if "scripts/xwl.py" not in _h:
+            _bad.append("入口形态：提示 `%s` 里没有 `scripts/xwl.py` 尾段（入口形态与文档口径脱钩）"
+                        % _h[:70])
+            continue
+        _tok = [t for t in shlex.split(_h) if t.endswith("scripts/xwl.py")]
+        if not _tok:
+            _bad.append("入口形态：提示 `%s` 切不出脚本路径 —— 引号形态不可粘贴" % _h[:70])
+        elif not os.path.isabs(_tok[0]):
+            _bad.append("入口形态：提示里的脚本路径不是绝对路径（%s）" % _tok[0])
+        elif not os.path.exists(_tok[0]):
+            _bad.append("入口形态：提示里的脚本路径在本机不存在（%s）" % _tok[0])
+    # ③ 文档面：扫描面 ＝ 文档守卫的扫描面（排除 CHANGELOG）＋ examples/README.md
+    _targets = [n for n in _doc_names(root) if n not in _ENTRY_SKIP]
+    if "examples/README.md" not in _targets:
+        _targets.append("examples/README.md")
+    _cnt_all = 0
+    for _rel in _targets:
+        try:
+            with io.open(os.path.join(root, _rel.replace("/", os.sep)), encoding="utf-8") as _fh:
+                _ls = _fh.read().splitlines()
+        except (OSError, UnicodeDecodeError) as _exc:
+            _bad.append("入口形态：读不出 %s（%s: %s）—— 报错，不算「没命中」"
+                        % (_rel, type(_exc).__name__, _exc))
+            continue
+        for _ln, _l in enumerate(_ls):
+            for _c in _entry_cmds(_l):
+                if "scripts/xwl.py" not in _c:
+                    continue
+                _cnt_all += 1
+                # 同行 `cd <…> && python …` 的写法放行（cwd 由这一行自己给定，不是"靠环境"）。
+                # ⚠️ ⛔ **不做"围栏块里有 cd 行就整块放行"**：那个豁免不校验 cd 目标，块里加一句
+                #   `cd /tmp/demo` 就能把整块裸形态放过（仓内就有 `cd /tmp/flatdemo` 这种写法）。
+                if re.search(r"\bcd\s+\S+\s*&&", _c):
+                    continue
+                if _entry_prefix_missing(_c):
+                    _bad.append("入口形态 %s:%d `%s` 用了**裸相对路径** —— 调用方 cwd 多半是业务工程，"
+                                "须写成 `<skill根>/scripts/xwl.py` 或绝对路径"
+                                % (_rel, _ln + 1, _c[:60]))
+    # 只有"**全仓一条都抽不到**"才判红：单份文件 0 条是**正常**的（把命令样例下沉到 references/
+    #   是预算守卫鼓励的动作，逼每份文件必须有样例会跟它相撞）。
+    if not _cnt_all:
+        _bad.append("入口形态：全部 %d 份文档里一条 `python …xwl.py` 调用样例都没抽到 ⇒ 本项无法判定，"
+                    "判红（抽取面可能已失效：提示符／命令头／反引号形态变了）" % len(_targets))
+    return _bad
+
+
 def _check_docs(tmp, node, failures, write) -> None:
     """文档一致性守卫（跨文件）：重复表格 / 引用可解析 / 格式 / 自称数字 / 索引与节号（第 17~18 组）"""
     # 薄编排器：只建共享状态并依次调四段（⛔ 别往这里加判据 —— 加了就没有行数上限保护了）。
@@ -4274,6 +4474,8 @@ def _docs_xfile_consistency(_S) -> None:
     #   数值侧**从代码取**（`checks = {…}` 的集合长度），⛔ 不在这里写死 9。
     with open(os.path.join(HERE, "xwl.py"), "r", encoding="utf-8") as _fh:
         _chk_m = re.search(r"checks = \{([0-9,\s]+)\}", _fh.read())
+    # 入口形态（工具两处提示 ＋ 三份文档的调用形态）：见模块级 `_entry_form_problems` 的注释。
+    doc_fail.extend(_entry_form_problems(root))
     _S.update({_n: _v for _n, _v in locals().items()
                    if _n in ('_base', '_body', '_chk_m', '_fence', '_fh', '_got', '_i', '_j', '_l', '_lab', '_m', '_miss', '_rm_txt', '_sk_txt', '_txt', 'doc_fail', 'docs', 'i', 'l', 'ls', 'nm', 'root')})
 
@@ -4931,7 +5133,7 @@ def _docs_layers_and_distribution(_S) -> None:
     #    ⇒ 见**模块级同名常量**（本文件 `_check_docs` 之前）；本函数只引用。
     # ⚠️ **豁免面是「结构判据」**：不写死名单，由 `_chron_exempt(root)` 现算 ——
     #    {`CHANGELOG.md`, `metadata.json`} ∪ `metadata.json` 的 `layers` 里登记为 `evidence` 的文件
-    #    （唯一真源在打包元数据，18 份参考材料的首行声明已删）⇒ 拆分后新增的依据层文件**自动**进豁免面；
+    #    （唯一真源在打包元数据，各份参考材料的首行声明已删）⇒ 拆分后新增的依据层文件**自动**进豁免面；
     #    把某份的 `layers` 值改回 `spec` ⇒ 该份**立刻失豁免**（可注入验证）。
     _chron_ex = _chron_exempt(root)
     _shipped, _ = _git_scan_scope(root)
@@ -5001,6 +5203,53 @@ def _docs_layers_and_distribution(_S) -> None:
     doc_fail.extend(_src_line_ref_fails(root))
     _S.update({_n: _v for _n, _v in locals().items()
                    if _n in ('_fh', '_hit', '_i', '_l', '_m', '_n', '_nogit_arms', '_probe', '_r', '_rel')})
+
+
+# ---- 函数体行数上限（**机械断言**，⛔ 不是注释里那句"约定 ≤400 行"）----
+#   ⭐ 位置约束：本段**必须在受管函数的函数体之外**。它量的 `_CAP_FNS` 里就有 `_docs_tail_scaffold`
+#     自己 ⇒ 写进任何一个受管函数体内即**自指**（判据住在被它自己限制的函数里）：函数长到 399 行、
+#     上限 400 时，往那一段**加第一行就顶穿自己的上限**，而现场报错只会说"函数太长"，
+#     与真实原因（判据占了自己的额度）无关。
+#   ⚠️ 搬动时⛔ 不许改判据语义，也⛔ 不许"顺手"调 `_FN_CAP`。
+#   起因（不这么做会漏什么）：这类"该拆了"的约定只写在注释里 ⇒ 没人量、也没人拦，
+#     实测 `_check_docs` 一路长到 1200+ 行；等它长回来了再拆，成本远高于现在就钉一条上限。
+#   量法：`ast` 的 `end_lineno - lineno + 1`（⛔ 不是数空行/注释的近似值）。
+#   ⚠️ **`_check_new_guards` 薄壳（13 行）不入本表**；但它那 6 个判据族子函数**现已入表** ——
+#     拆分只治"单函数过长"，治不了"子函数各长一截、无人拦"：`_ng_check_controls` 381 行、
+#     `_ng_params_defaults` 337 行，都在 400 之下却没人管 ⇒ 纳管当场仍是**绿**，价值是防反弹。
+_FN_CAP = 400
+_CAP_FNS = ("_check_docs", "_docs_xfile_consistency", "_docs_numbers_and_tables", "_docs_layers_and_distribution", "_docs_tail_scaffold", "_check_subcommands",
+            "_ng_cli_readonly", "_ng_check_controls", "_ng_contract_and_unit", "_ng_write_overwrite", "_ng_params_defaults", "_ng_platform",
+            # ⚠️ `_doc_guard_xfile_pt` 是 17j-12／13／14 ＋「该有目录却没有」四臂的宿主，一直在长
+            #   （216 → 242 行）却**不在本表** ⇒ "防止反弹"在这条臂上是空的。纳管当场仍是绿，价值就是防反弹。
+            "_doc_guard_xfile_pt")
+
+
+def _fn_cap_check(doc_fail) -> None:
+    """量 `_CAP_FNS` 里每个模块级函数的行数，超 `_FN_CAP` 就把名字与行数写进 `doc_fail`。"""
+    import ast as _ast          # 本判据专用：量函数体行数（模块头没有 import ast，就近引入）
+    try:
+        _cap_tree = _ast.parse(io.open(os.path.join(HERE, "selftest.py"), encoding="utf-8").read())
+        _cap_hit, _cap_seen = [], set()
+        for _cn in _cap_tree.body:
+            if isinstance(_cn, _ast.FunctionDef) and _cn.name in _CAP_FNS:
+                _cap_seen.add(_cn.name)
+                _cap_n = _cn.end_lineno - _cn.lineno + 1
+                if _cap_n > _FN_CAP:
+                    _cap_hit.append("%s %d 行" % (_cn.name, _cap_n))
+        # ⭐ 两条判定**各自独立**（⛔ 不许写成 `elif`）：集合不一致说明"有函数改名/漏登记"，
+        #   超标说明"有函数该拆了"，是**两件事**，可能同时成立。写成 `elif` 时前者成立就不报后者 ⇒
+        #   现场看到"量不到这些函数"、却看不到"顺便还有一个已经 500 行"。
+        #   ⚠️ 唯一能证明分支已拆的形态是**联合注入**（两个条件同时成立 ⇒ 两条都报）：单独注入任一条
+        #   都证不了分支已拆 —— 撑爆时集合一致、走 `elif` 照样报，两条都绿。
+        if sorted(_cap_seen) != sorted(_CAP_FNS):
+            doc_fail.append("函数行数上限：量不到这些函数（改名**或不在模块顶层**了？）：%s"
+                            % sorted(set(_CAP_FNS) - _cap_seen))
+        if _cap_hit:
+            doc_fail.append("函数行数上限：%d 个函数超过 %d 行（%s）—— 该拆了，⛔ 别把上限调高"
+                            % (len(_cap_hit), _FN_CAP, "；".join(_cap_hit)))
+    except (OSError, SyntaxError) as _cap_exc:  # noqa: BLE001
+        doc_fail.append("函数行数上限：读不了或解析不了 selftest.py（%s）—— 报错，不算通过" % _cap_exc)
 
 
 def _docs_tail_scaffold(_S) -> None:
@@ -5199,7 +5448,7 @@ def _docs_tail_scaffold(_S) -> None:
     #     机械选取 —— 条目缺失 / 值写错时那些守卫会**静默选错对象**（漏扫或误红），而单看它们的绿行看不出来，
     #     故把「条目齐不齐、值合不合法、有没有多出来的键」单列一块钉住。
     #     ⚠️ 扫描面**动态**取（遍历 `references/` 实际文件），⛔ 不许写死清单 —— 否则新文件对本块又静默隐形。
-    #     ⚠️ 本条**只认** `metadata.json`：层归属的唯一真源在那一处（18 份参考材料的首行声明已删），
+    #     ⚠️ 本条**只认** `metadata.json`：层归属的唯一真源在那一处（各份参考材料的首行声明已删），
     #       故这里不再读任何正文首行。
     #     ⭐ **判定补强（堵「自授豁免」）**：光判「值合法」不够 —— 把某份**规格层**文件的 `layers` 值改成
     #       `evidence` 即可悄悄拿到编年三臂全豁免。故 `evidence` 须有**结构佐证**：stem 落在 `_AUTH_STEMS`
@@ -5300,34 +5549,9 @@ def _docs_tail_scaffold(_S) -> None:
     if _blk_bad:
         doc_fail.append(_blk_bad)
 
-    # 函数体行数上限（**机械断言**，⛔ 不是注释里那句"约定 ≤400 行"）：
-    #   起因（不这么做会漏什么）：这类"该拆了"的约定只写在注释里 ⇒ 没人量、也没人拦，
-    #     实测 `_check_docs` 一路长到 1200+ 行；等它长回来了再拆，成本远高于现在就钉一条上限。
-    #   量法：`ast` 的 `end_lineno - lineno + 1`（⛔ 不是数空行/注释的近似值）。
-    #   ⚠️ **`_check_new_guards` 薄壳（13 行）不入本表**；但它那 6 个判据族子函数**现已入表** ——
-    #     拆分只治"单函数过长"，治不了"子函数各长一截、无人拦"：`_ng_check_controls` 381 行、
-    #     `_ng_params_defaults` 337 行，都在 400 之下却没人管 ⇒ 纳管当场仍是**绿**，价值是防反弹。
-    _FN_CAP = 400
-    _CAP_FNS = ("_check_docs", "_docs_xfile_consistency", "_docs_numbers_and_tables", "_docs_layers_and_distribution", "_docs_tail_scaffold", "_check_subcommands",
-                "_ng_cli_readonly", "_ng_check_controls", "_ng_contract_and_unit", "_ng_write_overwrite", "_ng_params_defaults", "_ng_platform")
-    import ast as _ast          # 本块专用：量函数体行数（模块头没有 import ast，就近引入）
-    try:
-        _cap_tree = _ast.parse(io.open(os.path.join(HERE, "selftest.py"), encoding="utf-8").read())
-        _cap_hit, _cap_seen = [], set()
-        for _cn in _cap_tree.body:
-            if isinstance(_cn, _ast.FunctionDef) and _cn.name in _CAP_FNS:
-                _cap_seen.add(_cn.name)
-                _cap_n = _cn.end_lineno - _cn.lineno + 1
-                if _cap_n > _FN_CAP:
-                    _cap_hit.append("%s %d 行" % (_cn.name, _cap_n))
-        if sorted(_cap_seen) != sorted(_CAP_FNS):
-            doc_fail.append("函数行数上限：量不到这些函数（改名了？）：%s"
-                            % sorted(set(_CAP_FNS) - _cap_seen))
-        elif _cap_hit:
-            doc_fail.append("函数行数上限：%d 个函数超过 %d 行（%s）—— 该拆了，⛔ 别把上限调高"
-                            % (len(_cap_hit), _FN_CAP, "；".join(_cap_hit)))
-    except (OSError, SyntaxError) as _cap_exc:  # noqa: BLE001
-        doc_fail.append("函数行数上限：读不了或解析不了 selftest.py（%s）—— 报错，不算通过" % _cap_exc)
+    # 函数体行数上限：判据本体在模块级 `_fn_cap_check`（⛔ 不许内联回函数体 —— 那会让判据住在
+    #   被它自己限制的函数里，往这段加一行就顶穿自己的上限）。
+    _fn_cap_check(doc_fail)
 
     if doc_fail:                # ⚠️ 截断必须显式（不说"还有 N 条"⇒ 读者以为"就这些"）。⛔ 别再加行。
         failures.extend(doc_fail[:12] + (["文档守卫：另有 %d 条失败**未展开**（上面只列前 12 条）" % (len(doc_fail) - 12)] if len(doc_fail) > 12 else []))
@@ -5349,7 +5573,8 @@ def _docs_tail_scaffold(_S) -> None:
               "**规模数字出自权威层** / **`--help` 行数上限（顶层 36 / 子命令实测+5）** / "
               "**支持矩阵 OS 行（SKILL 适用范围表 + metadata.json limitations）** / "
               "**跨文件节号指针可解析（17j-12）** / **目录顺序与实际小节一致（17j-13）** / "
-              "**围栏块输出文案符实（17j-14）** / **行号锚点四形（现值面 0 命中）** / **目录条目完整性（每个 `## N.` 恰好一条）**"
+              "**围栏块输出文案符实（17j-14）** / **行号锚点四形（现值面 0 命中）** / "
+              "**目录条目完整性（每个 `##` 级小节至少一条；有意不进目录的走模块级豁免清单）**"
               % (_blk_total, sum(_DOC_GUARD_BLOCK_BASE.values()))
               + _nogit_suffix)
 
@@ -7024,7 +7249,7 @@ def _run_block(name: str, fn, node) -> list[str]:
     每块独占一个 `mkdtemp`（并行时天然隔离；串行档也用它 ⇒ 两档语义一致，
     互不依赖 tmp 中的文件）。跑完删临时目录（失败也不抛）。
     """
-    tmp = tempfile.mkdtemp(prefix="xwl_selftest_%s_" % name)
+    tmp = ""                    # 先占位：`mkdtemp` 进 try 之后，失败路径也拿得到"还没建"这个事实
     failures: list[str] = []
 
     def write(nm: str, text: str, bom: bool = False) -> str:
@@ -7036,9 +7261,34 @@ def _run_block(name: str, fn, node) -> list[str]:
         return p
 
     try:
+        # ⚠️ `mkdtemp` 也必须在 try 里：建临时目录失败（配额／权限）时，串行档会**整进程崩、
+        #   无 `[FAIL]`、无汇总行** —— 与"块内抛异常"是同一个可观测性病根，只修一半等于没修。
+        tmp = tempfile.mkdtemp(prefix="xwl_selftest_%s_" % name)
         fn(tmp, node, failures, write)
+    # ⛔ `try/finally` 少了 `except` ⇒ 块内抛出的异常会**穿透** `_run_serial`／`main`：
+    #   `failures` 里已收集的内容与**汇总行**都不打印，现场只剩一个 `rc≠0` 且没有任何解释。
+    #   `SystemExit` 属 `BaseException`（`except Exception` 也接不住）⇒ 必须单独接一支。
+    #   ⚠️ 兜底**只负责让它可读**，⛔ 不许把异常改判成通过。
+    #   ⚠️ 文案**不写"子进程"、也不编一个 rc**：串行档（`--jobs 1`）里根本没有子进程，
+    #     写"子进程异常退出（rc=1）"是假话（`SystemExit(0)` 更会打出"rc=0"这种自相矛盾的串）。
+    except SystemExit as exc:
+        failures.append("块 %s 内抛出 SystemExit（code=%s）—— 已记成失败，⛔ 不是通过"
+                        % (name, exc.code))
+    except KeyboardInterrupt:
+        # Ctrl-C 必须还能打断：记成"块失败"再接着跑下一块，等于把中断变成"再按 N 次"。
+        # ⚠️ 本支**无法用注入测**（测试进程会被自己打断）⇒ 它的保障只有这段注释与人工复核。
+        raise
+    except BaseException as exc:        # noqa: BLE001
+        # 先留调用栈再记一行：只记 `type: msg` 时，`RecursionError`／`MemoryError` 这类
+        #   "其实已经崩了"的情形会退化成一行可读的失败，后面 13 个块带着坏掉的共享状态继续跑，
+        #   最终"FAIL 40 项"把"崩过"这件事埋掉。
+        traceback.print_exc()
+        failures.append("块 %s 内抛出 %s: %s" % (name, type(exc).__name__, exc))
+        if isinstance(exc, (MemoryError, SystemError)):
+            raise                       # 这两种不是"这个块失败"，是进程状态已不可信 ⇒ 交回上层
     finally:
-        _rmtree_force(tmp)      # ⛔ 不留 tmp（直接 return 的写法每跑一次漏一批）
+        if tmp:
+            _rmtree_force(tmp)      # ⛔ 不留 tmp（直接 return 的写法每跑一次漏一批）
     return failures
 
 

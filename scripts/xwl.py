@@ -36,6 +36,7 @@ import functools
 import json
 import os
 import re
+import shlex
 import shutil
 import subprocess
 import sys
@@ -2397,6 +2398,46 @@ class ItemIdError(KeyError):
         return self.args[0] if self.args else ""
 
 
+def script_entry() -> str:
+    """本脚本的**绝对**路径（尾段 `scripts/xwl.py`，统一正斜杠）—— 提示文案里给人照抄的入口形态。"""
+    return os.path.abspath(__file__).replace("\\", "/")
+
+
+_SAFE_ARG_RE = re.compile(r"\A[A-Za-z0-9_./:@%+=,-]+\Z")
+
+
+def quote_arg(s) -> str:
+    """把一个命令行参数包成**可直接粘进 shell** 的形态。三档：
+
+    ① 全是不带歧义的字符 ⇒ **原样**（不无谓加引号）；
+    ② 含 `"` ／ `$` ／ 反引号 ／ **以反斜杠结尾** ⇒ 用 **POSIX 单引号**（`shlex.quote`）；
+    ③ 其余（空格／中文／中途反斜杠）⇒ **双引号包裹**（bash／cmd／PowerShell 三处都认）。
+
+    起因：失败提示里的"重跑"命令是现场**唯一自救手段**，拼错就等于没有。
+    ⛔ 别写成"一套引号通吃三个 shell"——两类输入会当场坏：
+      · `x\\` 用双引号包成 `"x\\"` ⇒ **闭引号被尾反斜杠吃掉**（POSIX 解析直接报未闭合）；
+      · `a"b` 用"双引号 + 把 `"` 翻倍"成 `"a""b"` ⇒ 在 bash 里被拼成 `ab`（`""` 是拼接、不是转义）。
+    ⚠️ 档 ② 的产物是 POSIX 形态：**cmd 里请改用双引号**（或先把参数里的引号去掉）。
+    """
+    t = "" if s is None else str(s)
+    if not t:
+        return '""'
+    if _SAFE_ARG_RE.match(t):
+        return t
+    if '"' in t or "$" in t or "`" in t or t.endswith("\\"):
+        return shlex.quote(t)
+    return '"%s"' % t
+
+
+def cmd_hint(tail: str) -> str:
+    """`python -B <本脚本绝对路径> <tail>` —— 提示里的**可粘贴**命令（⛔ 不写裸相对路径）。
+
+    起因：调用方的 cwd 多半是**业务工程**（不是 skill 根），裸 `scripts/xwl.py` 在那种 cwd 下
+    必然找不到脚本；而提示恰好出现在失败现场，走不通就等于没有自救手段。
+    """
+    return "python -B %s %s" % (quote_arg(script_entry()), tail)
+
+
 def format_itemid_candidates(name, hits, scope_desc="当前范围", all_names=None) -> str:
     """重名时输出「候选清单 + 建议值」——把选择权交回给用户，工具不猜顺序。"""
     taken = set(all_names or ())
@@ -2436,7 +2477,7 @@ def format_itemid_candidates(name, hits, scope_desc="当前范围", all_names=No
                 "[" + ", ".join(json.dumps(x) if isinstance(x, str) else str(x) for x in p) + "]",
                 json.dumps(s, ensure_ascii=False)))
     lines.append("")
-    lines.append("全量重名报告（含分级与建议）：python scripts/xwl.py itemids <file> --dups-only")
+    lines.append("全量重名报告（含分级与建议）：" + cmd_hint("itemids <file> --dups-only"))
     return "\n".join(lines)
 
 
@@ -4429,8 +4470,9 @@ def cmd_diffguard(args) -> int:
                 print(f"          - {safe_relpath(_x)}")
             if len(_left) > 20:
                 print(f"          …另有 {len(_left) - 20} 个（完整清单即本目录入参的展开结果）")
-            print("        重跑：python -B scripts/xwl.py diffguard %s --rev %s%s"
-                  % (" ".join('%s' % _t for _t in args.targets), args.rev,
+            print("        重跑：%s --rev %s%s"
+                  % (cmd_hint("diffguard " + " ".join(quote_arg(_t) for _t in args.targets)),
+                     quote_arg(args.rev),
                      " --strict" if args.strict else ""))
             return 2
         if not ok:
@@ -5580,7 +5622,7 @@ def cmd_params(args) -> int:
         print(line)
 
     if direct:
-        # `#80`：**名不再误标** —— 该清单由 `_REQ_URL_RE`（`:4734`，只看 `url:` ＋ `m?xwl=`、
+        # `#80`：**名不再误标** —— 该清单由 `_REQ_URL_RE`（只看 `url:` ＋ `m?xwl=`、
         #   **不区分调用方**）喂 ⇒ 里面 `Wb.request` / `Wb.open` / `store.load` 三处**都有**。
         #   ⚠️ ⛔ **不含** store 的 `configs.url` 键 —— 该正则要求 `url` 后**直接**接 `:`，
         #   而 store 的 JSON 键形态 `"url":` **不匹配**（store 配置的 url 走另一条收集路径）。
