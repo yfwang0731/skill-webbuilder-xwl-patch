@@ -188,9 +188,19 @@ def _run_cli(argv: list) -> tuple:
     """把命令经**真实 CLI**（子进程跑 `xwl.py`）执行，返回 `(rc, stdout, stderr)`。
 
     起因（按守卫维护纪律写清）：命令级断言若走 `_run(xwl.cmd_*)` **直调**，一旦被测行为
-    **坏到会抛异常**，异常会冲出 `_run` **把整块打崩** ⇒ 红行变成「块 … 子进程异常退出」，
-    那条**定向断言根本没跑到** —— 这叫 **"杀了 ≠ 守住了"**（实测：`events --outdir` 不再自建目录
-    时抛 `XwlWriteError`，整块崩，而"events rc 应 0"那条断言从未执行）。
+    **坏到会抛异常**，异常会冲出 `_run` ⇒ 那条**定向断言根本没跑到** —— 这叫 **"杀了 ≠ 守住了"**
+    （实测：`events --outdir` 不再自建目录时抛 `XwlWriteError`，"events rc 应 0"那条断言从未执行）。
+    ⚠️ **机制纠偏**：`_run_block` 现有三支 `except`（`SystemExit`／`KeyboardInterrupt`／`BaseException`）
+    ⇒ 普通异常与 `SystemExit` **被兜住**、记成「块 X 内抛出 …」后**接着跑下一块**（**仅非 re-raise
+    路径**）；"异常把整块打崩"那套形态在**这条路径上**不成立（并行档下 worker 硬崩／re-raise 仍会以
+    「块 X 的子进程异常退出（rc=N）」报出：点名形式不同、**点名效果相同**）——
+    所以**走子进程 CLI 的理由不是"它会崩"**，而是下面那两条（真实退出码 ＋ 进程隔离）。
+    但 **"定向断言仍未跑到"照旧成立** —— 兜底只让失败可读，⛔ 不会替你跑那条断言。
+    ⚠️ 兜底并非全接：`KeyboardInterrupt` 是 **re-raise**（Ctrl-C 仍能打断整个自检）；
+    `MemoryError`／`SystemError` 也是 **re-raise** ⇒ **串行档**下这三**类异常**仍会整进程退出、
+    **连汇总行都没有**（异常**不落地成失败条目** —— `KeyboardInterrupt` 不 append，
+    `MemoryError`／`SystemError` 的 append 随异常一并丢弃 —— 现场只剩调用栈）
+    ⇒ 这三**类**不在"兜底让失败可读"之列，⛔ 别读成"所有异常都被兜住"。
     改走**子进程真 CLI** 后：
       · 拿的是**真实退出码**（含 `main()` 把 `XwlWriteError` → `rc=2` 的对外契约）；
       · **异常被进程隔离** —— 工具崩了也只是 `rc≠0` ＋ 文本，**红行必落在那条定向断言上**。
@@ -1165,8 +1175,13 @@ def _check_subcommands(tmp, node, failures, write) -> None:
     #   ⇒ 补命令级断言：`sql` 必须抽全（含键名含 `sql` 的 `totalSql`）、`events --outdir` 指向
     #   **不存在的新目录**须自建并成功、`dump` 必须**多行**（保"按加载器规则美化输出"的用途）。
     #   ⚠️ 三条一律经 `_run_cli(...)`（**子进程跑真 CLI**）取值 —— **不许**直调 `_run(xwl.cmd_*)`：
-    #     直调时被测行为一旦抛异常会**把整块打崩**（实测：`events --outdir` 不自建目录 ⇒
-    #     `XwlWriteError` 冲出 `_run` ⇒ 红行成"块 … 子进程异常退出"、下面那条断言**根本没跑到**）。
+    #     直调时被测行为一旦抛异常，异常冲出 `_run` ⇒ 下面那条**定向断言根本没跑到**
+    #     （实测：`events --outdir` 不自建目录 ⇒ `XwlWriteError`）。
+    #     ⚠️ 机制纠偏：`_run_block` 有兜底 ⇒ 普通异常／`SystemExit` 被兜住、红行**点名该块**
+    #       （「块 X 内抛出 …」；并行档 worker 硬崩／re-raise 则记「块 X 的子进程异常退出（rc=N）」）；
+    #       但 `KeyboardInterrupt`／`MemoryError`／`SystemError` 仍 re-raise ⇒ **串行档**下整进程退出、
+    #       连汇总行都没有（异常不落地成失败条目，只剩调用栈）⇒ ⛔ 别读成"所有异常都被兜住"。
+    #       而"定向断言仍未跑到"照旧成立 —— 兜底只让失败可读，⛔ 不替你跑断言。
     #     经 CLI 则拿**真实退出码**、异常被进程隔离 ⇒ 红行**必落在定向断言上**（见 `_run_cli` docstring）。
     ce_fail: list[str] = []
     _ce_obj = {"title": "ce页", "children": [
@@ -1319,8 +1334,8 @@ def _check_subcommands(tmp, node, failures, write) -> None:
         print("[ok]  folders：未登记/悬空检出、register 幂等且保键序保单行形态；缺 folder.json 时提示先建而非直接 --register")
 
     # ---- 15. paths 的「原路径」必须带 configs 层，照抄就该改对地方 ----
-    # 经 `_run_cli`（子进程真 CLI）取值：同 12b 的起因 —— 直调时被测行为一旦抛异常会把整块打崩、
-    #   定向断言没跑到；经 CLI 则异常被进程隔离、红行必落在下面两条"原路径带 configs 层"断言上。
+    # 经 `_run_cli`（子进程真 CLI）取值：同 12b 的起因 —— 直调时被测行为一旦抛异常，异常冲出 `_run`
+    #   ⇒ 定向断言没跑到；经 CLI 则异常被进程隔离、红行必落在下面两条"原路径带 configs 层"断言上。
     p_fail: list[str] = []
     _c15, out, _e15 = _run_cli(["paths", a_sql])
     if '["children", 0, "configs", "serverScript"]' not in out:
@@ -1620,7 +1635,7 @@ def _ng_cli_readonly(tmp, node, failures, write) -> None:
                            "expanded": False, "children": []}]},
         ]}]}, _p2)
     # 经 `_run_cli`（子进程真 CLI）取值：拿真实退出码、异常被隔离 —— 不许直调 `_run(xwl.cmd_*)`
-    # （同 12b 的起因：直调抛异常会把整块打崩、定向断言没跑到）。
+    # （同 12b 的起因：直调抛异常 ⇒ 定向断言没跑到；块级兜底只让失败可读）。
     _rc_on, _out_on, _err_on = _run_cli(["params", _p2, "--module-root", _r2, "--upstream"])
     _rc_off, _out_off, _err_off = _run_cli(["params", _p2, "--module-root", _r2])
     # ① 反查本体：必须反查到 demo/caller.xwl，并给出传入键。
@@ -2814,7 +2829,7 @@ _FENCE_FOUR_ARM_DIVISION = """\
    围栏只豁免「标题跳级」（`_fence % 2 == 0`）；表列数与行尾空白没有围栏条件 ⇒ 围栏内照判
    （两树对照实测：围栏内注入列数不齐的表，两树都报「表格本行 3 格、表头 2 格」）；闭合按 ``` 计数判。
 ② 承诺文案面（17j-6）—— 只扫 SKILL.md 全行（含围栏内），判行内反引号里
-   `[note]/[warn]/[FAIL]/[ok]` 前缀是否在 xwl.py 里存在。
+   `[note]/[warn]/[FAIL]/[ok]` 文案的**前 16 字**是否在**真跑语料**里存在（⛔ 不比 `xwl.py` 源码串）。
 ③ 跨文件指针面（本臂 17j-12）—— 扫 docs 全行（含围栏内）（遍历时跳过 CHANGELOG.md），
    判跨文件节号指针是否存在，零豁免。
 ④ 围栏内输出文案面（17j-14）—— 仅围栏内、仅裸以 `[note]/[warn]/[FAIL]/[ok]` 开头的行，
@@ -3236,7 +3251,7 @@ def _real_out_corpus(tmp: str) -> str:
     **源码串（含注释）**当期望：
     只要源码里**出现过**这段文字（**哪怕是注释、或一个永不执行的字符串常量**）就算"文案承诺成立"。
     ⇒ 那是**可判定的自证循环**：工具把文案改坏、文档同步改，判据恒真；纯注释也能满足它。
-    改法：期望值必须是工具**真的打印出来**的前缀 —— 于是注释与死字符串再也满足不了。
+    改法：期望值必须是工具**真的打印出来**的文本 —— `17j-6` 比前 16 字、`17j-14` 比整串 —— 于是注释与死字符串再也满足不了。
 
     ⚠️ 语料面**有意做窄**（只覆盖被这两条守卫引到的真实文案）；若将来文档开始承诺**新的**输出文案，
     需在下面**补一次真实调用**把该文案跑出来，否则守卫会报红 —— 这正是要的：承诺必须能被真跑复现。
@@ -3524,8 +3539,8 @@ def _doc_guard_xfile_pt(docs, doc_fail, real_out):
     #     ⚠️ 前提如实化（两树对照实测）：`§N.M` 由另一条引用守卫守、`§N`／`§中文数字` 由本函数「节号」臂守
     #       （两条都与围栏无关）⇒ 本臂的**净增只有两处**：`第N节`（**只认中文数字**，阿拉伯写法不触发）
     #       与紧贴文件名的「小节名」。实测（副本对照跑）围栏内指针误报面为 0 ⇒ 直接纳入、**不加任何豁免**。
-    #     ⚠️ 别照搬「围栏块输出文案符实」那条守卫的 `[:16]` 前缀法 —— 那条判「文案前缀在源码里存在」，
-    #       本守卫判「节号存在性」，不是同一个面。
+    #     ⚠️ 别照搬 `[:16]` 前缀法 —— 那是 `17j-6`（SKILL.md 行内反引号承诺文案，比对真跑语料）的判法；
+    #       围栏臂「围栏块输出文案符实」比的是整串。本守卫判「节号存在性」，不是同一个面。
     #   现状全绿（**含围栏内指针在内**全部解析）⇒ 纯**防回归**。
     #   ⚠️ **围栏四面分工表**（四条与「围栏」沾边的守卫，互不替代；改任一条先核那张表）
     #     已**移出函数体**（#15 减负）⇒ 见模块级常量 `_FENCE_FOUR_ARM_DIVISION`（本文件 `_check_docs` 之前）。
@@ -3675,21 +3690,23 @@ def _doc_guard_xfile_pt(docs, doc_fail, real_out):
                         % _toc_absent)
 
     # 17j-14 把 17j-6 扩到**围栏块**：围栏里以 `[note]/[warn]/[FAIL]/[ok]` 开头的**示例输出**，
-    #   其文案前缀也必须在工具**真跑出来的输出**里找得到（oracle 同 17j-6：来自 `_real_out_corpus()`）。
+    #   其文案**整串**也必须在工具**真跑出来的输出**里找得到（oracle 同 17j-6：来自 `_real_out_corpus()`）。
     #   扫描面 = `docs` 的围栏块（**含**全部正文 md，**不含 `CHANGELOG.md`** —— 它是历史记录，
     #     按写入时的事实记，与全族其它臂的"历史豁免"口径一致；**也不含 `examples/README.md`**）。
     #     ⚠️ **跳 `CHANGELOG.md`**：本臂若**无**该跳过 ⇒ CHANGELOG 的历史围栏输出会按**当前** `xwl.py`
     #       校验（历史文案早于现实现的即被误判）。现围栏内标签行实测为 0 ⇒ 属**潜伏误报源**，非现网红。
     #     ⚠️ 不纳入 `examples/README.md` 是**有意**的：该文件里有**运行期 f-string 拼出来**的示意输出
-    #       （模板形如 `（{why}）—— {stat}`、在 `xwl.py` 一带），其**前缀在真实输出里也拼不出来** ⇒
+    #       （模板形如 `（{why}）—— {stat}`、在 `xwl.py` 一带），其**整串在真实输出里也拼不出来** ⇒
     #       纳入会**误报**（QA 实测：那一行在真跑语料里找不到、而同文件别的 tag 行找得到）。
     #   起因：17j-6 只扫 SKILL 的**行内反引号**、且不扫 faq.md ⇒ 写在 ``` 块里的输出文案对它
     #     **零覆盖**（绿但空）⇒ 本臂补上"围栏块"这一面。
     #   误报控制：围栏示例可能是**示意**（占位符 `<path>` / `…` / `%s` / `%d`）⇒ 含这类占位符的行
     #     **跳过**（不判），避免把"示例"当成"承诺文案"。实测：3 条围栏输出行，1 条含占位符被跳过、
     #     2 条被检查且都在真实输出里 ⇒ 全绿（这档 = 加白名单）。
-    #   ⚠️ 边界：本臂用**前缀匹配**（`_nf[:16]`），**验不了运行期拼接**出来的文案 —— 拼接结果在真跑
-    #     语料里没有字面前缀，所以这类**不是漏扫、是扫了会错**（故排除）。
+    #   ⚠️ 边界（⛔ 臂归属别串）：本臂比的是**整串** —— `_nf` 是"去标签后抹掉空白"的整串，本文件对
+    #     它不切片（判据形如 `_vn_body not in _real_vn`，两侧都过 `_vn`）；`[:16]` **不属本臂**，
+    #     它属 `17j-6` 的行内反引号臂。⇒ 本臂**验不了运行期拼接**出来的文案 —— 拼接结果在真跑
+    #     语料里没有字面**整串**，所以这类**不是漏扫、是扫了会错**（故排除）。
     _real_vn = _vn(real_out)      # 抹一次就够：⛔ 别放进逐行循环里重复抹（纯浪费，且容易改错一侧）
     for _nm, _ls in docs.items():
         if _nm == "CHANGELOG.md":       # 历史记录：按写入时的事实记，不按当前 xwl.py 校验
@@ -6987,8 +7004,8 @@ def _check_bc_contract(tmp, node, failures, write) -> None:
     p11 = write("bc11.xwl", json.dumps(_page(), ensure_ascii=False, indent=1))
     _ri, out_i = _run(xwl.cmd_itemids, file=p11, controls=None, name=None, suggest=False,
                       fix="auto", json=False, dups_only=False)
-    # 经 `_run_cli`（子进程真 CLI）取值：同 12b/15 的起因 —— 直调时被测行为一旦抛异常会把整块
-    #   打崩、「注册表来源行」断言没跑到；经 CLI 则异常被隔离。`params` 不传 = 与
+    # 经 `_run_cli`（子进程真 CLI）取值：同 12b/15 的起因 —— 直调时被测行为一旦抛异常，异常冲出
+    #   `_run` ⇒「注册表来源行」断言没跑到；经 CLI 则异常被隔离、红行必落在那条断言上。`params` 不传 = 与
     #   `cmd_params(file=p11, controls=None, list_fields=False, module_root=None)` 等价（argparse 默认值同）。
     _rp, out_p, _ep = _run_cli(["params", p11])
     _rc11, out_c = _run_check([p11], node)
@@ -7130,7 +7147,7 @@ def _check_bc_contract(tmp, node, failures, write) -> None:
         {"type": "button", "configs": {"itemId": "jsHost"}, "children": [],
          "events": {"click": "st.load({out: app.tbrO});"}},
     ]), ensure_ascii=False, indent=1))
-    # 经 `_run_cli`（子进程真 CLI）取值：同 12b/15 的起因（直调抛异常会打崩整块、定向断言没跑到）。
+    # 经 `_run_cli`（子进程真 CLI）取值：同 12b/15 的起因（直调抛异常 ⇒ 定向断言没跑到；块级兜底只让失败可读，⛔ 不替你跑断言）。
     #   `params` 不传 = 与 `cmd_params(file=p18, controls=None, list_fields=False, module_root=None)` 等价。
     _rc18, out18, _e18 = _run_cli(["params", p18])
     f18 = []
