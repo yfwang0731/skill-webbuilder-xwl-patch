@@ -14,7 +14,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        os: [ubuntu-latest, windows-latest]
+        os: [ubuntu-24.04, windows-latest]
         python-version: ["3.9", "3.13"]
         # node 版本要跨代测：⑥ 的 JS 校验语义与 node 版本有关 ——
         # node 22 的 `--check` 在 CJS 解析失败时会自动按 ESM 重试（`--experimental-detect-module` 默认开），
@@ -56,7 +56,7 @@ jobs:
   #   默认必须**判红**（静默绿是病根）；显式 `--allow-nogit` 才降级为"打印没扫、rc 按其他项定"。
   no-git-layout:
     name: no-git layout（无 .git）
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@v4
 
@@ -148,7 +148,7 @@ jobs:
   #     内容自包含由下面的逐文件比对补齐。
   install-layout:
     name: install layout（--copy 冒烟）
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     env:
       # 不抑制遥测 ⇒ 每次 push 都在给平台记一次安装（CI 只加 `ci=1` 标记、照常上报）。
       DISABLE_TELEMETRY: "1"
