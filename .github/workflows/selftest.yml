@@ -71,14 +71,38 @@ jobs:
       - name: Remove .git（造非 git 布局）
         run: rm -rf .git
 
-      - name: Default must fail（无 .git 默认判红）
+      # 三判缺一不可 —— 只判「退出码非零」等于把默认路径**独有**的故障（traceback / ImportError /
+      #   语法错）也当成"符合预期"：
+      #   ① `rc` **恰为 1**（不是任意非零）；
+      #   ② 失败原因必须是 git 门控 —— 那句「默认判红 —— 静默绿是病根」只在**非** `--allow-nogit`
+      #     分支 `doc_fail` 里生成，所以它能证明"红的是该红的那条"，而不是别的什么先炸了；
+      #   ③ 不许出现 traceback（属"红得不对"，不是预期路径）。
+      #   ⚠️ `grep` 扫**整份输出**（⛔ 不能只看 failures 段就下结论）。⚠️ 已知限度：`doc_fail` 只展开
+      #     前 12 条、其余打「另有 N 条未展开」⇒ 若已存在 ≥12 条**其它** doc 守卫失败把原因串挤出
+      #     前 12，本步会报「原因不是 git 门控」。那属**误报原因**、不是漏检（CI 本来就是红的）。
+      #   ⚠️ 输出落 `$RUNNER_TEMP`（⛔ 不往仓根写，本 job 已 `rm -rf .git`、写进去没人管）。
+      - name: Default must fail（无 .git 默认判红：rc 恰为 1 ＋ 原因串 ＋ 无 traceback）
         run: |
-          if python scripts/selftest.py > /tmp/nogit_default.txt 2>&1; then
-            echo "::error::无 .git 时默认返回 0 —— 静默绿回归，应判红"
-            cat /tmp/nogit_default.txt
+          set +e
+          python scripts/selftest.py > "$RUNNER_TEMP/nogit_default.txt" 2>&1
+          rc=$?
+          set -e
+          [ "$rc" -eq 1 ] || {
+            echo "::error::期望 rc 恰为 1，实得 $rc（任意非零会把 traceback／ImportError／语法错也放进来）"
+            tail -40 "$RUNNER_TEMP/nogit_default.txt"
             exit 1
-          fi
-          echo "OK：无 .git 默认判红（符合预期）"
+          }
+          grep -q "默认判红 —— 静默绿是病根" "$RUNNER_TEMP/nogit_default.txt" || {
+            echo "::error::失败原因不是 git 门控（没打印「默认判红 —— 静默绿是病根」）"
+            tail -40 "$RUNNER_TEMP/nogit_default.txt"
+            exit 1
+          }
+          ! grep -q "Traceback (most recent call last)" "$RUNNER_TEMP/nogit_default.txt" || {
+            echo "::error::出现 traceback，属默认路径独有异常（不是预期的 git 门控红）"
+            tail -40 "$RUNNER_TEMP/nogit_default.txt"
+            exit 1
+          }
+          echo "OK：无 .git 默认判红 —— rc=1、原因串在、无 traceback"
 
       # 断言**两个面**：① 降级路径本身必须 rc=0；② 必须**打印**那句降级清单。
       #   ⚠️ 断的是**那一句**「本次 … 未执行：无 git」：只 grep "未执行" 会被两处无关输出蒙过 ——

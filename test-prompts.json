@@ -32,7 +32,7 @@
   {
     "id": 7,
     "prompt": "我要做一个从来没做过的页面：带查询条件、一个表格、还有导出。你能从头到尾帮我走一遍吗？",
-    "expected": "按 references/walkthrough.md 的端到端顺序走，而不是跳步或只给一段代码：先确认 Python 环境与 --kind（页面 vs SQL 载体）→ new --kind sql → paths 取 @ 路径 → patch 填 serverScript/sql → sqlrefs → new --kind page → patch 按标准节点形态整树搭控件 → params 核对传参 → check → folders --register。全程先 --dry-run 再 --backup；并提醒最后要在设计器里打开一次、以及 WB_MENU 挂菜单属范围外。另注意：`set` 到原本不存在的**对象键**（如给页面补 `inframe` / `pageLink`、给控件补 `normalName`）属**新建键**，该 op 要带 `\"create\": true`（不带也放行，只打一行 `[warn]` 预告；补数组元素走 append/insert，不算新建键）"
+    "expected": "按 references/walkthrough.md 的端到端顺序走，而不是跳步或只给一段代码：先确认 Python 环境与 --kind（页面 vs SQL 载体）→ new --kind sql → paths 取 @ 路径 → patch 填 serverScript/sql → sqlrefs → new --kind page → patch 按标准节点形态整树搭控件 → params 核对传参 → check → folders --register。全程先 --dry-run 再 --backup；并提醒最后要在设计器里打开一次、以及 WB_MENU 挂菜单属范围外。另注意：`set` 到原本不存在的**对象键**（如给控件补 `normalName`）属**新建键**，该 op 要带 `\"create\": true`（**不带 `create` 默认被拒绝、rc=2**；`set` 上的放行路子只有命令行加 `--allow-new-key`（全局放行），放行时会打一行 `[warn] --allow-new-key 已放行 N 个新建键` 留痕；补数组元素走 append/insert，不算新建键）"
   },
   {
     "id": 8,
@@ -67,7 +67,7 @@
   {
     "id": 14,
     "prompt": "这个页面像是被别处调进来的片段，但不知道都有谁在用它、传了哪些参数。能查一下上游调用方吗？",
-    "expected": "用 xwl.py params <page> --upstream 核对上游调用方：在 --module-root 内**单根全扫**一遍，末尾新增**独立分组** `[外部可传入]`（本页被哪些上游调用、各调用方传了什么键），并给一行**载入侧汇总**（节点级「同根命中 / 本根未找到」＋出现级「动态写法 / 非 `m?xwl` 字面量」，**两种量纲分开标**）。要点：① **默认关 ⇒ 不开时**不出现这两段（`[外部可传入]` 分组与载入侧汇总行）、零成本；⚠️「逐字一致」**只对无 miss 的页面成立**（有 miss 且未给 `--strict` 时缺来源本就多一行留痕，见 `references/faq.md`）；开了才多扫一遍单根（≈5 秒量级）；② 只认 `params: {名: 值}` **字面量键**，`out: app.<容器>` 与运行时拼接的 url **只计数**、明写「未展开」；③ 该分组与汇总行**不并入 provided、不改退出码**（params 缺来源默认仍 rc=1）；④ 找不到模块根时不出现分组、只打一行 [note] 且 rc 不变。多根三分类（同根命中 / 跨工程 / 全根不存在）口径见 references/measured-data-criteria.md"
+    "expected": "用 xwl.py params <page> --upstream 核对上游调用方：在 --module-root 内**单根全扫**一遍，末尾新增**独立分组** `[外部可传入]`（本页被哪些上游调用、各调用方传了什么键），并给一行**载入侧汇总**（节点级「同根命中 / 本根未找到」＋出现级「动态写法 / 非 `m?xwl` 字面量」，**两种量纲分开标**）。要点：① **默认关 ⇒ 不开时**不出现这两段（`[外部可传入]` 分组与载入侧汇总行）、零成本；⚠️「逐字一致」**只对无 miss 的页面成立**（有 miss 且未给 `--strict` 时缺来源本就多一行留痕，见 `references/faq.md`）；开了才多扫一遍单根（≈5 秒量级）；② 只认 `params: {名: 值}` **字面量键**，`out: app.<容器>` 与运行时拼接的 url **只计数**、明写「未展开」；③ 该分组与汇总行**不并入 provided、不改退出码**（缺来源默认只告警 `rc=0`、`--strict` 才 1 —— `--upstream` 不改变这个口径）；④ 找不到模块根时不出现分组、只打一行 [note] 且 rc 不变。多根三分类（同根命中 / 跨工程 / 全根不存在）口径见 references/measured-data-criteria.md"
   },
   {
     "id": 15,
@@ -102,7 +102,7 @@
   {
     "id": 21,
     "prompt": "我页面里有个 store 的 url 指向了一个根本不存在（或者名字写错）的 xwl 文件，可 check 是全绿的、params 也没报，是不是工具漏了？",
-    "expected": "先说清这是**能力边界 ＋ 预告阶段**，不是漏。**完整命令**：`xwl.py params <页面.xwl> --module-root <工程>/wb/modules --strict`（`--module-root` 缺省从文件位置向上找）。取数链（`store.url` 指向不存在的文件）当前在 `params --strict` 下**先 `[warn]` 预告**（悬空取数 url 打 `[warn]`、**`rc` 仍 0**；早返与最终返回两条路径都打）；**显式占位**（`<…>` 形如 `<容器>`、或含 `__MODULE__`）只 `[note]` 豁免、不判悬空。⚠️ **不给 `--strict` 时不出这些 `#36` 行**（默认面不动）。⚠️ 能力边界：url 含 `__MODULE__` 时即便**真悬空**也按显式占位**豁免**为 `[note]` ⇒ 那类工程里真悬空**不出 `[warn]`**。⚠️ 这是**预告**性质：**下个版本将收紧为失败**。而 `check` 不判悬空取数 url，属它九项之外的既有边界 —— 两面都别指望一条命令全覆盖。"
+    "expected": "先说清这是**能力边界**（不是漏），且取数链那一维**已收紧为失败**。**完整命令**：`xwl.py params <页面.xwl> --module-root <工程>/wb/modules --strict`（`--module-root` 缺省从文件位置向上找）。取数链（`store.url` 指向不存在的文件）在 `params --strict` 下**判失败（rc=1）**：输出仍以一行 `[warn] #36` 开头（紧跟的缩进行明写「`--strict` 下判失败（rc=1）」），**早返与末行两个出口都算进 rc**（两者都只在 `--strict` 分支里走到）；**显式占位**（`<…>` 形如 `<容器>`、`…`）只 `[note]` 豁免、永不判红；**`__MODULE__` 不再一律豁免** —— 走两段判：能把 `__MODULE__` 换成**真实目录**且目标文件不在 ⇒ 按悬空判失败（与普通 `m?xwl=` 同口径）；只有解析不到真实目录、或其后面那段本身是显式占位，才 `[note]` 放过并逐条写出「为什么放过」。⚠️ **不给 `--strict` 时不出这些 `#36` 行**（默认面不动）。⚠️ 已知逃逸面：`__MODULE__` 在多数执行上下文下由框架运行期替换、可能指向调用方模块 ⇒ 工具只在「能解析到真实目录」时才敢下「悬空」的结论；解析不到就只能按占位放过（那是「没敢判」，不是「验过了」）。而 `check` 不判悬空取数 url，属它九项之外的既有边界 —— 两面都别指望一条命令全覆盖。"
   },
   {
     "id": 22,

@@ -703,17 +703,27 @@ def _check_basics(tmp, node, failures, write) -> None:
     else:
         print("[ok]  非有限值被判 check ④ 失败（rc=1）")
 
-    # ---- 断言：含 -0.0 的样本 `expand` 必须 rc=0（往返一致）----
+    # ---- 金标：含 -0.0 的样本，`expand` 的产出必须与**金标**逐字节相同 ----
+    # 本臂证明的是与金标一致，⛔ 不是与自身自洽：旧臂只判 rc==0，而 rc 由**同一份** `expand` 决定
+    #   ⇒ 序列化与等价判定**同向**误解时它照样绿（实测：负零折叠 ＋ `equivalent` 退化 ⇒ rc=0、
+    #   产出 `{"n": 0}`，旧臂全绿）。⚠️ 单点注入（只折叠、等价判定仍严）会让 `expand` 自判 rc=2，
+    #   那种情形旧臂也红 —— 本臂的增益在"同向误解"与"语义等价但字节变了"（排版／写法）这两类。
     _a3 = os.path.join(tmp, "a3negzero.xwl")
     with open(_a3, "w", encoding="utf-8", newline="") as _f:
         _f.write('{"n": -0.0}')
-    _r5 = _cap_run([sys.executable, os.path.join(HERE, "xwl.py"), "expand",
-                    _a3, "--dry-run"], timeout=120)
+    _r5 = _cap_run([sys.executable, os.path.join(HERE, "xwl.py"), "expand", _a3], timeout=120)
+    with open(_a3, "rb") as _f:
+        _a3_got = _f.read()
+    _a3_want = _GOLDEN_NEGZERO.encode("utf-8")
     if _r5.returncode != 0:
-        failures.append("含 -0.0 的样本 expand 应 rc=0（往返一致），实得 %s"
-                        "（把 _number 改回折叠 `-0`/写 `0` 应让它红）" % _r5.returncode)
+        failures.append("含 -0.0 的样本 expand 应 rc=0，实得 %s" % _r5.returncode)
+    elif _a3_got != _a3_want:
+        failures.append("含 -0.0 的样本 expand 产出与金标不一致：金标 %d B／md5 %s，产出 %d B／md5 %s"
+                        "（把 `_number` 的负零分支改回折叠成 `-0`／`0` 应让它红）"
+                        % (len(_a3_want), hashlib.md5(_a3_want).hexdigest(),
+                           len(_a3_got), hashlib.md5(_a3_got).hexdigest()))
     else:
-        print("[ok]  含 -0.0 的样本 expand rc=0（往返判定一致）")
+        print("[ok]  含 -0.0 的样本 expand 产出与金标逐字节相同（与金标一致，不是与自身自洽）")
 
     # ---- 断言：写盘中途失败 => 目标**不被截断**、无临时残留 ----
     _a4 = os.path.join(tmp, "a4atomic.xwl")
@@ -6787,6 +6797,238 @@ def _check_patch_contract(tmp, node, failures, write) -> None:
 _REG_SRC_LINE_UNFOUND = "控件注册表: 未找到（normalName 白名单 = 注册表 ∪ 内置兜底）"
 
 
+# ---- 金标：`expand` 的**固定点**样本（模块级字面量，⛔ 不放函数体内）----
+#   ⭐ 为什么要有金标：现网的往返臂两端**同源** —— `expand` 排出来的版，再由 `expand` 判回自己，
+#     同一处误解会同时体现在两端、往返仍然绿。金标是**冻结的独立文本**（就是本文件里的字面量），
+#     实现侧任何"自圆其说"的改动都会在此显出**字节差异** —— 同源比对做不到这件事。
+#   ⚠️ 本组证明的是**与金标一致**，⛔ 不是**与自身自洽**。
+#   ⚠️ 形态一律取 `expand` 稳态形：`new` 造骨架 → `patch` 补成已知正确结构 → `expand` 跑一次
+#     ⇒ 断言 `expand(金标) ≡ 金标` 是**固定点**判据（金标自己若不再是固定点，也会当场红）。
+#   ⚠️ 来源：四份全部用本仓 `xwl.py new` ＋ `xwl.py patch` 现场生成，⛔ 未取任何真实工程语料
+#     （无业务路径、无客户标识、无真实工程名）；`check` 全绿（①–⑦⑩ ＋ ⑧ 无异常）后才冻结。
+#   ⚠️ 每份附**字节数与 md5**：人工核对金标有没有被误改；改一个字符 ⇒ 断言红、md5 也对不上。
+#   ⚠️ 已知盲区（⛔ 别指望本臂抓）：金标被改成**另一份同样合规的形态**（值改了但仍是稳态形）时，
+#     固定点判据照样绿 ⇒ 那一路只能靠注释里的 md5 与人工评审。**改金标必须同时改注释里的 md5**。
+_GOLDEN_PAGE = '''{
+ "hidden": false,
+ "children": [{
+  "configs": {"itemId": "module"},
+  "expanded": false,
+  "children": [],
+  "type": "module"
+ }],
+ "roles": {"default": 1},
+ "title": "金标页面",
+ "iconCls": "",
+ "inframe": false,
+ "pageLink": ""
+}'''
+# 来源：`new --kind page --title 金标页面`；形态：expand 稳态形（LF、无末尾换行、顶层七键按设计器序）；238 B；md5 aeb4a7962eb3d19cf248894cb6b1c14c
+_GOLDEN_PANEL = '''{
+ "hidden": false,
+ "children": [{
+  "configs": {"itemId": "module"},
+  "expanded": false,
+  "children": [{
+   "configs": {"itemId": "panelTop"},
+   "expanded": false,
+   "children": [
+    {
+     "configs": {
+      "itemId": "btnQuery",
+      "text": "查询",
+      "iconCls": "query_icon"
+     },
+     "expanded": false,
+     "children": [],
+     "type": "button"
+    },
+    {
+     "configs": {
+      "itemId": "btnReset",
+      "text": "重置"
+     },
+     "expanded": false,
+     "children": [],
+     "type": "button"
+    }
+   ],
+   "type": "panel"
+  }],
+  "type": "module"
+ }],
+ "roles": {"default": 1},
+ "title": "金标页面",
+ "iconCls": "",
+ "inframe": false,
+ "pageLink": ""
+}'''
+# 来源：`new` 骨架 ＋ `patch` 追加 panel／两个 button；形态：expand 稳态形；689 B；md5 07e1d7aa0e0430be19ee9d2ffdfc79c2
+_GOLDEN_GRID = '''{
+ "hidden": false,
+ "children": [{
+  "configs": {"itemId": "module"},
+  "expanded": false,
+  "children": [
+   {
+    "configs": {"itemId": "viewportMain"},
+    "expanded": false,
+    "children": [{
+     "configs": {
+      "itemId": "gridMain",
+      "selType": "rowmodel"
+     },
+     "expanded": false,
+     "children": [
+      {
+       "configs": {
+        "itemId": "storeMain",
+        "autoLoad": "false",
+        "url": "demo/list"
+       },
+       "expanded": false,
+       "children": [],
+       "type": "store"
+      },
+      {
+       "configs": {
+        "itemId": "columns",
+        "isConfig": "true"
+       },
+       "expanded": false,
+       "children": [
+        {
+         "configs": {
+          "itemId": "colCode",
+          "dataIndex": "code",
+          "text": "编码",
+          "width": "140"
+         },
+         "expanded": false,
+         "children": [],
+         "type": "column"
+        },
+        {
+         "configs": {
+          "itemId": "colName",
+          "dataIndex": "name",
+          "text": "名称",
+          "width": "200"
+         },
+         "expanded": false,
+         "children": [],
+         "type": "column"
+        }
+       ],
+       "type": "array"
+      }
+     ],
+     "type": "grid"
+    }],
+    "type": "viewport"
+   },
+   {
+    "configs": {"itemId": "panelTop"},
+    "expanded": false,
+    "children": [{
+     "configs": {
+      "itemId": "btnQuery",
+      "text": "查询",
+      "iconCls": "query_icon"
+     },
+     "expanded": false,
+     "children": [],
+     "type": "button",
+     "events": {"click": "app.storeMain.load();"}
+    }],
+    "type": "panel"
+   }
+  ],
+  "type": "module"
+ }],
+ "roles": {"default": 1},
+ "title": "金标页面",
+ "iconCls": "",
+ "inframe": false,
+ "pageLink": ""
+}'''
+# 来源：`new` 骨架 ＋ `patch` 追加 viewport／grid／store／columns（两列）／panel／带 click 的 button；形态：expand 稳态形；1751 B；md5 5e919173677c839ae79c8a16b86e4c73
+_GOLDEN_FORM = '''{
+ "hidden": false,
+ "children": [{
+  "configs": {"itemId": "module"},
+  "expanded": false,
+  "children": [{
+   "configs": {"itemId": "formEdit"},
+   "expanded": false,
+   "children": [
+    {
+     "configs": {
+      "itemId": "fldName",
+      "dataIndex": "name",
+      "text": "名称",
+      "xtype": "textfield"
+     },
+     "expanded": false,
+     "children": [],
+     "type": "field"
+    },
+    {
+     "configs": {
+      "itemId": "fldMemo",
+      "dataIndex": "memo",
+      "text": "备注",
+      "xtype": "textarea"
+     },
+     "expanded": false,
+     "children": [],
+     "type": "field"
+    }
+   ],
+   "type": "form"
+  }],
+  "type": "module"
+ }],
+ "roles": {"default": 1},
+ "title": "金标页面",
+ "iconCls": "",
+ "inframe": false,
+ "pageLink": ""
+}'''
+# 来源：`new` 骨架 ＋ `patch` 追加 form／两个 field（textfield 与 textarea）；形态：expand 稳态形；762 B；md5 29a5ce9346d4a72852b1617aa850b59e
+
+
+# ---- 金标（续）：把**旧的两组往返臂**从"自己判自己"换成**对金标** ----
+#   ⭐ 旧臂的 oracle 是被测实现自己，所以**判别力≈0**：
+#     · `-0.0` 那条只断言 `expand` 的 **rc==0**（`_check_basics` 内）—— rc 由**同一份** `expand` 决定
+#       ⇒ 只要"序列化"与"等价判定"**同向**误解（一起把 `-0.0` 当 `0`），它就照样 rc=0、照样绿。
+#       ⚠️ 实测边界（⛔ 别把本臂说成"救单点注入"）：**单点**注入（只折叠负零、等价判定仍严）会让
+#       `expand` 自判 `rc=2` ⇒ 那种情形**旧臂也会红**；本臂的增量在"同向误解"与"语义等价但字节变了"
+#       （排版／写法）这两类上 —— 同向两点注入实测 `rc=0`、产出 `{"n": 0}`、旧臂全绿。
+#     · `1.0`/`0.0` 那条把产出**再解析回来**跟手写期望比（`equivalent(parse_xwl(written), {...})`）
+#       —— 解析器与序列化器是同一份实现，同一处理解错时**两头一起错**，比完仍相等。
+#   下面四份把标准答案换成**冻结文本**：实现怎么改都改不动它，一旦写的字节变了就当场红。
+#   ⚠️ 形态＝该命令的**真正产出**：单行样本 `expand` 后**保持单行**（不强行展开）；多键对象展开成设计器多行。
+_GOLDEN_NEGZERO = '{"n": -0.0}'
+# 来源：`{"n": -0.0}` 经 `expand` 原地处理（单行样本保持单行）；11 B；md5 a077aae283a230d0fc7b4c05193dfbb3
+_GOLDEN_FLOAT_ONE = '''{
+ "a": 1.0,
+ "children": []
+}'''
+# 来源：`{"a": 1.0, "children": []}` 经 `expand`；形态：设计器多行稳态形；30 B；md5 47d25653e0bc087092d510b283139779
+_GOLDEN_FLOAT_ZERO = '''{
+ "a": 0.0,
+ "children": []
+}'''
+# 来源：`{"a": 0.0, "children": []}` 经 `expand`；形态：设计器多行稳态形；30 B；md5 5aa5e69fbd165596c143cd2892e8e987
+_GOLDEN_PATCHED = '''{
+ "a": 1.0,
+ "title": "t2",
+ "children": []
+}'''
+# 来源：`{"a": 1.0, "title": "t", "children": []}` 经 `patch` 把 title 改成 t2；形态：设计器多行稳态形；46 B；md5 649f8b5cc7dfe307587a721b8167227e
+
+
 def _check_bc_contract(tmp, node, failures, write) -> None:
     """B/C 组「注册键口径 + 换行判据 + 整数值浮点保真 + 排版提示具体化 + 注册表来源同句」的**行为断言**（第 27 组）。
     逐条行为断言见各节注释；改写相关的已落在 `_check_itemids`；
@@ -6937,33 +7179,42 @@ def _check_bc_contract(tmp, node, failures, write) -> None:
         f6.append("真坏文件未给「加载器等价解析失败」文案")
     _ok("空文件 / 设计器模板 / 真坏：三条文案互不相同且 rc 均 = 1", f6)
 
-    # ---- 正面：整数值浮点保真写出（rc=0 且往返等价）----
+    # ---- 正面：整数值浮点保真写出（**与金标逐字节**，⛔ 不是与自身再解析结果比）----
+    # 本臂证明的是与金标一致：旧臂把产出再解析回来跟手写期望比，而解析器与序列化器同源
+    #   ⇒ 同一处理解错（例如把 `1.0` 写成 `1`）时两头一起错、比完仍相等。改成比冻结字节后立刻红。
+    #   ⚠️ 单点注入（只折叠 `.0`、等价判定仍严）会让 `expand` 自判 rc=2 ⇒ 旧臂也红；本臂的增量在
+    #   "序列化与等价判定同向误解"（实测 rc=0、旧臂全绿、本臂 3 条全红）与"字节变了但语义等价"。
     f7 = []
-    for lit in ("1.0", "0.0"):
-        src = '{"a": %s, "children": []}' % lit
-        p = write("bc7_%s.xwl" % lit, src)
+    for _lit, _gt in (("1.0", _GOLDEN_FLOAT_ONE), ("0.0", _GOLDEN_FLOAT_ZERO)):
+        p = write("bc7_%s.xwl" % _lit, '{"a": %s, "children": []}' % _lit)
         rc, _o = _run(xwl.cmd_expand, file=p, eol="auto", indent=1, safe=False,
                       dry_run=False, out=None, backup=False, node=None, no_js=True)
+        with open(p, "rb") as _fh7:
+            _got7 = _fh7.read()
+        _want7 = _gt.encode("utf-8")
         if rc != 0:
-            f7.append("expand %s ⇒ rc=%d（应 0）" % (lit, rc))
-        with open(p, "rb") as fh:
-            written = fh.read().decode("utf-8")
-        if lit not in written:
-            f7.append("expand 未保真写出 %s（整数值浮点被折叠）：%r" % (lit, written))
-        try:
-            if not xwl.equivalent(xwl.parse_xwl(written), {"a": float(lit), "children": []}):
-                f7.append("expand %s 往返不等价" % lit)
-        except Exception as exc:  # noqa: BLE001
-            f7.append("expand %s 的产出无法解析：%s" % (lit, exc))
+            f7.append("expand %s ⇒ rc=%d（应 0）" % (_lit, rc))
+        elif _got7 != _want7:
+            f7.append("expand %s 产出与金标不一致：金标 %d B／md5 %s，产出 %d B／md5 %s"
+                      "（把 `.0` 折叠成整数、或改了排版都会落在这里）"
+                      % (_lit, len(_want7), hashlib.md5(_want7).hexdigest(),
+                         len(_got7), hashlib.md5(_got7).hexdigest()))
     p7p = write("bc7_patch.xwl", '{"a": 1.0, "title": "t", "children": []}')
     ops7 = os.path.join(tmp, "bc7_ops.json")
     with open(ops7, "w", encoding="utf-8") as fh:
         json.dump([{"op": "set", "path": ["title"], "value": "t2"}], fh, ensure_ascii=False)
     rc7p, _o = _run(xwl.cmd_patch, file=p7p, ops=ops7, indent=1, eol="auto",
                     dry_run=False, backup=False, node=None, no_js=True)
+    with open(p7p, "rb") as _fh7p:
+        _got7p = _fh7p.read()
+    _want7p = _GOLDEN_PATCHED.encode("utf-8")
     if rc7p != 0:
-        f7.append("patch 含 {\"a\": 1.0} 源 ⇒ rc=%d（应 0：往返等价）" % rc7p)
-    _ok("正面：{\"a\":1.0} / {\"a\":0.0} 保真写出且 expand/patch 往返等价（rc=0）", f7)
+        f7.append("patch 含 {\"a\": 1.0} 源 ⇒ rc=%d（应 0）" % rc7p)
+    elif _got7p != _want7p:
+        f7.append("patch 含 {\"a\": 1.0} 的产出与金标不一致：金标 %d B／md5 %s，产出 %d B／md5 %s"
+                  % (len(_want7p), hashlib.md5(_want7p).hexdigest(),
+                     len(_got7p), hashlib.md5(_got7p).hexdigest()))
+    _ok("正面：{\"a\":1.0} / {\"a\":0.0} 保真写出且 expand/patch 产出与金标逐字节相同", f7)
 
     # ---- 反面：1 与 1.0 仍不相等（守值类型可区分）----
     f8 = []
@@ -6972,6 +7223,30 @@ def _check_bc_contract(tmp, node, failures, write) -> None:
     if xwl.equivalent({"a": True}, {"a": 1}):
         f8.append("equivalent 把 true 与 1 判成相等")
     _ok("反面：equivalent 下 1 ≠ 1.0、true ≠ 1（值类型仍可区分）", f8)
+
+    # ---- 金标固定点：`expand` 的产出必须与金标**逐字节**相同 ----
+    # ⭐ 本臂证明的是**与金标一致**，⛔ 不是**与自身自洽**：金标是本文件里的冻结字面量（说明见模块级），
+    #   两端同源的比对（`expand` 排的版再由 `expand` 判回自己）在这里换成了**外部期望值**。
+    #   注入方式＝改金标一个字符（或改 `_number`／序列化）⇒ 本臂红；改回 ⇒ 绿。
+    _gk = (("page", _GOLDEN_PAGE), ("panel", _GOLDEN_PANEL),
+           ("grid", _GOLDEN_GRID), ("form", _GOLDEN_FORM))
+    fg = []
+    for _g_name, _g_text in _gk:
+        _g_want = _g_text.encode("utf-8")
+        _g_path = write("bcg_%s.xwl" % _g_name, _g_text)
+        _g_rc, _g_out = _run(xwl.cmd_expand, file=_g_path, eol="auto", indent=1, safe=False,
+                             dry_run=False, out=None, backup=False, node=None, no_js=True)
+        with open(_g_path, "rb") as _g_fh:
+            _g_got = _g_fh.read()
+        if _g_rc != 0:
+            fg.append("金标 %s 的 expand 应 rc=0，实得 %s（%s）"
+                      % (_g_name, _g_rc, _g_out.strip().replace("\n", " ")[:160]))
+        elif _g_got != _g_want:
+            fg.append("金标 %s 的 expand 产出与金标不一致：金标 %d B／md5 %s，产出 %d B／md5 %s"
+                      % (_g_name, len(_g_want), hashlib.md5(_g_want).hexdigest(),
+                         len(_g_got), hashlib.md5(_g_got).hexdigest()))
+    _ok("金标固定点：%d 份金标经 expand 后与金标逐字节相同（与金标一致，不是与自身自洽）"
+        % len(_gk), fg)
 
     # ---- 纯 CR：check rc=0 且有 [warn]、非 FAIL ----
     p_cr = write("bc9_cr.xwl", cr_src)

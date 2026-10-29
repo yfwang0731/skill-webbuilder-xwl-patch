@@ -5230,7 +5230,7 @@ def _emit_36(args, dangling36, placeholder36, mod36_notes=None) -> None:
     if dangling36:
         print("\n  [warn] `#36`：%d 处取数 url 指向的载体**不存在**（整条取数链断掉）：%s"
               % (len(dangling36), ", ".join(sorted(set(dangling36)))))
-        print("         ⚠️ `--strict` 下**判失败**（rc=1）；不加 `--strict` 仍只告警（rc 不变）。")
+        print("         ⚠️ `--strict` 下**判失败**（rc=1）；不加 `--strict` 时**本行不打印**（该项只在 `--strict` 下检查），rc 也不变。")
     if placeholder36:
         print("\n  [note] `#36`：%d 处取数 url 为**显式占位**（`<…>` / `…`，有意待定）"
               "⇒ 只提示、**永不判红**：%s"
