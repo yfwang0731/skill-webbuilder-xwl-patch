@@ -14,6 +14,24 @@
 
 ---
 
+## [1.7.7] - 2026-10-30
+
+`references` 面彻底整改（patch）：**无新子命令、无新参数**（`git diff` 里 `sub.add_parser` 增删 **0**）。六条同属一个文件面（`SKILL.md` ＋ `references/**` ＋ `metadata.json`），所以 `references`／`layers` 只对账一次——切两次就要对两次。
+
+① **`ITEM-1157` `SKILL.md` 长段下沉**：**587 行／27 521 字符 → 500 行／22 427 字符**（净降 **5 094**）。下沉目标落在 `spec` 层（`faq.md`／`js-api.md`），**未动 `walkthrough.md`**（它当时只剩 23 字符余量）。⚠️ **500 行是边界值、零余量**：业界（agentskills.io 与 Microsoft Learn 同口径）对 `SKILL.md` 的建议是 **≤500 行／≈5 000 tokens**，本版刚好压到线上；距仓内设计目标 `_SK_GOAL` = 12 000 字符仍差 **10 427** ⇒ 分批推进，⛔ 别把"到 500 行"当成"达标"。
+
+② **`ITEM-1166` 依据层 8k 失真收口**：`workflow-notes-guards.md` **8 984 字符**（当时唯一超限的 `evidence` 件）拆为 **5 533 ＋ 4 124**，新增 `workflow-notes-guards-maintenance.md`；`metadata.references` 与 `layers` 各 **20** 项、双向差集空。新增 **8k 守卫 12 行**，落 **`_docs_tail_scaffold`**（与 `17u` 层归属检查相邻，复用其已校验的层映射 `_b1_lay`，⛔ 不重复读 `metadata`）。⭐ 阈值 `8 000` 的**推导链写进代码注释**：业界对 `SKILL.md` 的建议 ≈5 000 tokens × 1.61 字符/token ＝ **8 050** ⇒ 向下取整 8 000；语义＝「每份按需读的依据件，读一次的成本不超过业界认为 `SKILL.md` 该有的规模」。同时订正两处过期的「7,202」（`SKILL.md` 与 `references/measured-data.md` L42 —— 同一句话的两个副本，只改一处会修出新的自相矛盾）。
+
+③ **`ITEM-1161`** 「装完自证」拆两档：**源码树／手工整目录** ⇒ 完整 `selftest`；**CLI 安装渠道** ⇒ 只承诺冒烟三件（`--list-blocks`／照 `examples` 生成一页／`--help`），并写明副本**可能**不含 `metadata.json`（安装器按设计不拷它）。
+
+④ **`ITEM-1163`** SQL 示例统一「条件片段」契约：`serverScript` 只产 `AND …` 片段，`dataprovider` 保持**单段**完整 SELECT，值走 `{?…?}` 绑定 ⇒ 不再有「完整 SELECT 再嵌完整 SELECT」这种展开即语法错的写法。
+
+⑤ **`ITEM-1164`** `renderer` 示例由**函数表达式**改**函数体**（`return v == null ? '' : String(v);`），与 `transcription-defaults.md` 的口径一致（语料实测 22 633 : 8）。
+
+⑥ **`ITEM-1165`** `autoLoad` 措辞分层：带查询条件面板／工具条的页面主 grid 用 `false`、首屏查询由代码触发；转写规范补「**且不做代码触发**」限定；两处互加指针。⛔ 未裁定哪条是平台真理（未跑平台）。
+
+⚠️ 已知与待办：`_docs_tail_scaffold` **387 行（余 13）**、`_docs_layers_and_distribution` 373（本版未动）、`_doc_guard_xfile_pt` 257（本版未动）；`references/js-api.md` 导语陈旧（仍称「本文是 SKILL 第五章 5.4 的展开」，而 5.4 已下沉为摘要）—— 本批**不改**，已立 `ITEM-1171` 归后续文档批；`_FN_CAP` 对最大户形同虚设的问题（`_check_basics` 482 行／`_check_bc_contract` 406 行都不在册）另立 `ITEM-1170`。
+
 ## [1.7.6] - 2026-10-29
 
 判据与语料收口批（patch）：**无新子命令、无新参数**（`git diff` 里 `sub.add_parser` 增删 **0**）。四条同一触发面 ——「检查是不是真的在查」：往返臂自己跟自己比、语料停在旧契约、CI 把异常当预期、工具失败时静默少纳。

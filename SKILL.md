@@ -2,7 +2,7 @@
 name: webbuilder-xwl-patch
 slug: skill-webbuilder-xwl-patch
 displayName: webbuilder-xwl-patch
-version: 1.7.6
+version: 1.7.7
 license: MIT
 metadata:
   category: development-tools
@@ -96,8 +96,9 @@ WebBuilder 的页面与查询定义都写在 `.xwl` 里。它**看起来像 JSON
 | 查 **SQL 分布 / 判据修正对照数** | [`references/measured-data-criteria.md`](references/measured-data-criteria.md) |
 | 查**顶层骨架 / folder.json / 规模耗时** | [`references/measured-data-skeleton.md`](references/measured-data-skeleton.md) |
 | 查**判据因果 / 守卫维护 / 豁免面** | [`references/workflow-notes-guards.md`](references/workflow-notes-guards.md) |
+| 查**守卫维护 / 豁免 / 自检运行器** | [`references/workflow-notes-guards-maintenance.md`](references/workflow-notes-guards-maintenance.md) |
 
-> `references/anti-patterns.md`、`references/faq.md` 是**查询式规格（规格层）**，不受 8k 约束（8k 只约束记忆类的"按需读一次"成本）；⚠️ 上表拆出的**主题文件属依据层，仍受 ≤8k 约束**（实测最大 7,202 字符）。
+> `references/anti-patterns.md`、`references/faq.md` 是**查询式规格（规格层）**，不受 8k 约束（8k 只约束记忆类的"按需读一次"成本）；⚠️ 上表拆出的**主题文件属依据层，仍受 ≤8k 约束**（逐件字符数由自检复量）。
 
 **触发场景**（正文里只留这三条，完整触发词见 frontmatter）：读懂或修改任何 `.xwl`
 （PC 页面 / 弹窗 / store 数据源 / SQL 定义全是同一套格式）；从零新建页面或 SQL 载体；
@@ -353,37 +354,9 @@ python <skill根>/scripts/xwl.py edit <file.xwl> --old-file old.txt --new-file n
 
 ### 第 4 步 · 格式校验（**改完必跑**）
 
-> **能力边界（不随时间变的一句）**：`check` 只做**静态、文件级**校验 —— **格式与结构、事件 JS 语法、注册键重名分级等静态项**，**不证页面可用**（逐项判据与报错处置见 [`references/faq.md`](references/faq.md)）。
-
-`check` 共 **九项** = **8 项判定 ＋ 1 项只提示**。8 项判定 = **格式五项 ①–⑤**（无 BOM / 换行一致 / 无「反斜杠 + 空白」行 /
-**加载器等价解析** / 末行结构）+ **⑥ 事件 JS 语法**（提取后交 `node` 校验）+ **⑦ 注册键重名分级** +
-**⑩ `configs` 值类型**（任一个值不是字符串 ⇒ `FAIL`，`--no-cfgtype` 可关；判据与语义无关，`300` 这种数字才是命中、`"300px"` 不是）；
-**第 ⑧ 维「加载链完整性」只提示、不进 rc**（判据对齐框架取键方式：`children` 须是**非空数组**、
-`children[0].configs` 与 `roles` 须是**对象**，否则文件能被 ④ 解析、页面却在加载期抛）。逐项判据与报错处置见
-[`references/faq.md`](references/faq.md)；不通过时先用 `--backup` 的 `<file>.bak` 回退再排查。**另**：给了 `--controls` 时**另校 `configs` 键（⑨）与内联 `[js]`**（缺省不校、也不自动找）—— **⑨ 只在显式给 `--controls` 时跑、只 `warn`、不进 `rc`，不计入上面九项**。
-
-```bash
-python <skill根>/scripts/xwl.py check <file.xwl> [more.xwl ...]
-python <skill根>/scripts/xwl.py check <file.xwl> --no-js              # 本机没有 node 时跳过 JS 校验
-python <skill根>/scripts/xwl.py check <file.xwl> --no-itemid          # 跳过注册键重名分级（只查格式）
-```
-
-三点必须记住：
-
-- **④ 是最强的校验手段**：**④ 通过 ⇒ 框架一定能加载它**（**反向不成立** —— 框架比 ④ 更宽，未对齐的宽容面见 `references/faq.md` §一）。它与严格 JSON 解析器**不是一回事** —— 加载器（org.json）**接受尾随逗号**（如 `{"a":1,}`）、`{` 之前的前导内容也直接丢弃。
-- **⑦ 的 `[FAIL]` 与 ①–⑥ 性质不同** —— ①–⑤ 是**格式**（文件坏了）、⑥ 是**事件 JS 语法**，⑦ 是**命名质量**
-  （文件能用但取值有风险）。所以 `patch` / `edit` / `expand` **写盘后的自动校验只判 ①–⑥**，
-  否则会出现"写盘成功却返回非 0"。要看 ⑦ 请单独跑 `check`，或直接 `itemids`。
-- **第 ⑧ 维是"只提示"**：加载链完整性有问题（如 `children` 不是数组）时只打 `[warn] ⑧ 加载链完整性：…`，**不影响退出码**；正常打 `[note] ⑧ 加载链完整性：无异常`、④ 解析失败时打 `[note] ⑧ 加载链完整性：因解析失败跳过`（**它同样不进写盘后自检**）。⚠️ 本版起 ⑧ **另含一条「数据加载链」**：页内有 `store`，却既没有 `configs.autoLoad`、页内也扫不到 `.load(`／`store.reload(` ⇒ 同样只打 `[warn]`（提示**结果表可能永不加载**、须人工确认）；**窗口内嵌／以子页方式打开**（由父页 load）、**运行时动态绑定**时**不适用**，判据与例外见 [references/faq.md](references/faq.md) ⑧。
-> 自己写校验脚本的两坑（② **别写成"必须 CRLF"**、④ **不是替换成换行符**）见 [references/faq.md](references/faq.md) §一。
-
-**页面类交付的四道验收**（交付前逐道过，缺一道就不算完成）：**① `check`**（格式与结构、事件 JS、重名、`configs` 值类型）
-→ **② `check --controls <…/controls.json>`**（键合法性 ⑨ 与内联 `[js]`；**路径必须绝对**）
-→ **③ 在设计器里打开一次**（能否渲染 —— `check` 只证"格式能加载"，不证"页面能开"）
-→ **④ 按清单人工看布局与交互**（面板高度 / 列宽 / 对齐 / 工具条显示，判据见 [`references/layout.md`](references/layout.md)）。
-
-> ⚠️ **有库可连时另加一道「连库实跑 SQL」** —— 它是**条件附加道**：没库时**不算缺项**。
-> 口径是「**四道 ＋ 条件附加道**」（⛔ 别写成五道、⛔ 别把附加道算成缺项）。
+`check` 只做静态、文件级校验，不证页面可用；改完必跑，逐项判据与命令见 [references/faq.md](references/faq.md)「附录：格式校验与页面交付验收」。
+页面类交付须过四道验收：`check`、`check --controls`、设计器打开、人工看布局交互；有库时条件追加连库实跑 SQL。
+完整的 ①–⑩ 分工、写盘后自动校验边界、回退与脚本两坑一并在该附录，布局判据见 [references/layout.md](references/layout.md)。
 
 ### 第 5 步 · 提交前扫一遍（`diffguard`。**只在 git 仓库里有意义**）
 
@@ -450,55 +423,24 @@ python <skill根>/scripts/xwl.py diffguard <改过的文件或目录> --strict  
 
 ## 五、xwl 的引用方式（数据源 / 子页面 / 后台方法）
 
-一个 `.xwl` 向外引用别的 xwl 或后台方法，只有下面这几条通路 —— **先看总表**：
-
-| 引用什么 | 最短骨架 | 写在哪里 |
-|---|---|---|
-| **数据源**（SQL 文件） | `store.configs.url = 'm?xwl=…'`（配合 `store.load({out})`） | store 节点的 `configs.url` |
-| **服务端片段**（SQL / 校验 / 取数） | `Wb.request({url:'m?xwl=…', params, success:fn})` | 控件的 `events.*` 里 |
-| **子页面**（列表页 / 弹窗） | `Wb.open({url:'m?xwl=…', title:'…', params:{…}})` | `events.*` 里 |
-| **文件上传 / 导入入口** | `Wb.upload({form: app.form1, url:'m?xwl=…', success:fn})`（`form` 里必须有 `file` 控件） | `events.*` 里 |
-| **后台 Spring 方法** | `Wb.requestAg({params:{bean:'…', method:'…', …}})`（**不用写 `url`**） | `events.*` 里 |
-| **服务端 xwl 调 xwl** | `app.execute('m?xwl=…')` | `module.configs.serverScript` |
-
-**回传怎么取**（写 `success` 回调时最常用的一条）：`dataprovider` 出的数据是
-`Wb.decode(resp.responseText).rows` / `.total`；`serverScript` 里 `app.send(x)` 出来的是 `x` 本身。
-
-> **完整写法**（选项全表、四种响应形态怎么收、回调签名、上传两步链）见
-> [`references/js-api.md`](references/js-api.md)；各条在样本工程里的**出现次数**见
-> [`references/measured-data.md`](references/measured-data.md) §一（只作量级参考，与你怎么改无关）。
+按引用对象选择 store 数据源、服务端片段、子页面、上传、Spring 方法或服务端 `app.execute`。通路总表、最短骨架、回传取值与代码位置见 [references/js-api.md](references/js-api.md)「附录：引用通路总表与代码位置」。
+样本调用量级见 [references/measured-data.md](references/measured-data.md) §一；事件 JS 使用单引号。
 
 ### 5.1 怎么读一个 `m?xwl=` 引用
 
-> 引用写的是**模块相对路径、不带 `.xwl` 后缀**（**补上 `.xwl`** 即文件路径）；**从文件找引用方**见
-> [`references/sql-fragments.md`](references/sql-fragments.md) §3.3（**被引用的片段是常态**）。
+引用使用模块相对路径、不带 `.xwl`；补上后缀才是文件路径。引用读法与从文件找引用方见 [references/sql-fragments.md](references/sql-fragments.md) §3.3。
 
 ### 5.2 url 的三种写法
 
-| 写法 | 例 | 说明 |
-|---|---|---|
-| `m?xwl=<模块相对路径，**不带 `.xwl`**>` | `m?xwl=<模块>/…/xxxSql/queryBizList` | **最常用**。相对 `wb/modules/`，补 `.xwl` 就是文件路径（见 [`references/sql-fragments.md`](references/sql-fragments.md) §3.3） |
-| `/<短名>` | `/upload`、`/get-file`、`/download` | 短名注册表 **`wb/system/url.json`**，框架内部端点。改动时别自己编短名 |
-| `http://…` 或任意 url | `Wb.open({url:'http://…', inframe:true})` | 外部地址必须 `inframe:true` |
-
-> `url` 的解析口径（短名**不解析**、**只判本 wb 根**、**按单 webapp 判定**）见 [references/sql-fragments.md](references/sql-fragments.md) §3.4。
+三种写法为 `m?xwl=…`、注册短名与外部 URL；外部地址须 `inframe:true`。完整示例见 [references/js-api.md](references/js-api.md)「附录：引用通路总表与代码位置」；解析边界见 [references/sql-fragments.md](references/sql-fragments.md) §3.4。
 
 ### 5.3 引用位置：这些代码写在 xwl 的哪一处
 
-| 位置 | 放什么 |
-|---|---|
-| `控件.events.click` / `ok` / `beforeedit` / `select` … | `Wb.request` / `Wb.open` / `Wb.requestAg` / `Wb.upload`（**最常见**） |
-| `store.configs.url` | 数据源指向 SQL 文件 |
-| `store.configs.autoLoad` (+ `configs.params`) | 首屏自动加载，用固定参数 |
-| `column.configs.renderer` | 列渲染时取数（少见） |
-| `module.configs.serverScript` | 服务端 `app.get` / `app.run` / `app.send` / `app.rundomain` / **`app.execute(url)`** |
-| xwl 顶层 `inframe` / `pageLink` | 页面本身的打开方式（是否 iframe、菜单/链接地址） |
-
-> 事件 JS 一律用**单引号**（xwl 的字符串转义规则，见第二章）。
+事件、store、列配置、服务端脚本与页面顶层的引用位置不同。逐项位置表见 [references/js-api.md](references/js-api.md)「附录：引用通路总表与代码位置」。
 
 ### 5.4 四条最容易踩的
 
-> 四条易踩的完整说明见 [references/js-api.md](references/js-api.md) 与契约 `test-prompts.json`。
+四条通路的完整写法、回传处理与边界见 [references/js-api.md](references/js-api.md)；调用场景契约见 `test-prompts.json`。
 
 ## 六、SQL 片段：`module.serverScript` ↔ `dataprovider`
 
@@ -520,54 +462,25 @@ python <skill根>/scripts/xwl.py diffguard <改过的文件或目录> --strict  
 
 ## 七、itemId 命名规范与重名处置
 
-`itemId` 是设计器里的节点名；框架真正用来注册与取值的是**注册键 `normalName || itemId`**（`normalName` 优先）。
-重名**不是一律有问题** —— 判据只有**两级**：按**注册键**分组，组内 ≥2 且**被事件 JS 引用 → `error`**、**未被引用 → `benign`**。
+按注册键 `normalName || itemId` 分组：重名且被事件 JS 引用为 `error`，未被引用为 `benign`。
+控件分类、命名约定、处置顺序与 JSON 字段契约见 [references/faq.md](references/faq.md)「附录：itemId 命名规范与重名处置」。
+实测依据见 [references/measured-data-addressing.md](references/measured-data-addressing.md) §七。
 
 ### 7.1 框架怎么把控件交给 JS（这决定了重名的后果）
 
-**注册键是 `normalName || itemId`** —— `normalName` **优先**。所以只要每个同名控件各有互不相同的
-`normalName`，就根本不会撞车，JS 走 `app.<normalName>`。
-
-> 「重名后 `app.X` 取不到值 / 取到的不是你以为的那个」的**确切机制**（注册是**普通赋值**、
-> `unregister` 按同名键直接 `delete` ⇒ **后创建的覆盖先创建的**、**任一重复项被销毁会删掉整个名字**）见
-> [`references/measured-data-addressing.md`](references/measured-data-addressing.md) §7.5（含源码原文）。
+注册键优先取 `normalName`；重名会覆盖，任一重复项销毁会删除同名键。框架源码与确切机制见 [references/measured-data-addressing.md](references/measured-data-addressing.md) §7.5。
 
 ### 7.2 三类控件，三种规则
 
-| 类型 | 注册键重名时 | 依据与约定 |
-|---|---|---|
-| **grid 的列** `column` / `tcolumn` | **一般无害** | 命名约定：**列 `itemId` 默认 ＝ 字段名**；**仅当同页存在多个网格**（字段名可能跨网格重复）时，加 **`Col` 后缀（camelCase）**。取数走 `app.<grid>.getSelection(0).data.XXX`，**不直接取列控件** ⇒ 列名撞车不影响取值 |
-| **取值控件**（14 个 `Ext.form.field.*`） | **靠 `normalName` 区分** | 一般是"选中一条数据的详细展现"，`itemId` 默认就用字段名，重名不可避免。**各有唯一 `normalName` ⇒ 注册键不同、不成组**，JS 写 `app.<normalName>` |
-| **按钮 / `item` / 面板 / `tab` / `toolbar` / 数据承载** | **被引用即 `error`** | 新代码**必须**把 `itemId` 区分开。老代码若已如此且**没被 JS 引用**，可以不改；**一旦被 JS 引用就是真 bug** |
-
-第四种情况：注册键**不是合法 JS 标识符**（含中文 / 空格 / `.` 等）—— 点号访问不适用，只能用
-`app.get('名')` **或** `app['名']` 取，所以 `itemids` 把这类重名判为无害（`configs.id` 命名空间不在本工具建模范围）。
-
-> `normalName` 的合法性（**不是所有控件都接受**，写了属**非法配置**）见 [references/measured-data-addressing.md](references/measured-data-addressing.md) §7.1。
-
-各类在**样本工程**里的实测组数、比例与按类型的分布见
-[`references/measured-data-addressing.md`](references/measured-data-addressing.md) §七。那些数字只是**一个样本的量级参考**，
-不要当成通用阈值 —— **在你自己的工程上跑 `itemids` / `check` 才是该工程的真实情况**。
+列、取值控件、按钮与面板等按不同命名约定处理；非合法 JS 标识符须用取名 API。
+分类表见 [references/faq.md](references/faq.md)「附录：itemId 命名规范与重名处置」。
+`normalName` 合法性与样本分布见 [references/measured-data-addressing.md](references/measured-data-addressing.md) §7.1 与 §7.2。
 
 ### 7.3 遇到重名：先读父子关系，再把候选交给用户选
 
-**不要**"删一个"、"随便挑一个"、或"重名就不处理"。按这个顺序做：
-
-> `itemids` 的常用三个选项（`--dups-only` / `--name` / `--suggest`）见 `xwl.py itemids --help`（另有 `--fix` / `--controls` / `--json`）。
-
-> 建议值的命名惯例与实测依据见 [references/measured-data-addressing.md](references/measured-data-addressing.md) §7.6。
-
-> 想知道**某个工程整体**有多少重名：在**你自己的工程**上跑一遍就是最新结果 —— `itemids <file> --dups-only`（单文件明细）、
-> `check`（error / benign 计数）、`itemids <file> --json`（机器可读）；样本工程的一份完整分布（各档组数 + 按控件类型的 Top）见
-> [`references/measured-data-addressing.md`](references/measured-data-addressing.md) §7.2，只作**量级参考**。
->
-> `itemids <file> --json` 的**字段契约**（脚本消费用）：`groups[].name` 的值 = **注册键**
-> （`normalName || itemId`，**不是 `itemId`**）；`groups[]` 另有 `itemIds`（该组节点的 `itemId` 列表）
-> 与 `registryName`；`--name --json` 的每个 node 项含 `itemId`。字段名不变、但 `name` 的**值**按
-> 注册键走 —— 汇总一律用 `itemIds` / `registryName`，别再把 `name` 当 `itemId`。
-
-> **怎么在 `path` 里精确指到其中一个**（`@itemId#N` 与串联 `@`）见 **§3.1** —— 与 `patch` 的
-> 寻址规则是同一件事，写在那边，这里不重复。
+先判断真实目标，再交候选清单；不要随意删除或挑选。
+建议依据见 [references/measured-data-addressing.md](references/measured-data-addressing.md) §7.6；完整命令与 JSON 字段契约见 [references/faq.md](references/faq.md)「附录：itemId 命名规范与重名处置」。
+精确寻址 `@itemId#N` 与串联 `@` 仍见 §3.1。
 
 ## 八、常见问题（FAQ）
 

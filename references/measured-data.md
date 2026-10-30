@@ -39,7 +39,7 @@
 - **八 · 十一**（SQL / serverScript 分布 / 判据修正对照数）→ [`measured-data-criteria.md`](measured-data-criteria.md)
 - **九 · 十**（页面顶层骨架 / folder.json / 规模与耗时）→ [`measured-data-skeleton.md`](measured-data-skeleton.md)
 
-> 这几个主题文件属**依据层**（首行已声明），**仍受 ≤8k 约束**（实测最大 7,202 字符）；不受 8k 约束的是**规格层**（`anti-patterns.md`／`faq.md` 一类）。
+> 这几个主题文件属**依据层**（首行已声明），**仍受 ≤8k 约束**（逐件字符数由自检复量）；不受 8k 约束的是**规格层**（`anti-patterns.md`／`faq.md` 一类）。
 
 ## 一、xwl 引用方式的使用次数
 

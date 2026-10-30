@@ -368,7 +368,7 @@ module                          ← 每个 xwl 的 children[0]（页面级节点
 
 ```json
 {"type": "column", "configs": {"itemId": "code", "text": "编码",
-  "renderer": "function(v){ return v == null ? '' : String(v); }"}, "children": []}
+  "renderer": "return v == null ? '' : String(v);"}, "children": []}
 ```
 
 `keyName` 同为 `column` 的 `configs` 键，值写**字典里的键名**（字符串、不写代码）：

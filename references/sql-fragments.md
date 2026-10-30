@@ -60,6 +60,8 @@ python <skill根>/scripts/xwl.py schema module       --controls <工程>/wb/syst
 
 ### 3.1 方向一：`dataprovider.sql` 用 `{#名字#}` 引用 `serverScript` 注入的值
 
+`{#x#}` 文本替换的是**片段**；`serverScript` 产条件片段（如 `whereSql`），值走 `{?orderNo?}` 绑定，dataprovider 保持单段 SELECT，别再拼入另一份完整 SELECT。
+
 ```js
 // module.configs.serverScript
 var data = app.get();                      // 取查询参数

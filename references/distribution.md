@@ -12,7 +12,7 @@
 | **手工拷目录** | 只要一台机器、不想引入 npm；**或客户端不在 CLI 的 agent 表里** | 把仓库目录整个拷进客户端的 skill 目录（或 `git clone` 到该目录） |
 
 目录本身就是通用布局（`SKILL.md` ＋ `references/` ＋ `examples/` ＋ `scripts/`），
-**没有平台专属封装**；两条渠道装出来的内容**逐文件相同**。
+**没有平台专属封装**；两条渠道使用同一套技能内容，但 CLI 安装副本**可能不含 `metadata.json`** 等源码树文件，不能无条件承诺逐文件相同。
 
 > **WorkBuddy 只能走手工那一条**：CLI 的 agent 表里没有它 ⇒ 把目录放到
 > `~/.workbuddy/skills/<name>`（Windows 上即 `%USERPROFILE%\.workbuddy\skills\<name>`）。
@@ -72,8 +72,8 @@ python <skill根>/scripts/xwl.py check <业务工程>/wb/modules/<模块>/某页
 - 升级：`npx skills update webbuilder-xwl-patch -g -y`（⚠️ 先读第二节注记 1，假定它会写）；
 - 卸载：`npx skills remove webbuilder-xwl-patch -g -y`；
 - 手工装的：删目录即可 —— 本 skill **不在系统任何位置留状态**（无缓存写、无注册表、无后台进程）；
-- 装完自证：`python <skill根>/scripts/selftest.py`（内置样本、不需要业务工程；装在**没有 `.git`**
-  的目录里时加 `--allow-nogit`，并留意它打印的"本次未执行守卫族"清单）。
+- **源码树／手工整目录**装完自证：`python <skill根>/scripts/selftest.py`（须保留 `metadata.json` 等完整源码文件；内置样本、不需要业务工程；没有 `.git` 时加 `--allow-nogit`，并留意它打印的未执行守卫族清单）。
+- **CLI 安装渠道**只承诺第六节的冒烟三件：`--list-blocks`、照 `examples` 生成一页、`--help`；副本可能不含 `metadata.json`，不承诺能跑完整 `selftest`。
 
 ## 六、装完先做这三步
 

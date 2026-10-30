@@ -3,7 +3,7 @@
   "name_en": "webbuilder-xwl-patch",
   "displayName": "webbuilder-xwl-patch",
   "author": "yfwang0731",
-  "version": "1.7.6",
+  "version": "1.7.7",
   "schema_version": "1.0",
   "description": "WebBuilder（wb）平台 .xwl 定义文件的处理与安全编辑：结构级 patch（只给值 / 子树，工具按设计器自己的算法重建整份文件）+ 格式校验 + 相对 git 基线的压平检测。",
   "core_capabilities": [
@@ -97,7 +97,8 @@
     "references/workflow-notes.md",
     "references/workflow-notes-guards.md",
     "references/transcription-defaults.md",
-    "references/distribution.md"
+    "references/distribution.md",
+    "references/workflow-notes-guards-maintenance.md"
   ],
   "layers": {
     "references/walkthrough.md": "spec",
@@ -118,9 +119,11 @@
     "references/workflow-notes.md": "evidence",
     "references/workflow-notes-guards.md": "evidence",
     "references/transcription-defaults.md": "spec",
-    "references/distribution.md": "spec"
+    "references/distribution.md": "spec",
+    "references/workflow-notes-guards-maintenance.md": "evidence"
   },
   "update_history": [
+    { "version": "1.7.7", "date": "2026-10-30", "summary": "references 面彻底整改（patch）：**无新子命令、无新参数**（`sub.add_parser` 增删 0）。六条同属一个文件面，`metadata` 的 `references`／`layers` 只对账一次。① **`ITEM-1157` SKILL.md 下沉**：587 行／27 521 字符 → **500 行／22 427 字符**（净降 **5 094**）；承接件均落 `spec` 层（`faq.md`／`js-api.md`），未动 `walkthrough.md`（余量仅 23）。⚠️ 500 行是业界上限（agentskills.io 与 Microsoft Learn 同口径）的**边界值、零余量**；距 `_SK_GOAL`（12 000）仍差 **10 427** ⇒ 分批推进。② **`ITEM-1166` 依据层 8k 失真收口**：`workflow-notes-guards.md` 8 984 字符拆为 **5 533 ＋ 4 124**（新增 `workflow-notes-guards-maintenance.md`）；`references` 与 `layers` 各 20 项、双向差集空；新增 **8k 守卫 12 行**，落 **`_docs_tail_scaffold`**（与 `17u` 层归属检查相邻，复用已校验的 `_b1_lay`，⛔ 不重复读 metadata）；阈值 `8 000` 的推导链写进代码注释（＝5 000 tokens × 1.61 字符/token ＝ 8 050 取整，依据业界对 SKILL.md 的 ≈5k tokens 建议）；同时订正 `SKILL.md` 与 `references/measured-data.md` L42 两处过期的「7,202」。③ **`ITEM-1161`** 「装完自证」拆两档：源码树／手工整目录 ⇒ 完整 `selftest`；CLI 安装渠道 ⇒ 只承诺冒烟三件，并写明副本可能不含 `metadata.json`。④ **`ITEM-1163`** SQL 示例统一「条件片段」契约：`serverScript` 只产 `AND …` 片段、`dataprovider` 保持单段完整 SELECT，值走 `{?…?}` 绑定 —— 不再有「完整 SELECT 再嵌完整 SELECT」。⑤ **`ITEM-1164`** `renderer` 示例由函数表达式改函数体（`return v == null ? '' : String(v);`）。⑥ **`ITEM-1165`** `autoLoad` 措辞分层：带查询条件面板／工具条的页面用 `false`、首屏查询由代码触发；转写规范补「且不做代码触发」限定；两处互加指针。⚠️ 已知：`_docs_tail_scaffold` 387 行（余 13）、`_docs_layers_and_distribution` 373（未动）、`_doc_guard_xfile_pt` 257（未动）；`references/js-api.md` 导语陈旧（仍称「本文是 SKILL 第五章 5.4 的展开」）本批不改，已立 `ITEM-1171` 归后续文档批。" },
     { "version": "1.7.6", "date": "2026-10-29", "summary": "判据与语料收口批（patch）：**无新子命令、无新参数**（`sub.add_parser` 增删 0）。① **`ITEM-1167` 往返臂换 oracle**：现网 8 处「往返」里一处自陈判别力已归零 ⇒ 新增 **8 个模块级 `_GOLDEN_*` 常量**（4 份页面级 ＋ 4 个值样本）＋ **固定点断言** `expand(金标) ≡ 金标`（证明的是「与金标一致」，⛔ 不是「与自身自洽」）；注入同向两点（折叠 `.0` ＋ `equivalent` 退化）时旧臂全绿、新臂 3 条全红。⚠️ 已知盲区：改**值**字符（如 `备注`→`備注`）仍绿，只有**结构**字符必红，靠注释 ＋ 人工评审兜。② **`ITEM-1073`（workspace 工具，不占版本位）**：`inject_runner.py` 的 `git ls-files --others` 失败由 `if rc2 == 0:` 静默跳过改为 **fail-loud**（点名「本次没扫未跟踪文件」＋ `return None`），调用方文案同步改准。③ **`ITEM-1160` 语料拉齐**：`test-prompts.json` 的 `id7`／`id14`／`id21` 的 `expected` 按现行契约重写（新键默认拒绝 `rc=2`／缺来源默认 `rc=0`／`--strict` 下悬空 `rc=1` 且 `__MODULE__` 不再一律豁免）；`id`／`prompt` 未动、`17w` 覆盖集前后相同。④ **`ITEM-1162` CI 收紧**：`Default must fail` 由「任意非零即通过」改为三判（`rc` **恰为 1** ＋ 输出含「默认判红 —— 静默绿是病根」＋ 无 `Traceback`）。⑤ **对外文案一处订正**（经追认）：`xwl.py` 的 `#36` 附注原写「不加 `--strict` 仍只告警」，实际**非 strict 根本不打印该行** ⇒ 改准；`references/faq.md` 同句同改，与语料 `id21` 三处口径统一。⚠️ 遗留：`_check_bc_contract` 406 行（不在 `_CAP_FNS`，无机械约束，下版拆）；`privacy_scan` 的 `--patterns` 清单面待本地跑。" },
     { "version": "1.7.5", "date": "2026-10-27", "summary": "注释与实现同步（patch）：**无新子命令、无新参数、无输出变化**（`git diff` 里 `sub.add_parser` 增删 0；去 docstring 后 AST 唯一差异是一处 **doc-only 字符串常量**且**无代码消费者**；`--only docs` 输出与改前**逐字相同**）。① **按缺陷面订正 12 个位置／13 处文本**（全是注释、docstring 内文本与一处 doc-only 常量，⛔ 零可执行语句改动）：`[:16]` 前缀法被归错臂的 3 处（`17j-6` 的 `_probe = _n[:16]` vs 围栏臂 `17j-14` 的**整串**比对）；「异常把整块打崩」已过期的 7 处（`1.7.4` 序 6 已给 `_run_block` 补三支 `except`，改为「被兜住、红行点名该块，但**定向断言仍未跑到**」，并写明 `KeyboardInterrupt`／`MemoryError`／`SystemError` 是 re-raise、串行档仍整进程退出）；换 oracle 时描述未跟改的 3 处（四臂表 ②、`_real_out_corpus` docstring、`17j-14` 段头／排除理由／边界）。② **目录覆盖缺口只做只读取证、未实现**：`references/` 19 份／含 `## 目录` 7 份＝`_TOC_REQUIRED` 7 条（口径 B 现 0 红，但**不覆盖**「该有的没有目录」）；口径 A 体量阈值**无单一阈值可切**（有目录组 116–398 行、无目录组 73–173 行，区间重叠；`T≤73` 全误报 12 份）⇒ 口径待定，`ITEM-1151` 回「待定版号」。③ 判据口径两处订正：施工单「多出任何一处即越界」改**按缺陷面收口**（同缺陷其余位置须同批改并**当场申报**）；只读序的「未改动」判据由 `git status --porcelain` 为空 改**两次 `md5sum` ＋ `git diff --numstat` 逐字相同**（原式在合规实现上必然假红）。⚠️ 已知：`_check_subcommands` 余量 382 → 387（余 13），**已冻结**、动它前先把 12b 段搬出；`--only` 分支不打 `node:` 行（`ITEM-1158` 另立）。" },
     { "version": "1.7.4", "date": "2026-10-26", "summary": "分发面适配 ＋ 内部判据（patch）：无新子命令、无新参数、无退出码变化（`git diff` 里 `sub.add_parser` 与 `rc=` 行增删均 0）。① 分发：README 首段改「Agent Skill（面向支持 Agent Skills 规范的客户端，WorkBuddy 同样可用）」＋新增「安装」节；新增 `references/distribution.md`（五条 `npx skills` 命令、`check` 与 `update` 同源的行为注记、环境依赖三件、cwd 口径、升级卸载）；`metadata` 的 references／layers 同批 +1（spec）、SKILL 索引 +1 行 ⇒ 分发面 41 → 42。② 对外文案（输出变、能力不变）：`xwl.py` 两处提示（itemids 全量重名报告／diffguard 重跑）改绝对入口 ＋ 逐参引号（新增 `script_entry()`／`quote_arg()`／`cmd_hint()`，三档引号覆盖尾反斜杠与含引号两种难例）；三份文档调用形态统一为 `python <skill根>/scripts/xwl.py`。③ CI 并入 `install-layout` job（隔离 HOME／临时 cwd、`--copy` 装到 codex 与 codebuddy 两个不同目录、断言 agent 目录本身非链接、逐文件比源树并排除 metadata.json、缺资源／路径／内容变化三态、DISABLE_TELEMETRY、`git status --ignored` 为空、`skills@^1.7` 钉版本并打印实际版本）。④ 判据六条：函数行数上限判据搬出 `_docs_tail_scaffold` 到模块级 `_fn_cap_check`（399 → 375 行，解自指）；两条判定由 if/elif 拆成两条独立 if；`_run_block` 补 SystemExit／KeyboardInterrupt／BaseException 三支（崩溃仍打汇总行并点名该块，⛔ 不改末行锚）；目录族补「该有目录却没有」（登记表 ＋ 结构特征）；围栏臂宣称改准为整句（16 字前缀属行内反引号臂）；目录完整性扩到所有 `##` 级 ＋ 4 条一次性豁免 ＋ 盲区登记。⑤ 新增入口形态守卫（源码／运行时／文档三面，15 组矩阵全过）。⚠️ `ITEM-1130` 裁定维持 5 类扩展名不动；`install-layout` 首跑结论待 CI。" },

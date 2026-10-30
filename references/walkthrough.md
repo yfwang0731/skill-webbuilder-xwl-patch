@@ -88,9 +88,9 @@ sql  (dataprovider, itemId='dataprovider', …)
 ```json
 [
   {"op": "set", "path": ["@module", "configs", "serverScript"],
-   "value": "var sql = 'select ORDER_NO, CUSTOMER, QTY, CREATED_ON from ORDER_FILE where 1=1';\nvar orderNo = app.get('orderNo');\nif (orderNo) { sql += \" and ORDER_NO = '\" + orderNo + \"'\"; }\nrequest.setAttribute('sql', sql);"},
+   "value": "var whereSql = '';\nvar orderNo = app.get('orderNo');\nif (orderNo) { whereSql = ' and ORDER_NO = {?orderNo?}'; }\nrequest.setAttribute('whereSql', whereSql);"},
   {"op": "set", "path": ["@dataprovider", "configs", "sql"],
-   "value": "select ORDER_NO, CUSTOMER, QTY, CREATED_ON from ORDER_FILE where 1=1\n{#sql#}"}
+   "value": "select ORDER_NO, CUSTOMER, QTY, CREATED_ON from ORDER_FILE where 1=1\n{#whereSql#}"}
 ]
 ```
 
@@ -117,7 +117,7 @@ python <本skill目录>/scripts/xwl.py sqlrefs wb/modules/<模块>/xxxSql/queryO
 它核对 `{#名字#}` 与 `serverScript` 里 `setAttribute` 的名字对不对得上。
 **对不上是静默失效** —— 页面不报错，只是查不出数据。所以这步不能跳。
 
-**预期**：出现 `[ok] {#sql#} × 1 ← serverScript 已提供`，末行 `=== 结果: OK`。
+**预期**：出现 `[ok] {#whereSql#} × 1 ← serverScript 已提供`，末行 `=== 结果: OK`。
 
 ⏭️ SQL 侧完成，开始造页面。
 

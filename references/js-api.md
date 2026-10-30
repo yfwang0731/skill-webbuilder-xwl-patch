@@ -24,6 +24,7 @@
 - [4. `Wb.requestAg`](#4-wbrequestag--调后台-spring-方法)
 - [5. 窗口：`createInstance` / `closeAction` 与 `app._X`](#5-窗口createinstance--closeaction-与-app_x)
 - [6. `Wb.getModified` —— 取 grid 的变更集（用法约定，非平台契约）](#6-wbgetmodified--取-grid-的变更集用法约定非平台契约)
+- [附录：引用通路总表与代码位置](#附录引用通路总表与代码位置)
 
 ## 1. `Wb.request` —— 请求一个服务端片段
 
@@ -265,3 +266,55 @@ Wb.each(Wb.getModified(app.<grid>).destroy, function (row) { /* 删除 */ });
 ### 6.3 它不是引用通路
 
 `Wb.getModified` **不请求服务端**，只读本地变更状态 ⇒ 它负责"取"；提交仍走 §1 的 `Wb.request` 或 §4 的 `Wb.requestAg`。
+
+## 附录：引用通路总表与代码位置
+
+一个 `.xwl` 向外引用别的 xwl 或后台方法，只有下面这几条通路 —— **先看总表**：
+
+| 引用什么 | 最短骨架 | 写在哪里 |
+|---|---|---|
+| **数据源**（SQL 文件） | `store.configs.url = 'm?xwl=…'`（配合 `store.load({out})`） | store 节点的 `configs.url` |
+| **服务端片段**（SQL / 校验 / 取数） | `Wb.request({url:'m?xwl=…', params, success:fn})` | 控件的 `events.*` 里 |
+| **子页面**（列表页 / 弹窗） | `Wb.open({url:'m?xwl=…', title:'…', params:{…}})` | `events.*` 里 |
+| **文件上传 / 导入入口** | `Wb.upload({form: app.form1, url:'m?xwl=…', success:fn})`（`form` 里必须有 `file` 控件） | `events.*` 里 |
+| **后台 Spring 方法** | `Wb.requestAg({params:{bean:'…', method:'…', …}})`（**不用写 `url`**） | `events.*` 里 |
+| **服务端 xwl 调 xwl** | `app.execute('m?xwl=…')` | `module.configs.serverScript` |
+
+**回传怎么取**（写 `success` 回调时最常用的一条）：`dataprovider` 出的数据是
+`Wb.decode(resp.responseText).rows` / `.total`；`serverScript` 里 `app.send(x)` 出来的是 `x` 本身。
+
+> **完整写法**（选项全表、四种响应形态怎么收、回调签名、上传两步链）见
+> [`js-api.md`](js-api.md)；各条在样本工程里的**出现次数**见
+> [`measured-data.md`](measured-data.md) §一（只作量级参考，与你怎么改无关）。
+
+### 5.1 怎么读一个 `m?xwl=` 引用
+
+> 引用写的是**模块相对路径、不带 `.xwl` 后缀**（**补上 `.xwl`** 即文件路径）；**从文件找引用方**见
+> [`sql-fragments.md`](sql-fragments.md) §3.3（**被引用的片段是常态**）。
+
+### 5.2 url 的三种写法
+
+| 写法 | 例 | 说明 |
+|---|---|---|
+| `m?xwl=<模块相对路径，**不带 `.xwl`**>` | `m?xwl=<模块>/…/xxxSql/queryBizList` | **最常用**。相对 `wb/modules/`，补 `.xwl` 就是文件路径（见 [`sql-fragments.md`](sql-fragments.md) §3.3） |
+| `/<短名>` | `/upload`、`/get-file`、`/download` | 短名注册表 **`wb/system/url.json`**，框架内部端点。改动时别自己编短名 |
+| `http://…` 或任意 url | `Wb.open({url:'http://…', inframe:true})` | 外部地址必须 `inframe:true` |
+
+> `url` 的解析口径（短名**不解析**、**只判本 wb 根**、**按单 webapp 判定**）见 [sql-fragments.md](sql-fragments.md) §3.4。
+
+### 5.3 引用位置：这些代码写在 xwl 的哪一处
+
+| 位置 | 放什么 |
+|---|---|
+| `控件.events.click` / `ok` / `beforeedit` / `select` … | `Wb.request` / `Wb.open` / `Wb.requestAg` / `Wb.upload`（**最常见**） |
+| `store.configs.url` | 数据源指向 SQL 文件 |
+| `store.configs.autoLoad` (+ `configs.params`) | 首屏自动加载，用固定参数 |
+| `column.configs.renderer` | 列渲染时取数（少见） |
+| `module.configs.serverScript` | 服务端 `app.get` / `app.run` / `app.send` / `app.rundomain` / **`app.execute(url)`** |
+| xwl 顶层 `inframe` / `pageLink` | 页面本身的打开方式（是否 iframe、菜单/链接地址） |
+
+> 事件 JS 一律用**单引号**（xwl 的字符串转义规则，见 SKILL.md 第二章）。
+
+### 5.4 四条最容易踩的
+
+> 四条易踩的完整说明见 [js-api.md](js-api.md) 与契约 `test-prompts.json`。

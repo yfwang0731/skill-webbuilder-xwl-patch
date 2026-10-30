@@ -5509,6 +5509,18 @@ def _docs_tail_scaffold(_S) -> None:
             print("[ok]  17u 层归属声明：references/ 下 %d 份在 metadata.json 的 `layers` 里均恰有一条、"
                   "值为 spec/evidence（evidence 均有家族结构佐证）" % len(_b1_files))
 
+        # 起因：依据层单件过长会突破按需读取成本，新增家族成员也须受约束。
+        # 8 000 ＝ 5 000 tokens × 1.61 字符/token ＝ 8 050，向下取整（取更严一侧）。
+        # 依据：业界对 SKILL.md 的建议 ≈5k tokens（agentskills.io／Microsoft Learn 的 500 行口径）
+        for _ev_rel in (_r for _r, _layer in _b1_lay.items() if _layer == "evidence"):
+            try:
+                with io.open(os.path.join(root, _ev_rel), encoding="utf-8", newline="") as _ev_fh:
+                    _ev_chars = len(_ev_fh.read())
+            except (OSError, UnicodeError) as _ev_exc:
+                doc_fail.append("依据层字符上限：%s 读不出（%s）" % (_ev_rel, _ev_exc))
+            else:
+                if _ev_chars > 8000:
+                    doc_fail.append("依据层字符上限：%s 为 %d 字符，超过 8000" % (_ev_rel, _ev_chars))
     # 17r 分发面自包含：扫描面（`git ls-files` ∪ 磁盘新增未跟踪，见 `_git_scan_scope`）里不得出现
     #     「指向 skill 包外」的引用。
     #     判据 = 包外文档名（四种，见下方 _b17r_docs 元组）
