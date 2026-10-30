@@ -172,7 +172,7 @@ python <本skill目录>/scripts/xwl.py patch wb/modules/<模块>/orderQuery.xwl 
 
 1. `store` 是 **`grid` 的子节点**，不是 `grid` 的兄弟（骨架见 `references/controls.md` §4.2）；
 2. `store.url` 用**模块相对路径、不带 `.xwl` 后缀**；
-3. 新增控件的**注册键 `normalName || itemId` 唯一**（列控件可重名，见 SKILL.md 第七章）。
+3. 新增控件的**注册键 `normalName || itemId` 唯一**（列控件可重名，见 [`faq.md`](faq.md)「附录：itemId 命名规范与重名处置」）。
 
 **预期**：`patch` 报告已应用 2 个 op、语义等价比对通过，`--backup` 生成 `.bak`，自动校验 `ALL OK`。
 
@@ -197,7 +197,7 @@ python <本skill目录>/scripts/xwl.py params wb/modules/<模块>/orderQuery.xwl
 python <本skill目录>/scripts/xwl.py check wb/modules/<模块>/orderQuery.xwl wb/modules/<模块>/xxxSql/queryOrder.xwl
 ```
 
-**预期**：每个文件 `-> OK`，末行 `=== 结果: ALL OK`。有 `[FAIL]` 就按第八章 FAQ 排查。
+**预期**：每个文件 `-> OK`，末行 `=== 结果: ALL OK`。有 `[FAIL]` 就按第五章 FAQ 排查。
 
 > 大文件上先跑 `check --no-js` 快得多（486 KB 实测：全开约 1 s、`--no-js` 约 0.4 s；
 > 跨 5 个工程实测最大的 746 KB 也仍在 1 s 上下）。
@@ -236,7 +236,7 @@ python <本skill目录>/scripts/xwl.py folders wb/modules/<模块>/orderQuery.xw
 
 ## 第 9 步 · 交付前自检
 
-过一遍 SKILL.md 第九章的清单。最常被跳过、也最要命的两条：
+过一遍 SKILL.md 第六章的清单。最常被跳过、也最要命的两条：
 
 - [ ] **在设计器里打开一次**。`check` 只证明"格式能加载"，**不证明"页面能用"**；
       新文件又没有 `git diff` 可比 —— 所以这一步没有替代品。

@@ -4,7 +4,7 @@
 > （典型路径 `…/xxxSql/queryXxx.xwl`）。它的**文件结构与普通页面完全一样**，
 > 只是内容固定在 `module` + `dataprovider` 这两层。
 >
-> **本文件是 [`SKILL.md`](../SKILL.md) 第六章的完整内容**（那一章只留骨架与入口）—— 编辑方式（`patch` / `@itemId` / 校验）见那边第三章。
+> **本文件是 SQL 片段的完整内容**（[`SKILL.md`](../SKILL.md) 只在 §2.7 留骨架与入口）—— 编辑方式（`patch` / `@itemId` / 校验）见那边第三章。
 > **什么时候看这份**：改 SQL 片段、或改「参数控件 → store → SQL」链路时。
 >
 > **数字与统计口径在 [`measured-data-criteria.md`](measured-data-criteria.md)**（SQL 相关口径在 §八）——

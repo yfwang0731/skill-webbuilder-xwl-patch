@@ -1,6 +1,6 @@
 # 改完的自检清单
 
-本文是 [`SKILL.md`](../SKILL.md) 第九章的展开 —— **交活前逐条过一遍**。
+本文是 [`SKILL.md`](../SKILL.md) 第六章的展开 —— **交活前逐条过一遍**。
 
 分组与 [`anti-patterns.md`](anti-patterns.md)（动手前扫的那份）**对齐**，便于对照：
 

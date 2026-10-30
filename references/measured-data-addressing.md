@@ -109,7 +109,7 @@ unregister: function (item) {
 
 > **换版本请按符号名 `ComponentManager.register` 去搜**，别按行号找。
 
-为什么会"取不到值"的机制见本文 §7.5（上面源码）；规则本身（谁优先、`normalName` 为什么优先）见 `SKILL.md` §7.1。
+为什么会"取不到值"的机制见本文 §7.5（上面源码）；规则本身（谁优先、`normalName` 为什么优先）见 [`faq.md`](faq.md)「附录：itemId 命名规范与重名处置」。
 
 `unregister` 的 `delete` 是"重复会取不到值"的**确切机制**：任一重复项被销毁，
 整个名字就从页面作用域消失，哪怕另一个同名控件还活着。

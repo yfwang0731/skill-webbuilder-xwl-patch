@@ -2854,91 +2854,111 @@ _FENCE_FOUR_ARM_DIVISION = """\
 
 # ---- `17g` 外移点表（**原寄居 `_check_docs` 函数体**；#15「有界下沉」时移出，函数体只留引用）----
 #   位置口径：移出函数体是为了给 `_check_docs` 减负（阈值 `>1300 行` 触发）。
-#   本表是**纯数据**、被 `_check_docs` 的 `17g` 循环按元组结构读取 ⇒ 搬到模块级**不改任何判据**。
-# ⑤ 元组末位 = 该外移点在 `SKILL.md` 里的**锚点**（所属小节的标题前缀，须实测唯一）：
-# 断言① 由「全文 contains」收紧为「**该小节区间内** contains」（机理与残留盲区见 `_check_docs` 的 for 循环）。
-# ⚠️ **零损合并（32 → 26）**：有 6 组条目的 `(anchor, dst)` **完全相同** ⇒ 同锚点同目标的
-#   两条判据本来就在判同一个区间、只是 `keys` 分了两处写。合并成一条后 `keys` 取**并集**，
-#   断言①（SKILL 该小节内出现该 dst 的指针）与断言②（dst 文件里这些承载词都在）的**覆盖面不变**：
-#   · 条数 32 → 26；· **承载词槽位总数仍是 83**（逐条相加：改前 83、改后 6 组合并各减 1 条重复计数为 0，
-#     因为并集没有重复词 ⇒ 仍 83）；· 判据代码一个字符都没改（只是表体变短）。
-#   ⛔ 这不是"为凑数退役条目"：6 条的 `keys` 全部进了并集，一个承载词都没丢。
-_splits = [
-    ("第五章 5.4 四条通路／五 5.4 四条易踩", "SKILL.md", "references/js-api.md",
+#   ⚠️ **拆成两张表**（原 `_splits` 一条元组同时管"主文档留了指针"与"目标文件有承载词"两件事，
+#   主文档一改结构就一起碎）。拆开后两侧各管一件：
+#   · `_SPLIT_CARRIERS` —— 承载词表：目标文件里这些词必须还在（与锚点无关）。**全部 26 条都在**，
+#     承载词原样搬来，一个没丢。
+#   · `_SPLIT_POINTERS` —— 指针表：主文档的某个章节区间里必须出现指向目标文件的指针。
+#     **20 条**。不进的 6 条，其外移点所在小节随 §五／§七 整章删除（改完后主文档不再有该锚点）：
+#     `### 5.1 怎么读一个`／`### 5.2 url 的三种写法`／`### 5.4 四条最容易踩的`／
+#     `### 7.1 框架怎么把控件交给 JS`／`### 7.2 三类控件`／`### 7.3 遇到重名`。
+#     这 6 条的承载词仍在 `_SPLIT_CARRIERS` 里守着。
+#   锚点一律**去编号**改成语义关键词，由 `_region_after_anchor` 按「标题包含关键词」匹配；
+#   关键词在**改前与改后两种标题里都能匹配**（逐条核过，且每条在 SKILL.md 里只命中一个标题）。
+#   条数守恒：26 ＝ POINTERS 20 ＋ 只进 CARRIERS 的 6。
+# ⚠️ **零损合并（32 → 26）** 的来历保留：有 6 组条目的 `(anchor, dst)` 完全相同，合并后 `keys` 取并集，
+#   承载词槽位一个没丢（并集没有重复词）。⛔ 这不是"为凑数退役条目"。
+_SPLIT_CARRIERS = [
+    ("第五章 5.4 四条通路／五 5.4 四条易踩", "references/js-api.md",
      ["Wb.request", "Wb.open", "Wb.upload", "Wb.requestAg",
-      "能力边界不是错误", "不用写", "错误对象"],
-     "### 5.4 四条最容易踩的"),
-    ("第 4 步 逐项判据／三第4步 两坑", "SKILL.md", "references/faq.md",
-     ["无 BOM", "换行一致", "重名", "别写成", "不是替换成换行符"],
-     "### 第 4 步 · 格式校验"),
-    ("4.2 退出码与输出约定／四 4.2 退出码", "SKILL.md", "references/faq.md",
-     ["退出码", "不影响退出码", "严格二分", "行首标记", "报告类"],
-     "### 4.2 退出码与输出约定"),
-    ("2.4 写回算法／2.4 规模占比", "SKILL.md", "references/measured-data-designer.md",
-     ["toString(1)", "syncSave", "updateModule", "≈ 三成", "别把 diff 当", "本次改动"],
-     "### 2.4 换行与展开"),
-    ("7.1 框架侧源码", "SKILL.md", "references/measured-data-addressing.md",
-     ["ComponentManager", "unregister"], "### 7.1 框架怎么把控件交给 JS"),
-    ("FAQ 全量问答", "SKILL.md", "references/faq.md", ["怎么排查"], "## 八、常见问题"),
-    ("改完自检清单", "SKILL.md", "references/checklist.md", ["- [ ]"],
-     "## 九、改完的自检清单"),
-    ("反模式清单", "SKILL.md", "references/anti-patterns.md", ["为什么诱人"],
-     "## 九、改完的自检清单"),
-    ("端到端实操", "SKILL.md", "references/walkthrough.md", ["第 1 步"],
-     "### 第 0 步 · 新建文件"),
-    ("2.6 diffguard 判据细节", "SKILL.md", "references/faq.md", ["粗筛", "定义级"],
-     "### 2.6 压平检测"),
-    ("2.6 diffguard 因果", "SKILL.md", "references/workflow-notes-guards.md", ["定义级", "粗筛"],
-     "### 2.6 压平检测"),
+      "能力边界不是错误", "不用写", "错误对象"]),
+    ("第 4 步 逐项判据／三第4步 两坑", "references/faq.md",
+     ["无 BOM", "换行一致", "重名", "别写成", "不是替换成换行符"]),
+    ("4.2 退出码与输出约定／四 4.2 退出码", "references/faq.md",
+     ["退出码", "不影响退出码", "严格二分", "行首标记", "报告类"]),
+    ("2.4 写回算法／2.4 规模占比", "references/measured-data-designer.md",
+     ["toString(1)", "syncSave", "updateModule", "≈ 三成", "别把 diff 当", "本次改动"]),
+    ("7.1 框架侧源码", "references/measured-data-addressing.md",
+     ["ComponentManager", "unregister"]),
+    ("FAQ 全量问答", "references/faq.md", ["怎么排查"]),
+    ("改完自检清单", "references/checklist.md", ["- [ ]"]),
+    ("反模式清单", "references/anti-patterns.md", ["为什么诱人"]),
+    ("端到端实操", "references/walkthrough.md", ["第 1 步"]),
+    ("2.6 diffguard 判据细节", "references/faq.md", ["粗筛", "定义级"]),
+    ("2.6 diffguard 因果", "references/workflow-notes-guards.md", ["定义级", "粗筛"]),
     # ---- 结构下沉（第一步）：下面这些是正文从 SKILL.md 搬进 references/ 后的外移点 ----
     # 承载词取「必须存活」清单：把 SKILL 里的叙述搬进 references 后，
-    # 主文档留了指针（第一项断言）+ 目标文件里这些词必须还在（第二项断言）。
-    # 迁到 `--help`（通道 B）的那几处，其承载词同样在目标 references 里留一份兜底
-    # （`17g` 只加载 markdown，读不到 `scripts/*.py` 的 `--help`/注释）。
-    ("2.3 静默语义损坏", "SKILL.md", "references/anti-patterns.md",
-     ["静默", "绝不能", "相对基线"], "### 2.3 多行源为什么绝不能压成一行"),
+    # 目标文件里这些词必须还在。迁到 `--help`（通道 B）的那几处，其承载词同样在目标
+    # references 里留一份兜底（`17g` 只加载 markdown，读不到 `scripts/*.py` 的 `--help`/注释）。
+    ("2.3 静默语义损坏", "references/anti-patterns.md",
+     ["静默", "绝不能", "相对基线"]),
     # （原「2.4 规模占比」已并入表首的「2.4 写回算法／2.4 规模占比」—— 同锚点同目标，keys 取并集）
-    ("2.4 --eol 回退", "SKILL.md", "references/faq.md",
-     ["不静默", "回退 LF", "三命令共用"], "### 2.4 换行与展开"),
+    ("2.4 --eol 回退", "references/faq.md",
+     ["不静默", "回退 LF", "三命令共用"]),
     # ⚠️ 本外移点原指 `references/measured-data.md` 一份 ⇒ 拆分后其承载词**跨两份**：
     #    「语义无损」「给谁看」落 §五（→ designer），「逐字节相同」落 §九（→ skeleton）
-    #    ⇒ 拆成两条（各指其新文件、各取指得到它的 SKILL 锚点），以保住「承载词缺一即判红」的力度。
-    ("2.5 字面反斜杠 n", "SKILL.md", "references/measured-data-designer.md",
-     ["语义无损", "给谁看"], "### 2.5 值里的"),
-    ("2.5 骨架侧（种子无关性）", "SKILL.md", "references/measured-data-skeleton.md",
-     ["逐字节相同"], "### 1.3 页面顶层骨架（7 把钥匙，键序固定）"),
-    ("三第0步 folder", "SKILL.md", "references/faq.md",
-     ["不登记就看不到", "只认文件路径", "不替你创建"], "### 第 0 步 · 新建文件"),
-    ("三第3步 三点#3", "SKILL.md", "references/measured-data-designer.md",
-     ["顺带规整", "语义等价", "diff 只含", "重定向"], "### 第 3 步 · 编辑"),
+    #    ⇒ 拆成两条（各指其新文件），以保住「承载词缺一即判红」的力度。
+    ("2.5 字面反斜杠 n", "references/measured-data-designer.md",
+     ["语义无损", "给谁看"]),
+    ("2.5 骨架侧（种子无关性）", "references/measured-data-skeleton.md",
+     ["逐字节相同"]),
+    ("三第0步 folder", "references/faq.md",
+     ["不登记就看不到", "只认文件路径", "不替你创建"]),
+    ("三第3步 三点#3", "references/measured-data-designer.md",
+     ["顺带规整", "语义等价", "diff 只含", "重定向"]),
     # （原「三第4步 两坑」已并入「第 4 步 逐项判据／三第4步 两坑」；原「四 4.2 退出码」已并入
     #   「4.2 退出码与输出约定／四 4.2 退出码」—— 均为同锚点同目标，keys 取并集）
-    ("五 5.2 url 口径", "SKILL.md", "references/sql-fragments.md",
-     ["不解析", "只判本 wb 根", "单 webapp", "url:"], "### 5.2 url 的三种写法"),
-    ("七 7.2 normalName", "SKILL.md", "references/measured-data-addressing.md",
-     ["不是所有控件都接受", "非法配置", "会跳过并回报"], "### 7.2 三类控件"),
-    ("七 7.3 重名建议／七 7.3 命令示例", "SKILL.md", "references/measured-data-addressing.md",
+    ("五 5.2 url 口径", "references/sql-fragments.md",
+     ["不解析", "只判本 wb 根", "单 webapp", "url:"]),
+    ("七 7.2 normalName", "references/measured-data-addressing.md",
+     ["不是所有控件都接受", "非法配置", "会跳过并回报"]),
+    ("七 7.3 重名建议／七 7.3 命令示例", "references/measured-data-addressing.md",
      ["不猜顺序", "能用 normalName 就用", "必须同步改 JS", "tbarGrid",
-      "--dups-only", "--name", "--suggest"],
-     "### 7.3 遇到重名"),
-    ("1.2 控件骨架", "SKILL.md", "references/controls.md",
-     ["必须唯一", "会与设计器产物不一致", "取值相反"], "### 1.2 控件节点的标准形态"),
-    ("三第3步 ops 示例／三第3步 @itemId", "SKILL.md", "references/sql-fragments.md",
-     ["insert", "append", "delete", "按顺序执行", "@名字#N", "串联", "不猜顺序"],
-     "## 六、SQL 片段"),
-    ("三第3步 改前核对", "SKILL.md", "references/anti-patterns.md",
-     ["configs` 一层", "照抄"], "## 八、常见问题"),
+      "--dups-only", "--name", "--suggest"]),
+    ("1.2 控件骨架", "references/controls.md",
+     ["必须唯一", "会与设计器产物不一致", "取值相反"]),
+    ("三第3步 ops 示例／三第3步 @itemId", "references/sql-fragments.md",
+     ["insert", "append", "delete", "按顺序执行", "@名字#N", "串联", "不猜顺序"]),
+    ("三第3步 改前核对", "references/anti-patterns.md",
+     ["configs` 一层", "照抄"]),
     # （原「五 5.4 四条易踩」已并入表首的「第五章 5.4 四条通路／五 5.4 四条易踩」）
-    ("五 5.1 引用读法", "SKILL.md", "references/sql-fragments.md",
-     ["补上 `.xwl`", "被引用的片段是", "从文件找引用方"], "### 5.1 怎么读一个"),
+    ("五 5.1 引用读法", "references/sql-fragments.md",
+     ["补上 `.xwl`", "被引用的片段是", "从文件找引用方"]),
     # （原「七 7.3 命令示例」已并入上面的「七 7.3 重名建议／七 7.3 命令示例」）
     # ---- 核心 8 块结构下沉时新增的外移点 ----
     # 2.1：5 条硬规则搬进 faq §一（第 4 步的 ①–⑤ 清单是就地承载体）；
     # 4.3：环境依赖搬进 README（SKILL 适用范围表的环境行是就地承载体）。
-    ("2.1 硬规则", "SKILL.md", "references/faq.md",
-     ["无 BOM", "换行一致", "末行结构"], "### 2.1 硬规则（多行源的磁盘形态）"),
-    ("4.3 环境依赖", "SKILL.md", "README.md",
-     ["Python 3.9+", "NODE_BIN"], "### 4.3 环境依赖与自检"),
+    ("2.1 硬规则", "references/faq.md",
+     ["无 BOM", "换行一致", "末行结构"]),
+    ("4.3 环境依赖", "README.md",
+     ["Python 3.9+", "NODE_BIN"]),
+]
+
+# ① 指针表：主文档的某个章节区间里，必须出现指向目标文件的指针。
+#    锚点是**去编号的语义关键词**（标题包含即命中），层级仍取该小节标题的层号。
+#    ⚠️ 关键词必须在改前与改后两种标题里都能匹配；`多行源的磁盘形态` 不用更短的「硬规则」，
+#    因为「硬规则」同时包含在 `## 二、格式硬规则与文件形态` 里，会命中两个标题。
+_SPLIT_POINTERS = [
+    ("第 4 步 逐项判据／三第4步 两坑", "SKILL.md", "references/faq.md", "格式校验", 3),
+    ("4.2 退出码与输出约定／四 4.2 退出码", "SKILL.md", "references/faq.md", "退出码与输出约定", 3),
+    ("2.4 写回算法／2.4 规模占比", "SKILL.md", "references/measured-data-designer.md", "换行与展开", 3),
+    ("FAQ 全量问答", "SKILL.md", "references/faq.md", "常见问题", 2),
+    ("改完自检清单", "SKILL.md", "references/checklist.md", "自检清单", 2),
+    ("反模式清单", "SKILL.md", "references/anti-patterns.md", "自检清单", 2),
+    ("端到端实操", "SKILL.md", "references/walkthrough.md", "新建文件", 3),
+    ("2.6 diffguard 判据细节", "SKILL.md", "references/faq.md", "压平检测", 3),
+    ("2.6 diffguard 因果", "SKILL.md", "references/workflow-notes-guards.md", "压平检测", 3),
+    ("2.3 静默语义损坏", "SKILL.md", "references/anti-patterns.md", "多行源为什么绝不能压成一行", 3),
+    ("2.4 --eol 回退", "SKILL.md", "references/faq.md", "换行与展开", 3),
+    ("2.5 字面反斜杠 n", "SKILL.md", "references/measured-data-designer.md", "值里的", 3),
+    ("2.5 骨架侧（种子无关性）", "SKILL.md", "references/measured-data-skeleton.md", "页面顶层骨架", 3),
+    ("三第0步 folder", "SKILL.md", "references/faq.md", "新建文件", 3),
+    ("三第3步 三点#3", "SKILL.md", "references/measured-data-designer.md", "第 3 步", 3),
+    ("1.2 控件骨架", "SKILL.md", "references/controls.md", "控件节点的标准形态", 3),
+    ("三第3步 ops 示例／三第3步 @itemId", "SKILL.md", "references/sql-fragments.md", "两级结构", 3),
+    ("三第3步 改前核对", "SKILL.md", "references/anti-patterns.md", "常见问题", 2),
+    ("2.1 硬规则", "SKILL.md", "references/faq.md", "多行源的磁盘形态", 3),
+    ("4.3 环境依赖", "SKILL.md", "README.md", "环境依赖与自检", 3),
 ]
 
 
@@ -3430,11 +3450,6 @@ _b17r_sec = re.compile(r"§\d{1,3}-\d{1,2}")
 _b17r_proc = re.compile(r"\bPRE\d+\b|\b(?:eng|qa|pm|arch|reg|tl)-\d{1,3}\b")
 
 
-want_order = ["一", "二", "三", "四", "五", "六", "七", "八", "九"]
-
-
-want_keys = ["是什么", "格式硬规则", "处理流程", "工具", "引用方式", "SQL 片段",
-             "itemId", "常见问题", "自检清单"]
 
 
 _GUARD10_FIXTURE = {"children": [
@@ -3461,9 +3476,19 @@ _META_REQUIRED_FIELDS = {"name", "version", "description", "input_schema",
 #   只搬**纯**助手：引用了 `_check_docs` 局部量的（`_has_sec` 依赖 `docs`）**不搬**，留在原位。
 
 def _region_after_anchor(_lines, _anchor, _lvl):
-    """取 `_anchor` 标题行到「下一个**层号 ≤ 本标题**的标题」之间的行（不含标题行）；找不到标题返回 None。"""
+    """返回 `(区间行, 命中标题的层号)`；找不到返回 `(None, None)`。
+
+    区间取命中标题行到「下一个**层号 ≤ 本标题**的标题」之间的行（不含标题行）。
+
+    匹配是**包含**（`_anchor` 出现在标题文本里），不是前缀：锚点已改成去编号的语义关键词，
+    要在改前（带编号）与改后（重编号）两种标题里都能命中。层级仍按命中标题自身的层号计。
+    """
     for _k, _l in enumerate(_lines):
-        if _l.startswith(_anchor):
+        _hm0 = re.match(r"^(#{1,6}) (.*)$", _l)
+        if _hm0 and _anchor in _hm0.group(2):
+            # 层级取**命中标题自身**的层号，不取调用方传入的 `_lvl`：锚点已是关键词，
+            # 标题写了几个 `#` 只有命中那一行知道。`_lvl` 保留在签名里是为了不改调用处。
+            _own = len(_hm0.group(1))
             _out = []
             _fen = 0
             for _j in range(_k + 1, len(_lines)):
@@ -3472,11 +3497,11 @@ def _region_after_anchor(_lines, _anchor, _lvl):
                     _fen += 1
                 elif _fen % 2 == 0:
                     _hm = re.match(r"^(#{1,6}) ", _cur)
-                    if _hm and len(_hm.group(1)) <= _lvl:
+                    if _hm and len(_hm.group(1)) <= _own:
                         break
                 _out.append(_cur)
-            return _out
-    return None
+            return _out, _own
+    return None, None
 
 
 def _pt_heads(_ls):
@@ -4395,10 +4420,10 @@ def _docs_xfile_consistency(_S) -> None:
     # 17g **外移点两侧都还在**：主文档留了指针 + 目标文件有承载内容。
     # 起因：把 §五 5.4 / §四 4.1 / §二 2.4 / §七 7.1 的正文搬进 references 后，
     # 任何一侧后来被删或改名，都会变成「主文档说去哪看、去了却没有」—— 这类失义机器可查。
-    # ⑤ 元组末位 = 该外移点在 `SKILL.md` 里的**锚点**（所属小节的标题前缀，须实测唯一）；
-    # 断言① 由「全文 contains」收紧为「**该小节区间内** contains」（机理与残留盲区见下方 for 循环）。
-    # ⚠️ 表体已**移出函数体**（#15 有界下沉）⇒ 见**模块级常量 `_splits`**（本文件 `_check_docs` 之前）。
-    #    本函数只按原元组结构**引用**它；判据、元组内容、顺序**逐字未变**。
+    # ⚠️ 表体已**移出函数体**（#15 有界下沉），**后又拆成两张表**（本文件 `_check_docs` 之前）：
+    #    `_SPLIT_POINTERS`（指针表）管「主文档该锚点小节里有指向目标文件的指针」，
+    #    `_SPLIT_CARRIERS`（承载词表）管「目标文件里这些词还在」。两张表各管一件，互不牵连
+    #    （原 `_splits` 一表同时管两件事，主文档一改结构就一起碎）。
     # 断言①-机理（为什么把「全文 contains」收成「锚点小节区间 contains」）：`_dst` **恒**出现在
     #   `SKILL.md` 开头「怎么用」那张参考材料索引表里 ⇒ 只看「全文 contains」时这条臂**恒真**
     #   （等于没有）；收成「锚点小节的区间内 contains」后，才真能发现"该外移点处的局部指针被删"。
@@ -4408,18 +4433,26 @@ def _docs_xfile_consistency(_S) -> None:
     # 删掉它的代价：退回「全文 contains」⇒ 任一局部指针被删也**不红**，
     #   真正还在守的只剩 ②（承载词那半），而 ② 只证"词还在"、不证"语义还在"。
     # 有界下沉：`_region_after_anchor`（纯助手）已移出函数体 ⇒ 见模块级同名函数。
+    # 锚点是**去编号的语义关键词**，按「标题包含关键词」匹配（见 `_region_after_anchor`）；
+    # 截断仍用命中标题自身的层号。表里记的层号 `_lvl_noted` 必须与命中标题的 `#` 个数一致，
+    # 不一致就判红（防锚点关键词命中了错误层级的标题而无人察觉）。
 
-    for _lab, _src, _dst, _keys, _anchor in _splits:
-        _lvl = len(_anchor) - len(_anchor.lstrip("#"))
-        _region = _region_after_anchor(docs.get(_src, []), _anchor, _lvl)
+    for _lab, _src, _dst, _anchor, _lvl_noted in _SPLIT_POINTERS:
+        _region, _hit_lvl = _region_after_anchor(docs.get(_src, []), _anchor, _lvl_noted)
         if _region is None:
             doc_fail.append(
                 "外移点「%s」：锚点「%s」在 %s 里找不到 —— 这是**锚点问题**（锚点行被改或删），不是缺指针"
                 % (_lab, _anchor, _src))
-        elif _dst not in "\n".join(_region):
-            doc_fail.append(
-                "外移点「%s」：%s 的锚点小节「%s」区间内没有指向 %s 的指针"
-                % (_lab, _src, _anchor, _dst))
+        else:
+            if _lvl_noted != _hit_lvl:
+                doc_fail.append(
+                    "外移点「%s」：锚点「%s」记的层号是 %d，命中标题实际是 %d 个 #"
+                    % (_lab, _anchor, _lvl_noted, _hit_lvl))
+            if _dst not in "\n".join(_region):
+                doc_fail.append(
+                    "外移点「%s」：%s 的锚点小节「%s」区间内没有指向 %s 的指针"
+                    % (_lab, _src, _anchor, _dst))
+    for _lab, _dst, _keys in _SPLIT_CARRIERS:
         _body = "\n".join(docs.get(_dst, []))
         _miss = [k for k in _keys if k not in _body]
         if _miss:
@@ -5670,26 +5703,54 @@ def _docs_tail_scaffold(_S) -> None:
 
 
 def _check_docs_section_order(failures) -> None:
-    # ---- 11k.（**归位**）SKILL.md 章节顺序守卫（语义分组：认知→格式→操作→专题→经验→收尾）----
-    #   ⚠️ 本块原**寄居**于 `_check_itemids`（itemids 块）——它判的是 **SKILL.md 的章节顺序**，
-    #     与 itemids 无关。`#10b③` 归位到**文档守卫侧**（本函数 `_check_docs`）；判据**不变**，
-    #     旧标识 `11k` 保留（不重编，免动全库引用）。归属变化：其 `[ok]`／失败行现随文档守卫块输出。
-    # 起因：压缩会搬动章节；顺序被打乱后“先建心智模型 → 再看格式规则 → 再看流程”的阅读路径就断了（内容没丢、但难读）。
+    # ---- 11k.（**归位**）SKILL.md 章节结构守卫（格式不变式，不写死章名）----
+    #   ⚠️ 本块原**寄居**于 `_check_itemids`（itemids 块）——它判的是 **SKILL.md 的章节结构**，
+    #     与 itemids 无关。`#10b③` 归位到**文档守卫侧**；旧标识 `11k` 保留（不重编，免动全库引用）。
+    #   换判据：原来把某次的 9 个章名抄进两个模块级常量，布局一改就红，那是快照不是判据。
+    #   改判四条格式不变式（章序是否被打乱不再由机器判，改由人工评审看）。
+    # 带编号章的中文序号：按「一」到「二十」的整词匹配（长的在前，免得「十一」被拆成「十」）。
+    # 超出这张表的序号（二十一及以上）匹配不到 ⇒ 不计入、序号也就不连续，照样判红。
+    _cn = ["二十", "十九", "十八", "十七", "十六", "十五", "十四", "十三", "十二", "十一",
+           "十", "九", "八", "七", "六", "五", "四", "三", "二", "一"]
+    _seq = ["一", "二", "三", "四", "五", "六", "七", "八", "九", "十",
+            "十一", "十二", "十三", "十四", "十五", "十六", "十七", "十八", "十九", "二十"]
     skill_md = os.path.join(os.path.dirname(HERE), "SKILL.md")
     if os.path.exists(skill_md):
         with open(skill_md, "r", encoding="utf-8", newline="") as f:
-            titles = [l.rstrip("\r\n") for l in f if l.startswith("## ")]
-        # `want_order` / `want_keys` 已移出函数体（有界下沉）⇒ 见模块级同名常量。
-        got_order = [t[3] for t in titles if len(t) > 4 and t[3] in want_order]
-
-        if got_order == want_order and all(k in t for k, t in zip(want_keys, [x for x in titles if x.startswith("## ") and x[3] in want_order])):
-            print("[ok]  SKILL.md 章节顺序符合语义分组（认知→格式→操作→专题→经验→收尾）")
+            raw = f.read().splitlines()
+        # ① 带编号的 `##` 章：中文序号从「一」起连续、不缺号、不重复。
+        numbered = []
+        for i, line in enumerate(raw):
+            m = re.match(r"^## (%s)、" % "|".join(_cn), line)
+            if m:
+                numbered.append((i, m.group(1), line))
+        got = [c for _, c, _ in numbered]
+        want = _seq[:len(got)]
+        bad = []
+        if got != want:
+            bad.append("带编号章的序号不从「一」连续（得到 %s）" % "".join(got))
+        # ② 每个带编号的 `##` 后必有非空正文（≥1 行非空，且不是紧接另一个 `##`）。
+        for i, _c, line in numbered:
+            body = []
+            for nxt in raw[i + 1:]:
+                if nxt.startswith("## "):
+                    break
+                if nxt.strip():
+                    body.append(nxt)
+            if not body:
+                bad.append("带编号章「%s」下面没有正文" % line.strip()[:24])
+        # ③ 带编号的 `##` 总数在 5–10 之间（防结构膨胀）。
+        if not 5 <= len(numbered) <= 10:
+            bad.append("带编号的 ## 章有 %d 个，不在 5–10 之间" % len(numbered))
+        # ④ 「单行源 vs 多行源」不得单列一章（应并入格式章）。
+        if any("单行源" in t for t in raw if t.startswith("## ")):
+            bad.append("「单行源 vs 多行源」应并入格式章，不该单列一章")
+        if bad:
+            failures.extend("SKILL.md 章节结构：%s" % b for b in bad)
         else:
-            failures.append("SKILL.md 章节顺序错位: %s" % [t[:22] for t in titles])
-        if any("单行源" in t for t in titles):
-            failures.append("「单行源 vs 多行源」应并入格式章，不该单列一章")
+            print("[ok]  SKILL.md 章节结构合规（序号连续、无空节、章数在 5–10）")
     else:
-        print("[note] 未找到 SKILL.md，跳过章节顺序守卫")
+        print("[note] 未找到 SKILL.md，跳过章节结构守卫")
 
 
 def _check_platform(tmp, node, failures, write) -> None:

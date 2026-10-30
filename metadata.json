@@ -3,7 +3,7 @@
   "name_en": "webbuilder-xwl-patch",
   "displayName": "webbuilder-xwl-patch",
   "author": "yfwang0731",
-  "version": "1.7.7",
+  "version": "1.7.8",
   "schema_version": "1.0",
   "description": "WebBuilder（wb）平台 .xwl 定义文件的处理与安全编辑：结构级 patch（只给值 / 子树，工具按设计器自己的算法重建整份文件）+ 格式校验 + 相对 git 基线的压平检测。",
   "core_capabilities": [
@@ -21,25 +21,63 @@
     "params 逃生开关 `--strict`：缺来源时判失败（rc=1）；默认只告警（rc=0），与 `diffguard --strict` 同名同义"
   ],
   "trace_dimensions": {
-    "T": { "name": "Trust", "name_cn": "可信任度", "core_question": "用着放心吗？" },
-    "R": { "name": "Reliability", "name_cn": "可靠性", "core_question": "每次都稳吗？" },
-    "A": { "name": "Adaptability", "name_cn": "适用性", "core_question": "该出手时出得来吗？" },
-    "C": { "name": "Convention", "name_cn": "规范性", "core_question": "写得清楚、改得动吗？" },
-    "E": { "name": "Effectiveness", "name_cn": "有效性", "core_question": "最终交付的结果好用吗？" }
+    "T": {
+      "name": "Trust",
+      "name_cn": "可信任度",
+      "core_question": "用着放心吗？"
+    },
+    "R": {
+      "name": "Reliability",
+      "name_cn": "可靠性",
+      "core_question": "每次都稳吗？"
+    },
+    "A": {
+      "name": "Adaptability",
+      "name_cn": "适用性",
+      "core_question": "该出手时出得来吗？"
+    },
+    "C": {
+      "name": "Convention",
+      "name_cn": "规范性",
+      "core_question": "写得清楚、改得动吗？"
+    },
+    "E": {
+      "name": "Effectiveness",
+      "name_cn": "有效性",
+      "core_question": "最终交付的结果好用吗？"
+    }
   },
   "input_schema": {
     "type": "object",
     "properties": {
-      "file": { "type": "string", "description": "目标 .xwl 路径（或目录）" },
-      "ops": { "type": "string", "description": "patch 用的 ops.json 路径" }
+      "file": {
+        "type": "string",
+        "description": "目标 .xwl 路径（或目录）"
+      },
+      "ops": {
+        "type": "string",
+        "description": "patch 用的 ops.json 路径"
+      }
     }
   },
   "output_schema": {
     "type": "object",
     "properties": {
-      "status": { "type": "string", "enum": ["ok", "fail"] },
-      "exit_code": { "type": "integer", "description": "0 成功 / 1 检查未通过 / 2 用法或前置条件不满足" },
-      "marks": { "type": "string", "description": "行首标记：[ok] / [FAIL] / [warn]（不阻塞）/ [note]" }
+      "status": {
+        "type": "string",
+        "enum": [
+          "ok",
+          "fail"
+        ]
+      },
+      "exit_code": {
+        "type": "integer",
+        "description": "0 成功 / 1 检查未通过 / 2 用法或前置条件不满足"
+      },
+      "marks": {
+        "type": "string",
+        "description": "行首标记：[ok] / [FAIL] / [warn]（不阻塞）/ [note]"
+      }
     }
   },
   "error_handling": {
@@ -123,35 +161,160 @@
     "references/workflow-notes-guards-maintenance.md": "evidence"
   },
   "update_history": [
-    { "version": "1.7.7", "date": "2026-10-30", "summary": "references 面彻底整改（patch）：**无新子命令、无新参数**（`sub.add_parser` 增删 0）。六条同属一个文件面，`metadata` 的 `references`／`layers` 只对账一次。① **`ITEM-1157` SKILL.md 下沉**：587 行／27 521 字符 → **500 行／22 427 字符**（净降 **5 094**）；承接件均落 `spec` 层（`faq.md`／`js-api.md`），未动 `walkthrough.md`（余量仅 23）。⚠️ 500 行是业界上限（agentskills.io 与 Microsoft Learn 同口径）的**边界值、零余量**；距 `_SK_GOAL`（12 000）仍差 **10 427** ⇒ 分批推进。② **`ITEM-1166` 依据层 8k 失真收口**：`workflow-notes-guards.md` 8 984 字符拆为 **5 533 ＋ 4 124**（新增 `workflow-notes-guards-maintenance.md`）；`references` 与 `layers` 各 20 项、双向差集空；新增 **8k 守卫 12 行**，落 **`_docs_tail_scaffold`**（与 `17u` 层归属检查相邻，复用已校验的 `_b1_lay`，⛔ 不重复读 metadata）；阈值 `8 000` 的推导链写进代码注释（＝5 000 tokens × 1.61 字符/token ＝ 8 050 取整，依据业界对 SKILL.md 的 ≈5k tokens 建议）；同时订正 `SKILL.md` 与 `references/measured-data.md` L42 两处过期的「7,202」。③ **`ITEM-1161`** 「装完自证」拆两档：源码树／手工整目录 ⇒ 完整 `selftest`；CLI 安装渠道 ⇒ 只承诺冒烟三件，并写明副本可能不含 `metadata.json`。④ **`ITEM-1163`** SQL 示例统一「条件片段」契约：`serverScript` 只产 `AND …` 片段、`dataprovider` 保持单段完整 SELECT，值走 `{?…?}` 绑定 —— 不再有「完整 SELECT 再嵌完整 SELECT」。⑤ **`ITEM-1164`** `renderer` 示例由函数表达式改函数体（`return v == null ? '' : String(v);`）。⑥ **`ITEM-1165`** `autoLoad` 措辞分层：带查询条件面板／工具条的页面用 `false`、首屏查询由代码触发；转写规范补「且不做代码触发」限定；两处互加指针。⚠️ 已知：`_docs_tail_scaffold` 387 行（余 13）、`_docs_layers_and_distribution` 373（未动）、`_doc_guard_xfile_pt` 257（未动）；`references/js-api.md` 导语陈旧（仍称「本文是 SKILL 第五章 5.4 的展开」）本批不改，已立 `ITEM-1171` 归后续文档批。" },
-    { "version": "1.7.6", "date": "2026-10-29", "summary": "判据与语料收口批（patch）：**无新子命令、无新参数**（`sub.add_parser` 增删 0）。① **`ITEM-1167` 往返臂换 oracle**：现网 8 处「往返」里一处自陈判别力已归零 ⇒ 新增 **8 个模块级 `_GOLDEN_*` 常量**（4 份页面级 ＋ 4 个值样本）＋ **固定点断言** `expand(金标) ≡ 金标`（证明的是「与金标一致」，⛔ 不是「与自身自洽」）；注入同向两点（折叠 `.0` ＋ `equivalent` 退化）时旧臂全绿、新臂 3 条全红。⚠️ 已知盲区：改**值**字符（如 `备注`→`備注`）仍绿，只有**结构**字符必红，靠注释 ＋ 人工评审兜。② **`ITEM-1073`（workspace 工具，不占版本位）**：`inject_runner.py` 的 `git ls-files --others` 失败由 `if rc2 == 0:` 静默跳过改为 **fail-loud**（点名「本次没扫未跟踪文件」＋ `return None`），调用方文案同步改准。③ **`ITEM-1160` 语料拉齐**：`test-prompts.json` 的 `id7`／`id14`／`id21` 的 `expected` 按现行契约重写（新键默认拒绝 `rc=2`／缺来源默认 `rc=0`／`--strict` 下悬空 `rc=1` 且 `__MODULE__` 不再一律豁免）；`id`／`prompt` 未动、`17w` 覆盖集前后相同。④ **`ITEM-1162` CI 收紧**：`Default must fail` 由「任意非零即通过」改为三判（`rc` **恰为 1** ＋ 输出含「默认判红 —— 静默绿是病根」＋ 无 `Traceback`）。⑤ **对外文案一处订正**（经追认）：`xwl.py` 的 `#36` 附注原写「不加 `--strict` 仍只告警」，实际**非 strict 根本不打印该行** ⇒ 改准；`references/faq.md` 同句同改，与语料 `id21` 三处口径统一。⚠️ 遗留：`_check_bc_contract` 406 行（不在 `_CAP_FNS`，无机械约束，下版拆）；`privacy_scan` 的 `--patterns` 清单面待本地跑。" },
-    { "version": "1.7.5", "date": "2026-10-27", "summary": "注释与实现同步（patch）：**无新子命令、无新参数、无输出变化**（`git diff` 里 `sub.add_parser` 增删 0；去 docstring 后 AST 唯一差异是一处 **doc-only 字符串常量**且**无代码消费者**；`--only docs` 输出与改前**逐字相同**）。① **按缺陷面订正 12 个位置／13 处文本**（全是注释、docstring 内文本与一处 doc-only 常量，⛔ 零可执行语句改动）：`[:16]` 前缀法被归错臂的 3 处（`17j-6` 的 `_probe = _n[:16]` vs 围栏臂 `17j-14` 的**整串**比对）；「异常把整块打崩」已过期的 7 处（`1.7.4` 序 6 已给 `_run_block` 补三支 `except`，改为「被兜住、红行点名该块，但**定向断言仍未跑到**」，并写明 `KeyboardInterrupt`／`MemoryError`／`SystemError` 是 re-raise、串行档仍整进程退出）；换 oracle 时描述未跟改的 3 处（四臂表 ②、`_real_out_corpus` docstring、`17j-14` 段头／排除理由／边界）。② **目录覆盖缺口只做只读取证、未实现**：`references/` 19 份／含 `## 目录` 7 份＝`_TOC_REQUIRED` 7 条（口径 B 现 0 红，但**不覆盖**「该有的没有目录」）；口径 A 体量阈值**无单一阈值可切**（有目录组 116–398 行、无目录组 73–173 行，区间重叠；`T≤73` 全误报 12 份）⇒ 口径待定，`ITEM-1151` 回「待定版号」。③ 判据口径两处订正：施工单「多出任何一处即越界」改**按缺陷面收口**（同缺陷其余位置须同批改并**当场申报**）；只读序的「未改动」判据由 `git status --porcelain` 为空 改**两次 `md5sum` ＋ `git diff --numstat` 逐字相同**（原式在合规实现上必然假红）。⚠️ 已知：`_check_subcommands` 余量 382 → 387（余 13），**已冻结**、动它前先把 12b 段搬出；`--only` 分支不打 `node:` 行（`ITEM-1158` 另立）。" },
-    { "version": "1.7.4", "date": "2026-10-26", "summary": "分发面适配 ＋ 内部判据（patch）：无新子命令、无新参数、无退出码变化（`git diff` 里 `sub.add_parser` 与 `rc=` 行增删均 0）。① 分发：README 首段改「Agent Skill（面向支持 Agent Skills 规范的客户端，WorkBuddy 同样可用）」＋新增「安装」节；新增 `references/distribution.md`（五条 `npx skills` 命令、`check` 与 `update` 同源的行为注记、环境依赖三件、cwd 口径、升级卸载）；`metadata` 的 references／layers 同批 +1（spec）、SKILL 索引 +1 行 ⇒ 分发面 41 → 42。② 对外文案（输出变、能力不变）：`xwl.py` 两处提示（itemids 全量重名报告／diffguard 重跑）改绝对入口 ＋ 逐参引号（新增 `script_entry()`／`quote_arg()`／`cmd_hint()`，三档引号覆盖尾反斜杠与含引号两种难例）；三份文档调用形态统一为 `python <skill根>/scripts/xwl.py`。③ CI 并入 `install-layout` job（隔离 HOME／临时 cwd、`--copy` 装到 codex 与 codebuddy 两个不同目录、断言 agent 目录本身非链接、逐文件比源树并排除 metadata.json、缺资源／路径／内容变化三态、DISABLE_TELEMETRY、`git status --ignored` 为空、`skills@^1.7` 钉版本并打印实际版本）。④ 判据六条：函数行数上限判据搬出 `_docs_tail_scaffold` 到模块级 `_fn_cap_check`（399 → 375 行，解自指）；两条判定由 if/elif 拆成两条独立 if；`_run_block` 补 SystemExit／KeyboardInterrupt／BaseException 三支（崩溃仍打汇总行并点名该块，⛔ 不改末行锚）；目录族补「该有目录却没有」（登记表 ＋ 结构特征）；围栏臂宣称改准为整句（16 字前缀属行内反引号臂）；目录完整性扩到所有 `##` 级 ＋ 4 条一次性豁免 ＋ 盲区登记。⑤ 新增入口形态守卫（源码／运行时／文档三面，15 组矩阵全过）。⚠️ `ITEM-1130` 裁定维持 5 类扩展名不动；`install-layout` 首跑结论待 CI。" },
-    { "version": "1.7.3", "date": "2026-10-24", "summary": "文档用法 ＋ 内部判据（patch）：无新子命令、无新参数、无输出格式变化，对外契约一个字节未改。① 文档：`references/js-api.md` 新增第 6 节「`Wb.getModified` —— 取 grid 的变更集（用法约定，非平台契约）」，按三层定性写（三类键 `create`／`update`／`destroy` 与入参传 grid 句柄＝可证；提交前的列标记＝取决于后端签名、只说明依赖；参数套数组＝本机语料只覆盖三分之一调用点，不进正文），定性写进标题并自动进目录，全节 0 行号锚点；同批订正该文件三处「四条」自称并给 `SKILL.md` 索引表加指针。② 对外文案：`references/faq.md` 的「不是 UTF-8 文本」示例原来把工具分两行打印的报错挤成一行、还填了样本相关的 `b3 in position 236`，改为工具真实输出的两行。③ 内部判据：新增行号锚点四形守卫（现值面裸 `:N`／`L`+数字／5 类扩展名的 `文件:行号`／中文「第 N 行」一律 0 命中，显式排除 `CHANGELOG.md`；同批迁移现值面 5 处）；新增目录完整性臂（每个 `## N.` 须恰好一条目录项，按锚点解析配对而非标签数字，补 `17j-13` 只遍历已存在条目这一结构性盲区）；`17j-14` 由前 16 字前缀收紧到整句并新增 `_vn()` 抹可变段（两侧同过，抹后只剩可变段判红）；新增自检块名基线（少一块红并点名／多一块须在 CHANGELOG 用反引号点名／块序也判）；`_ng_*` 六个子函数纳入 400 行上限（纳管后仍绿，价值是防反弹）；`diffguard` 超时降级写成常驻用例（1ms 阈值、有界返回、原因落在闭集内，臂前置到夹具之前以免被建库失败的两处 return 挡住）；文档守卫失败清单超过 12 条时显式补「另有 N 条未展开」。" },
-    { "version": "1.7.2", "date": "2026-10-22", "summary": "内部判据批（patch）：无新子命令、无新参数、无输出格式变化。① 结构：`_check_new_guards`（拆分前 1 145 行，本仓 `ast` 量法）拆成薄壳 ＋ 6 个判据族子函数，子函数按文件内连续区间切（块内输出顺序也是行为）；入口名与块名不变；`--jobs 4` 全量输出拆分前后逐行 diff 为空。② 新增自检块 `rules_lint`（第 14 块）：候选待办须同行带 `id:` 与非空 `done_when:`、引用的 id ⊆ 同一文件的登记 id 表；扫描根由 `XWL_RULES_DIR` 给出（规则在仓外、不随 skill 分发）⇒ 三态分开（已设且存在＝真校验／未设＝未执行／已设但目录不在＝FAIL）；未设变量时在汇总行单列「未执行 M 块」，⛔ 不算进全部通过。③ 性能：`diffguard` 由每文件一次 `git show` 改为按目录一次 `git cat-file --batch`，三态与文案逐字未变（旧新两树逐字节对照），60 件墙钟 13 395 ms → 1 672 ms（单目录、无并发、-B、n=3 中位数）；批量超时不可逐文件归因 ⇒ 一次红灯 ＋ k/N ＋ 未处理文件清单 ＋ 可粘贴重跑命令、rc=2；不做逐文件自动重跑。④ 判据：`SKILL.md` 容量尺子由行数换成字符数（硬 32 000／软 28 000，两条独立报出；另有 12 000 远期目标只报 [note]）；换算依据 700 行 × 46.31、600 行 × 46.31，46.31 ＝ 27 091 字符 ÷ 585 行；`README.md` 的 150 行配额未换单位（无实测密度可换算，连带换等于又改一条判据）；破例改 `references/workflow-notes-guards.md` 一处数字口径，语义未动。" },
-    { "version": "1.7.1", "date": "2026-10-20", "summary": "收口批（patch）：**无新子命令、无新参数**（`--help` 篇幅与参数表逐字未变）。① 判定面 —— 解析层统一：`check` 的 ④／`params`／`dump` 共用同一份归一化与同一解析入口，新增接受单引号键／值、未引号键、未引号值、相邻贪婪 `{...}{...}`（只取第一个）；⚠️ 真样本 30 件 `rc` 零变动（本就是标准 JSON），放宽证据来自夹具（4 件 2/2→0/0/0，另 5 件越界形态一条没动）；键名含 `-` 的未加引号键仍报 ④ FAIL（能力边界不变）；未引号值一侧 `NaN`／`Infinity` 有意不补引号（属既有判据，不是同一件事）。② 两处变严 —— `params` 的 `__MODULE__` 改两段判：能解析到真实目录而目标不在 ⇒ `[warn]`、`--strict` 下新判失败（**`__MODULE__` 之后的段本身是显式占位 `<…>`／`…` 时除外** ⇒ 按占位 `[note]`、不判失败）；解析不到 ⇒ `[note]` 并写明按显式占位处理及原因；误报面如实登记（`--module-root` 给错但目录里有 `.xwl` 时，`__MODULE__` 会像普通 `m?xwl=` 一样判 `[warn]`，继承既有根启发式、不额外开后门），并写明这是已知逃逸面。`diffguard` 补第三档（相似度）：压平＋内容被改由漏报变命中、`--strict` 下新判失败；**短行同样在射程内**（原按 40 字符长度门槛过滤，会静默漏报短行合并 —— 三条短行并成一条、合并后依然短；现改为「窗口多行总长下限 ＋ 逐行覆盖度」两道与行长无关的闸；实测三行并成一行 18 字符 ⇒ 改前 ALL OK／--strict rc=0，改后 [warn]／--strict rc=1；反面对照「只改内容」「合法删减」仍不误报）；有界（只枚举续行起点、只比完整组、长度分桶＋3-gram 松门，最坏样本 0.96s→1.71s；放开长度门槛后加**内容去重**与松门求交上限，最大样本 451 KB／28007 行 0.96s→0.98s）；残余是部分压平仍可能漏。**拒写归因文案正确化**：未引号值不再被报成未引号键（token 终止集漏了 `,`、同一 token 被数两遍），四类写法（单引号键／值、未引号键、未引号值、相邻贪婪）的**类别与处数**均与实际一致；拒写行为不变（rc=2、目标文件一个字节不动）。③ 写盘路径 —— `edit` 是文本级 ⇒ 对上述非设计器产物写法现在能直接改且不重排；`patch`／`expand` 是整份重建 ⇒ 能识别但拒写（`rc=2`、目标文件一个字节不动），理由与两条出路写进文案；`sql`／`events`／`sqlrefs`／`itemids`／`paths` 仍走 strict 入口。④ 输出面（`paths` 两条）—— 每个字段多一行值预览（单行、整行 ≤120；原值 ≤100 不截断、>100 截断带「共 N 字符」，N 取字段行声明值；`\\r`／`\\n`／`\\t` 写成字面两字符），30 件样本新增 100 行；同名 `itemId` 的 `@写法` 提示按 itemId 归并只打一次（64 块→6 块），三条要点保留；行数对账 +100 − 4×58 = −132 ＝ 实测输出行数差 −132。⑤ 结构（不改判定）—— `_check_docs` 拆成薄编排器（只做编排）＋四段，四段与归位后的 `_check_subcommands` 各自都远小于 400 行阈值；新增函数体行数上限 400 的机械断言（`ast` 量），`_check_new_guards` 远大于 400 行、有意排除（排下一版，条目 `ITEM-1077`）；块名治理 `17h`→`17w`、`17i`→`17x`（只改重复号里后出现的那个）、`17j-5` 并入 `17k`（判据一条未丢），块基线 37→36；18 份 references 的层归属从首行声明迁到本文件 `layers`（spec 11／evidence 7）。⑥ 已知偏离施工单：拆分四刀而非三刀（3×400 装不下正文）；`_splits` 只做**零损合并** 32 → 26（6 组同锚点同目标的条目合并、`keys` 取并集 ⇒ 承载词槽位仍 83、一条判据未退役；实测 29/32 的指针句仍在锚点小节内，收缩到 5–8 条等于删 24 条仍有判别力的守卫）；「键名含 `-` 仍报错」未按未复现删除（复核为可复现）。" },
-    { "version": "1.7.0", "date": "2026-10-20", "summary": "能力补齐批（minor）：新增 `check` 第 `⑩` 项「`configs` 值类型」＋ 开关 `--no-cfgtype`，另加一条无编号 `[note]`（主 grid 的 `store.autoLoad`）与一处 `rc` 语义变化（`--controls` 取不到注册表 ⇒ `rc=2`），并新建 3 份参考材料。① ⑩ 判据：逐节点看 `configs` 的每个值，任一个不是字符串即 `FAIL`（进 `rc`）；只判类型不判语义（`\"300px\"` 不报）；与注册表无关，给 `--controls` 不改结论；**只在 `check` 生效**（写盘后自检仍只判 ①–⑥）；通过态与跳过态都留行（`[ok]   ⑩ configs 值类型：N 个节点、0 个非字符串值` / `[note] ⑩ … 已按 --no-cfgtype 跳过`）。档位依据：开工当场随机抽 1 个工程按当期状态复量 ⇒ **命中 0**，故一刀到位判 `FAIL`、无 `[warn]` 过渡；零命中的含义是「防将来」、当前召回为 0（数量本身不作判据）。② `--controls` 取不到注册表 ⇒ `rc=2`：路径不存在／读不了／不是可解析的 JSON，**含「是 JSON 但一个控件 type 都没有」的 `{}` / `[]` / `{\"foo\":1}`**（堵「形状错」的假绿）；**不整条拒跑** —— ①–⑧⑩ 与逐文件结论照常产出，只跳过 ⑨ 与 `configs` 内联 `[js]`，末了打一行 `[note]` ＋ `=== 结果: FAIL`；注册表改按 `utf-8-sig` 读（带 BOM 的合法注册表不再被误判为取不到）。③ 主 grid `autoLoad` 的 `[note]`：初始化加载不经过查询条件面板 ⇒ 默认筛选失效；**主 grid 识别改为「① `viewport` 下第一个 `grid` → ② 否则第一个 `tab` 之内第一个 `grid` → ③ 都没有 ⇒ 判不出」**（按「第一个 tab 的后代 tab」取会把编辑签页里的明细表当主列表、并对真主 grid 命中的形态完全静默）；直接子 `store` **全部**参与（任一 `autoLoad` 即命中）、直接子无 store 而深层有 ⇒ 打「未识别（store 不在主 grid 的直接子节点）」；无 `grid` 的文件不打；用 ⑧ 的闸 ⇒ `patch` 输出逐字节不变。④ 写盘命令（`patch` / `edit` / `expand` / `new`）新增一条 `[warn]`：本次写入含非字符串 `configs` 值时提示「check 的 ⑩ 会判 FAIL，请改成字符串」（列名最多 8 个；`rc` 仍 0、不改值、不阻断写盘；configs 全为字符串时不打）。⑤ 与 `itemids` / `params` 的契约有意不同：那两个命令取不到注册表是回退内置兜底 ＋ `rc` 不变（只影响白名单精度），`check` 的 ⑨ 是判定项 ⇒ 回退即假绿，故判 `rc=2`。⑥ 新增 references/layout.md（布局：面板高度算法、列网格与列宽、`region` 拉伸、数字列右对齐、工具条两条硬规则）、references/value-mapping.md（`keyName` vs `renderer`、禁在 SQL 里翻译、多选三路来源、值往返与存储格式代价、缓存提醒）、references/generation.md（脚本化：何时该脚本、`configs` 的 `str()` 收口、双层闸、换行对齐、可重跑；`new --eol` 默认 `lf` 已写明）。⑦ 既有件：faq.md 删「不新增第 ⑨ 项」承诺句并补 ⑨ 说明 ＋ 5 条症状条（4 条新开 Q ＋ 1 条「子目录 folder.json」并入既有那条，符合「⛔ 不新开」）＋ 1 条额外新 Q（「patch 显示 ALL OK、check 却报 ⑩」）⇒ FAQ 的 Q 总数 19 → 24（净增 5 ＝ 4＋1）；controls.md 补 `renderer`/`keyName` 最小写法、workflow-notes.md 补「参考页可复用边界」、SKILL.md 与 README.md 的 `check` 表述改九项 ＋ 四道验收（＋ 条件附加道）、SKILL.md 删两处越界指针、exit 2 行补 check 的 `--controls` 情形、随包样板 7 处 `width` 由数字改字符串。⑧ 绑定 `M4` 节点 2 的口径（⑧ 的数据加载链），`M4` 是验收侧指标节点编号、不是本仓检查项编号。" },
-    { "version": "1.6.7", "date": "2026-10-19", "summary": "账实对齐版（patch）：不改 `scripts/xwl.py` 任何字节，不改任何判定／输出／`rc`。① 退役 4 个死项 —— `17a`（标题禁 emoji，只服务样式一致性、本仓无出处）、`17j-2`（「N 份参考材料」三数相等：`SKILL.md` 里该措辞 0 次 ⇒ 循环体永不进入，大绿行仍宣称通过＝假绿；职责已由 `17j-3` 覆盖）、`17j-9`（旧措辞文本扫描：已由 `17j-10` 行为级判据守住）、`17s`（检的是本文件自身注释、属脚手架自检）；块基线 39 → 35。② 块基线判据**有意放宽**并登记：改为「块总数 ≥ 基线」＋「基线外块名必须在本文件声明」；残余（净 0 偷换在已声明时不再机械判红）如实写明；注入验证先红后绿三条各跑一次。③ 清掉注释里 4 处工作区私有计划文档指针 ＋ 18 处对已退役块名的悬空引用。④ `SKILL.md` 594 → 573 行（只削不增，每处确认 `references/` 指针仍在）。⑤ 规模数改口径：能力声明改为**下界**「≥2.5 万 `.xwl`」＋口径＋时点，精确值／复算命令／语料快照指纹落依据层第十节（工程侧天天在变，裸精确值落笔即过期）；`17q` 对 `SKILL.md` 当期无 token 可查一事**显式登记**（不是失效，写裸数即恢复生效）。⑥ 同步面：CHANGELOG / metadata.json / SKILL.md（version）。" },
-    { "version": "1.6.6", "date": "2026-10-17", "summary": "check 判据口径对齐与取法统一版（patch，段 3）：无新子命令、无新参数。① `check` ④ 判据**接受**加载器（org.json）也接受的 3 类写法（单引号键／未引号键／相邻的贪婪 `{...}{...}` 只取第一个）—— ⚠️ 性质是**口径对齐**、**当前语料实测零实例** ⇒ **现存文件判定零变化**，`rc` 只可能 1 → 0；第四类「非标准转义」加载器同样拒绝 ⇒ 维持报错。② `check` ⑧「加载链完整性」并入 **M4 节点 2**：页内有 `store`，却既无 `configs.autoLoad`、页内也扫不到 `.load(`／`store.reload(` ⇒ 打一条 `[warn]`（**不进 `rc`**、不改判定、⛔ 不新增第 ⑨ 项）。③ `scripts/selftest.py` 为「文档里写给用户看的命令样例，照抄必须跑得通」增设**通用解析式守卫**（`#82`：逐条喂 `build_parser().parse_args()`，与具体 flag 名无关，并入既有 17h 块）。④ 管道与取法：模块级入口兜 `BrokenPipeError` —— ⚠️ **射程限定**为「下游读走一行后关闭」（由 traceback ＋ `rc=1` 改为无 traceback ＋ `rc=0`；**一行不读直接 close** 仍 `rc=1` ＋ traceback，⛔ 不在覆盖内）；`check` 的 `--no-js` 取值统一为 `getattr(..., False)`（同义重构、行为无变化）。⑤ 同步面：CHANGELOG / metadata.json / SKILL.md（version）；references/faq.md 的 ④／⑧ 判据表述同步。" },
-    { "version": "1.6.5", "date": "2026-10-16", "summary": "超时路径有界兜底版（patch）：对外能力零变化 —— 无新子命令、无新参数、无新输出行；**正常路径的判定行为与命令行输出【零变化】**。本版唯一新增的是**超时路径的有界兜底**（⛔ 显式报出、不静默 —— 本仓判据：静默一律算缺陷）：① scripts/xwl.py 新增 `_cap_run()` —— 子进程的 `stdout`/`stderr` 改落**临时文件**（⛔ 非管道）＋ `timeout` ⇒ **有界返回**（管道下**后代进程**可能一直持写端 ⇒ 收尾等 EOF **永不返回**、连 `timeout` 也卡在等管道那一步）；超时 ⇒ 显式把原因写进 `stderr` 开头（与 `text=True` 同口径、两路不合并）。② scripts/xwl.py 给 git 探针加**超时哨兵**（`_GIT_TIMEOUT` / `_GIT_REV_TIMEOUT`）：`_git_prefix`／`_git_has_rev`／`_git_show`／`cmd_diffguard` **超时**不再被折成「不在仓库 / 基线不存在」，而是**显式诊断**（`diffguard --rev` 超时时**仍 `rc=2`**，severity 未变；成功/否定路径一字未动）。③ scripts/selftest.py：`_run_cli`／`_run_cli_env` 等改用 `_cap_run()`；**并行派发**（`--jobs N`）新增**单块兜底超时** —— 单块超过阈值仍未退出 ⇒ **杀掉该 worker 并显式记进失败清单**（⛔ 既不跳过、也不通过），父进程因此**有界返回**；阈值取环境变量 `XWL_SELFTEST_JOB_TIMEOUT`（整数秒，默认 **1800**；`≤ 0` ⇒ 关闭兜底、退回无界行为，并打印一行 `[note]` **显式声明**）。④ 相关断言里的 `%d` 收口为 `%s` —— 超时路径的 `returncode` 是 `None`，⛔ 不能再当整数格式化。⑤ references/workflow-notes-guards.md 新增「七、自检运行器：并行派发与单块兜底超时」。⑥ 同步面：CHANGELOG / metadata.json / SKILL.md（version）。" },
-    { "version": "1.6.4", "date": "2026-10-15", "summary": "随包样板值规范一致性修正 ＋ 声明措辞明确化版（patch）：对外能力零变化 —— 无新子命令、无新参数、无新输出行；**判定行为与命令行输出【零变化】**。① examples/ops-set-store-url.json 里 store 的 autoLoad 由裸布尔 true 改为字符串 \"true\" —— 属**规范一致性修正**（与该文件其余各处、以及本仓文档所写的形态对齐；⚠️「平台是否接受裸布尔」本机不可证，故只作规范一致性表述、⛔ 不声称是缺陷修复）。② metadata.json 的 file_ops 声明措辞明确为「不擅自遍历未指定的树、不批量删除」—— 属**声明措辞的明确化**，不改任何行为。③ 其余为文档／依据／规则的一致性订正（加载器宽容面的表述与取证、转写默认做法的条目拆分与理据、归档指针的自足表述等）；本段不新增／不修改任何校验判据，判定行为与输出零变化，该结论由旧／新树差集机械验证。④ 同步面：CHANGELOG / metadata.json / SKILL.md（version）。" },
-    { "version": "1.6.3", "date": "2026-10-14", "summary": "params 判定与诚实化版（patch，段 4）：对外能力零变化 —— 无新子命令、无新参数；本段唯一改**判定**的是 #36（params --strict 下真·悬空取数 url 由预告改判失败），另有 3 处「不再静默回退/谎报/误标」的输出面修正与 1 处新增用法错。① #36：params --strict 下真·悬空取数 url（m?xwl= 目标载体文件不存在）由「只打 [warn] 预告、rc 不变」改为判失败（rc=1）——⛔ 不给 --strict 一律不变（默认面零影响）；显式占位（<…>／…／__MODULE__）与 common/ 框架端点继续豁免、不进 rc；早返出口与末行出口两处都承载（「悬空-only」页走早返）。影响面（实测）：候选 1473 页里新增红 901 页 ＝ 全语料（24986 页）的 ≈3.6%。② #74：params／itemids 给了坏 --controls（读不动）时不再静默回退、也不再把用户给的坏路径当「来源」打印 —— 先如实打 [warn] 读注册表失败：…、来源行按「未找到」（与 check 的诚实做法对齐）。③ #75：params 模块根不可用（存在但不像模块根）时不再谎报「未找到」，改「未核对（模块根不像模块根：…）」（store.url 与 m?xwl 直接引用两处同口径）；⭐ 新增：--module-root 指向不存在的路径 / 不是目录 ⇒ 用法错 rc=2（⛔ 不受 --strict 影响）。④ #73：edit 的 --old-file／--new-file 的值指向不存在的文件 ⇒ 由裸 traceback 改为可读 [FAIL] ＋ rc=2（与 patch --ops／new --from-json 同族口径）。⑤ #80：params 的 m?xwl 引用分组名由「Wb.request 直接调用的 m?xwl」改为「url:'m?xwl=…' 引用的 m?xwl（不区分调用方）」—— 原名把 Wb.open／store.load 也算进去 ⇒ 误标。⑥ 同步面：CHANGELOG / metadata.json / SKILL.md（version）；守卫与注入用例同步（--only docs 39/39、--only new_guards 全绿、check_params_baseline 3/3）。" },
-    { "version": "1.6.2", "date": "2026-10-13", "summary": "params 假阴性修复与守卫收口版（patch，段 3）：对外能力零变化 —— 无新子命令、无新参数；本段唯一改判定的行为是 #83（修 params 漏报绑定参数的假阴性）⇒ 可见输出有变化、按本仓尺子判 patch。① #83：params 需求侧剥 SQL 注释时**保护 `{#…#}` 模板区块**（`#` 只按 MySQL 行注释剥），不再吞掉**同行其后**的 `{?名?}` ⇒ 修「同行 `{#…#}` 在 `{?名?}` 之前」形态的假阴性；行首 / 行尾的**真** `#` 注释、`--`、`/* */` 行为不变。② #54：patch --dry-run 的 diff 不再截断（行数 40 行 → 全量、单行行长 200 字符 → 整行）。③ #79：check ⑤ 先剥净尾空行再判（以「反斜杠＋换行」结尾、其后还有空行的文件不再漏判）。④ #78：check ⑥ / ⑥-ext 报错正文改取**真诊断行**（如 SyntaxError: …），不再给已删除的临时文件路径（死链）。⑤ #76：⑨ 量纲统一为「个」（运行级汇总「N 个节点（涉及 M 个文件）」、[ok] 明细行「N 个节点、0 个非法键」）。⑥ #77：patch 的 op 清单在 --help epilog / --ops help / README.md / SKILL.md / references/sql-fragments.md 各处统一为「五种」，并以机械断言绑到同一份权威清单。⑦ #57：folders 结论行按「有无 folder.json」分岔（缺则给「先建 folder.json」提示、不引向 --register）。⑧ #66：转写默认做法的 expanded 一条补理据。⑨ #82：test-prompts.json 随本段新能力同步（评测样本新增与订正）。⑩ 同步面：CHANGELOG / metadata.json / SKILL.md（version）；守卫与注入用例同步（--only docs 39/39）。" },
-    { "version": "1.6.1", "date": "2026-10-11", "summary": "params 判定与输出修正版（patch，段 2）：对外能力零变化 —— 无新子命令、无新参数；本段唯一的「新输出段」（#53 载体反查）复用既有 --upstream、只换目标类别 ⇒ 按本仓尺子「新输出仅指由新子命令／新参数带来的输出」判 patch。① #50：params 需求侧提取 {?名?} 前先剥注释（SQL 侧自实现剥 -- / #（MySQL）与 /* */，⛔ 不再委托 JS 剥离器、引号内不动）⇒ 注释里的占位符不再计入（消假阳性）、'http://…' 一类串里的 // 不误切。② #51：「跳过交叉核对」两句无条件加 [warn] 前缀（rc 不变）⇒ 与「已核对完成」不再肉眼难分。③ #58：「SQL 侧没有 {?名?}/app.get」按页面有无 store 拆两句文案（无 store ⇒ 未发现 store）。④ #56：同载体被多 store 引用时「SQL 侧」段合并打印并标（同载体 ×N）保留引用计数（去重键改物理文件同一性）。⑤ #53：_is_sql_carrier 收窄为「根 module 直挂 dataprovider 且不含 store/grid」⇒ --upstream 目标为 SQL 载体时文案分场景为「谁引用本载体」。⑥ #36：--strict 下悬空取数 url 打 [warn] 预告（rc 仍 0；早返与最终返回两路径都打）、显式占位（<…>/__MODULE__）只 [note]；未定位模块根则跳过分类（不谎报）、目标先去空白、空目标视为无引用。⑦ 另含插队两条：check 的 ⑥-ext（configs 内联 [js] 语法错）行序改为确定（_scan_configs_js 迭代 sorted，不再随 PYTHONHASHSEED 变）；patch 的 set/insertKey 把已存在容器键覆盖成标量时多打一条 [warn]（只加信号、rc 不变；容器→容器、标量→标量均不打）。⑧ 同步面：CHANGELOG / SKILL.md（--upstream 载体文案）/ references/faq.md（#36 能力边界）；守卫与注入用例同步（--only docs 39/39、inject_runner --all 52/0、check_params_baseline 3/3 diff=0）。" },
-    { "version": "1.6.0", "date": "2026-10-10", "summary": "注册表口径能力补齐版（minor）：把「设计器控件注册表」这条线在 check / schema / patch 三处补齐 —— 版本位依据是这三处新增对外能力（新参数 ＋ 新输出 ＋ 新 op）。① `check --controls`（#37②）：给注册表路径时另校两件事 —— ⑨ `configs` 键合法性（按 controls.json 逐键核对该控件类型认得的键，违规打 `[warn]`、不进退出码）＋ ⑥ 扩到 `configs` 里标 `[js]` 的键（renderer/validator/handler…，提取后交 node --check，语法错打 `[FAIL]`、进退出码）；⚠️ 两者只在显式给 `--controls` 时才跑（缺省不跑、也不自动找注册表）⇒ 不给开关时输出与判定逐字节不变，且这两项不计入 check 原有八项。② `schema --json`（#55）：以 JSON 输出供工具消费（`schema <type> --json` 出单个对象、`--list --json` 出数组），与 `--observed` 同用含实测段；与 `--tree` 不能同用。③ `schema --observed [ROOT]`（#46）：统计该类型在语料里实测用过的 configs 键 ＋ 频次（＝含该键的节点数），与注册表给差集；默认扫 `<工程>/wb/modules/**/*.xwl`（大仓会慢，用 ROOT 限定范围），针对一个控件类型、不与 --list/--tree 同用。④ `patch` 的 `insertKey`（#44）：把对象键插到指定位置（before/after/index 三选一、缺省末尾），补 set 的缺口（set+create 只能放路径末端）；新建键自授权但以 [note] 列出可见；拼块用 before:<固定兄弟> 或 index 递增，别共用 after:/同一 index。⑤ --help / 子命令表 / SKILL.md / README.md / references 同步。⑥ 随版并入的**文档与示例批**（#68 分页 totalSql 分场景 ＋ 外链两分法；#69 examples/ops-*.json 8 份新增 ＋ ops-add-button 改多 op 序列 ＋ examples/README 清单与规范节）**为 patch 性质、不抬版本号**（版本位依据仍是上述段 1 能力）；references/faq.md 的 check 校验面清单同步（configs 键/内联 [js] 标注「给了 --controls 时会校」、适用版本改当前发布版）。" },
-    { "version": "1.5.3", "date": "2026-10-10", "summary": "文档与口径批（patch）：把实例测试得出的「转写默认做法 ＋ 平台惯例 ＋ 无现成对应物的形态落法」落成一份新的参考材料（references/transcription-defaults.md；每条带出处与证据强度、未独立复现者明写），并修正三处会把人带错的口径 —— 隐藏参数选型（由\"用 `hidden` 控件\"改为「用其语义类型的控件 ＋ `configs.hidden:\"true\"`」，并补同名不同型：页面顶层 `hidden` 是 bool、控件 `configs` 级是字符串）、列 `itemId` 命名（默认＝字段名、仅同页多网格才加后缀）、控件树里工具条的挂载层（属网格的 `children`、不是网格的兄弟）；另同步两处同型副本（`references/walkthrough.md` 的控件树示例、`references/checklist.md` 的列命名项）。`check` 的能力边界改写为「稳定声明 ＋ 详细清单落 references」——`SKILL.md` 只留一句不随时间变的声明，当前校验面清单与注册表发现规则落 `references/faq.md`。对外能力零变化（不改判定、不改退出码、无新子命令／新参数）；唯一可感知的输出变化是两处提示文案（新建 SQL 载体时多一行\"种子为占位、必须替换\"提示；`itemids` 的后缀提示由恒现改为按\"同页是否多网格\"条件触发）⇒ 仍属 patch。" },
-    { "version": "1.5.2", "date": "2026-10-08", "summary": "文档读者分层版（patch）：`CHANGELOG.md` 文首的维护者规程迁出本文件 ⇒ 文首只留使用者向内容（介绍段 ＋ 数字说明）；升级须知这一结构约定改由不随包发布的开发者规则承载，并加一条文首行数上限守卫钉住；指针改指（workflow-notes ×3 ＋ README ×1，改后 0 残留）；`README.md` 移除两条发版类维护者动作（改由不随包发布的开发者规则落点承载）。另随版本并入一条与本主题无关的内部守卫修正：分发面自包含守卫的条代号判据由窄字符类改为结构化「字母-数字」形态，并配编码名词形豁免与 metadata.json 的 update_history 按段豁免；依据层 workflow-notes-guards.md 的判据说明同步。对外能力零变化（不改 xwl.py 一个字节、无新子命令／新参数／新增输出行）。" },
-    { "version": "1.5.1", "date": "2026-10-06", "summary": "适配与加固版（patch）：补 references/ 发布声明、拆记忆类文档、加隐私扫描与 CI 挂载 —— 对外能力零变化（子命令总数仍 15、无新参数、无新子命令、无新增输出行；不改 xwl.py 的对外面、不动 core_capabilities），全在 references/、scripts/（守卫与扫描器）与 CI 侧。① references/ 补发布声明（14 份）：每份 .md 首行加统一发布声明「> 发布面：随 skill 发布 ｜ 层归属：依据层|规格层」，编年三臂（17l）与权威面（17p／17q）由「写死文件名单」改为「按首行『层归属』机械选取」（声明即豁免、删声明即失效），并新增守卫块 17u 校验声明齐不齐、字段合不合法（动态遍历 references/ 实际文件、不写死清单）；doc_names 由写死清单改为按磁盘实际文件推导（12 → 17）；17u 另加依据层家族结构佐证（声明依据层者 stem 须属 measured-data／workflow-notes 家族），堵住「把规格层文件改成依据层即自授豁免」，另有 6 处硬编码名单改结构判据（按首行『层归属』选取，不再点名具体文件）。② 记忆类文档拆分（2 份 → 7 份）：measured-data.md 拆出 measured-data-addressing／designer／criteria／skeleton.md、workflow-notes.md 拆出 workflow-notes-guards.md（5 份均归依据层），节号不重编、原节标题原样保留，主文件保留主题文件索引。③ 隐私扫描＋ CI 挂载：新增 scripts/privacy_scan.py 与 scripts/privacy_patterns.example.json（发布前跑、白名单外 0 命中），.github/workflows/selftest.yml 挂载该扫描；「发布前跑该脚本」写在 README.md 的「依赖与许可」维护者段（与「改完 scripts/xwl.py 后先跑 selftest」并列）——它扫的是本仓自身分发面，不是用户的 .xwl 工作流。④ 守卫同步与指针改指：_chron_exempt 覆盖 4 → 9（CHANGELOG.md ＋ metadata.json ＋ 依据层 7 份）、_splits 9 条 _dst 改指、跨文件节号指针 27 处改指（改指后 0 残留）。⑤ 打包元数据与评测契约同步：metadata.json 的 references 9 → 14（守卫 17i 强制）、test-prompts.json 1 处指针改指（id 与条目数不动）。既有子命令行为与输出逐字不变。" },
-    { "version": "1.5.0", "date": "2026-10-01", "summary": "默认值翻转版（minor）：翻转两处默认值并新增一个全局逃生开关 ⇒ 对外能力有新增（新参数 `--allow-new-key`），按本仓尺子发 minor（子命令总数仍 15、无新子命令）。① `patch` 的 `set` 新建键默认被拒绝（打印 `[FAIL]`、rc=2、不写盘），报错文本直接教两条出路 —— 给该 op 加 `\"create\": true`（逐条放行）或命令行加 `--allow-new-key`（全局放行，两者任一即放行）；走全局开关放行时打一行 `[warn] --allow-new-key 已放行 N 个新建键：…` 留痕，`--dry-run` 下带 `create` 的待建键仍单列 `[new-key]`。② `params` 缺来源默认退出码由 1 改为 0（只告警），要阻塞须显式加逃生开关 `--strict`（rc=1，与 `diffguard --strict` 同名同义）；`--strict` 引入时「与默认同效」的预留说明全部翻成终态（`--help` / `SKILL.md` 两表 / `scripts/xwl.py` 运行期 `[note]` / `scripts/selftest.py` 断言文字）。③ `--strict` 登进 `core_capabilities` 并补 `test-prompts.json` 评测契约（`id 3` 期望同步、新增 `id 17`）；`--help` 行数上限随 `patch` / `params` 变化同步上调。既有 ops（写到已存在的键）与无 miss 的 `params` 页面行为不变。" },
-    { "version": "1.4.4", "date": "2026-09-30", "summary": "分发物纪律／守卫修正版（patch）：对外能力零变化（子命令总数仍 15、无新参数、无新子命令、无新增输出行；不改 xwl.py、不动 core_capabilities），全在文档守卫与分发文档侧。① 非 git 停用面：**默认判红**（[FAIL]、rc=1）＋ 显式 `--allow-nogit` 才降级 —— 三条依赖 git ls-files 的守卫（17j-9／编年／17r）在 zip 分发解包（本无 .git）时取不到清单；原口径只标注、绝不判红，副作用是「一个没跑的守卫族，全绿输出仍读得出一切正常」⇒ **有意收窄**为默认判红，确无 .git 须 `--allow-nogit` 才降级为打印 `[note] …本次没扫`（降级仍保留汇总行「本次 … 未执行：无 git」标注）；② 17j-14 围栏块输出文案臂**跳过 CHANGELOG.md**（M-09，与全族历史豁免口径对齐）；③ 17j 节号臂**判据修正**（M-08，既有 bug）：§N.M 两位数原先因负前瞻回溯误判成 §1，现整体不匹配、交 17j-12 判，消除双报；④ 结构收口（#15/#10b）：跨守卫分工表移出 `_check_docs` 函数体、`11k` 章节顺序守卫归位（判据不变）；⑤ 分发文档纪律：SKILL.md §六 4 个内联实测数字下沉为定性句＋指向 references/measured-data.md §11.4/§11.3、§4.2 退出码表补 sql／events 空结果 rc=1 两行（M-14/M-15）；⑥ 仪表审计整改（同版追加）：`params --upstream` 补真覆盖（真实上游调用方 ＋ 非 `m?xwl` 的 `store.url`，节点级三分类之和＝本页 `store.url` 数）；`sql`／`events`／`dump` 补命令级断言（`sql` 抽全含 `totalSql`、`events --outdir` 指向新目录须**自建**、`dump` 输出**多行**）；文档守卫改**块名多重集**守卫（少一个／多一个未登记块／「净 0 偷换块」都判红）；**扫描面含未跟踪文件**（`ls-files` ∪ `--others --exclude-standard`）；命令级断言改走**子进程真 CLI**（`_run_cli`：真实退出码、异常隔离、只看 stdout）。升级须知：对外能力无变化、直接替换；对「跑自检的环境」变严（无 `.git` 默认判红；块名多重集不符即判红），对 `.xwl` 与工具判定**无影响**" },
-    { "version": "1.4.3", "date": "2026-09-29", "summary": "守卫与尺子版（patch）：对外能力零变化（子命令总数仍 15、无新参数、无新子命令、无新增输出行）—— check 的文档守卫三处加严：① 跨文件节号指针检查纳入代码围栏内（原先跳过围栏；实测净增只两类：第N节（中文数字）与紧贴文件名的小节名，「§N.M」/「§N」早有别的守卫管；围栏内误报面实测 0）；② --help 行数上限表新增「防过松」半臂（上限 − 实测 > 设计余量即红，单子命令 5／顶层 10；不改任何上限值、不改 --help 输出）；③ 口径声明由「文件级布尔」收紧为「口径词须与采集日期同行」才算声明（只核日期形状、不核真伪，是提高绕过门槛而非不可绕过）；另：CHANGELOG 文首补「新输出」判据一句、references/workflow-notes.md 四处知识下沉；无变严项" },
-    { "version": "1.4.2", "date": "2026-09-24", "summary": "判据修正／输出新增版（patch）：check 新增第 ⑧ 维「加载链完整性」（只提示、不进退出码）—— 判据对齐框架的取键方式（children 须存在＋数组＋非空、children[0].configs 与 roles 须存在＋对象；框架这几处缺失即抛 / 类型不符即抛）⇒ 这类文件能被 ④ 解析、页面却在加载期打不开，定位「防手写 / 半成品」；⑧ 违规只打 [warn] ⑧ 加载链完整性：…（逐条含键名与期望类型）、check 退出码仍 0（不阻塞、不让 CI / pre-commit 变红），恒留一行、三形态定死（无异常 / [warn] / 因解析失败跳过——其 rc=1 是 ④ 给的）；patch / edit / expand 写盘后的自动校验不纳入 ⑧（与 ⑥⑦ 同口径：写盘后只判 ①–⑥）；对外能力不变（子命令总数仍 15、无新参数、无新子命令）、①–⑤ 判定面未动、无变严项" },
-    { "version": "1.4.1", "date": "2026-09-24", "summary": "判据修正版（patch）：读入面放宽 —— 所有读盘路径统一接受带尾随逗号的 .xwl（对齐框架加载器 org.json 的宽容面；parse_xwl 是所有读盘路径的唯一入口，故 check / patch / expand / edit / dump / params / sqlrefs 同源放宽；只放宽「读入」、不代表尾随逗号是合法 JSON，写盘会把它归一掉），并修 diffguard 精确命中在工作区该行带尾随空白时报出行号 0 的问题（改报真实物理行号）；对外能力不变（子命令总数仍 15、无新参数、无新子命令）、无变严项" },
-    { "version": "1.4.0", "date": "2026-09-23", "summary": "params 新增两个参数：--upstream（默认关，在 --module-root 内单根全扫上游调用方与传入键，末尾新增独立分组 [外部可传入] 与一行载入侧汇总——节点级三分类「同根命中 / 本根未找到 / 非 m?xwl 的 url」＋出现级「动态写法 / 非 m?xwl 字面量」、两种量纲分开标、只认字面量键、out: app.<容器> 与运行时拼接 url 只计数、不并入 provided 不改退出码）与 --strict（本版与默认同效，为下一版默认退出码翻转预留）；params 缺来源时新增一行 [note] 留痕（有 miss 的页面输出比旧版多一行、无 miss 的页面逐字不变）；folders 结论行改报 index 悬空项（「未登记」移出结论行、只进明细）；子命令总数仍 15、无新子命令" },
-    { "version": "1.3.5", "date": "2026-09-21", "summary": "重名口径改为按注册键（normalName 优先、回退 itemId）分组、分级只两级（被事件 JS 引用 error / 未被引用 benign，取消 warn 级）、节点集纳入只有 normalName 的节点、js_refs_of 增认 app['名']、params 侧 app-ref 提取与 js_refs_of 同源；check ② 改「风格集合」判据（混用 FAIL、纯 CR 降 warn）、patch/expand/edit 共用两层 eol 规则（新建 detect_eol / pick_eol_for_auto、含纯 CR 沿用）、非原样排版提示具体化三类改写计数、params 与 check ⑦ 也打印注册表来源；_number 保真写出整数值浮点（含 0.0）⇒ expand/patch 对整数值浮点样本由 rc=2 改为 rc=0；check ④ 把空文件 / 设计器模板 / 真坏三类文案分开" },
-    { "version": "1.3.3", "date": "2026-09-20", "summary": "判据修 bug：field_types/normalname_types 改「注册表 ∪ 内置兜底」（少 1057 条假阳 miss）、等价比对改规范化文本（含键序与值类型，`1`/`1.0`/`true` 互不通过）、diffguard 精确命中加前置必要条件（修真实历史版本误报）、check 的编码报错与 dump 统一文案、字符串里裸 NUL 判 warn 不进 rc、paths 与 patch 寻址同源、params 并入 store 自身 params 并按来源分桶输出、新增「判据依据」自检断言" },
-    { "version": "1.3.2", "date": "2026-09-20", "summary": "文档/注释/引文/契约同步（零判定变化）：跨页面传参写清为能力边界、新增依据层 references/workflow-notes.md 与编年守卫、--safe 定性改为两模式语义等价并补 warn、修两处悬空引用与两处与实现不符的说明、description 瘦身" },
-    { "version": "1.3.1", "date": "2026-09-18", "summary": "修 Windows 上 diffguard 整组静默跳过（相对路径改由 git 自报）；examples 改为自举" },
-    { "version": "1.3.0", "date": "2026-09-18", "summary": "新增 diffguard（相对 git 基线检测压平）" }
+    {
+      "version": "1.7.8",
+      "date": "2026-10-30",
+      "summary": "SKILL.md 结构重排（patch）：**无新子命令、无新参数**，`xwl.py` 未改一个字节。① 取消第五（引用）／第六（SQL）／第七（itemId）三个一级章节——它们不是流程节点、而是「编辑时按需查」的知识分类，同类知识的其余四份 references 都只在「怎么用」表占一行；内容**归位而非删除**（两级结构→第二章、引用位置与三种 url→1.3 节、itemId→1.2 节），章号 9→6，500 行／22 427 字符 → 452 行／20 633 字符（净降 1 794）。② 结构断言换判据：删掉写死九个章名的 `want_order`／`want_keys`，改判格式不变式（序号连续／无空节／编号章 5–10／禁单列）；`_splits` 26 条拆成 `_SPLIT_POINTERS`（锚点去编号改关键词、层号参与判定）× `_SPLIT_CARRIERS`（只核目标文件承载词）——原单表把「指针在哪」与「内容在哪」绑在一个元组里，一改结构就一起碎。③ 全仓 24 处「第X章」／子节号引用改向，`ITEM-1171` 同批消掉。⚠️ 已知代价：`11k` 原防「章顺序被打乱」本次主动放弃（改为 checklist 人工项）——写死章名不是判据、是把布局抄进代码。⚠️ 用户裁定字符上限由 20 627 放宽到 20 633（补回五处被压措辞后的实测值）。"
+    },
+    {
+      "version": "1.7.7",
+      "date": "2026-10-30",
+      "summary": "references 面彻底整改（patch）：**无新子命令、无新参数**（`sub.add_parser` 增删 0）。六条同属一个文件面，`metadata` 的 `references`／`layers` 只对账一次。① **`ITEM-1157` SKILL.md 下沉**：587 行／27 521 字符 → **500 行／22 427 字符**（净降 **5 094**）；承接件均落 `spec` 层（`faq.md`／`js-api.md`），未动 `walkthrough.md`（余量仅 23）。⚠️ 500 行是业界上限（agentskills.io 与 Microsoft Learn 同口径）的**边界值、零余量**；距 `_SK_GOAL`（12 000）仍差 **10 427** ⇒ 分批推进。② **`ITEM-1166` 依据层 8k 失真收口**：`workflow-notes-guards.md` 8 984 字符拆为 **5 533 ＋ 4 124**（新增 `workflow-notes-guards-maintenance.md`）；`references` 与 `layers` 各 20 项、双向差集空；新增 **8k 守卫 12 行**，落 **`_docs_tail_scaffold`**（与 `17u` 层归属检查相邻，复用已校验的 `_b1_lay`，⛔ 不重复读 metadata）；阈值 `8 000` 的推导链写进代码注释（＝5 000 tokens × 1.61 字符/token ＝ 8 050 取整，依据业界对 SKILL.md 的 ≈5k tokens 建议）；同时订正 `SKILL.md` 与 `references/measured-data.md` L42 两处过期的「7,202」。③ **`ITEM-1161`** 「装完自证」拆两档：源码树／手工整目录 ⇒ 完整 `selftest`；CLI 安装渠道 ⇒ 只承诺冒烟三件，并写明副本可能不含 `metadata.json`。④ **`ITEM-1163`** SQL 示例统一「条件片段」契约：`serverScript` 只产 `AND …` 片段、`dataprovider` 保持单段完整 SELECT，值走 `{?…?}` 绑定 —— 不再有「完整 SELECT 再嵌完整 SELECT」。⑤ **`ITEM-1164`** `renderer` 示例由函数表达式改函数体（`return v == null ? '' : String(v);`）。⑥ **`ITEM-1165`** `autoLoad` 措辞分层：带查询条件面板／工具条的页面用 `false`、首屏查询由代码触发；转写规范补「且不做代码触发」限定；两处互加指针。⚠️ 已知：`_docs_tail_scaffold` 387 行（余 13）、`_docs_layers_and_distribution` 373（未动）、`_doc_guard_xfile_pt` 257（未动）；`references/js-api.md` 导语陈旧（仍称「本文是 SKILL 第五章 5.4 的展开」）本批不改，已立 `ITEM-1171` 归后续文档批。"
+    },
+    {
+      "version": "1.7.6",
+      "date": "2026-10-29",
+      "summary": "判据与语料收口批（patch）：**无新子命令、无新参数**（`sub.add_parser` 增删 0）。① **`ITEM-1167` 往返臂换 oracle**：现网 8 处「往返」里一处自陈判别力已归零 ⇒ 新增 **8 个模块级 `_GOLDEN_*` 常量**（4 份页面级 ＋ 4 个值样本）＋ **固定点断言** `expand(金标) ≡ 金标`（证明的是「与金标一致」，⛔ 不是「与自身自洽」）；注入同向两点（折叠 `.0` ＋ `equivalent` 退化）时旧臂全绿、新臂 3 条全红。⚠️ 已知盲区：改**值**字符（如 `备注`→`備注`）仍绿，只有**结构**字符必红，靠注释 ＋ 人工评审兜。② **`ITEM-1073`（workspace 工具，不占版本位）**：`inject_runner.py` 的 `git ls-files --others` 失败由 `if rc2 == 0:` 静默跳过改为 **fail-loud**（点名「本次没扫未跟踪文件」＋ `return None`），调用方文案同步改准。③ **`ITEM-1160` 语料拉齐**：`test-prompts.json` 的 `id7`／`id14`／`id21` 的 `expected` 按现行契约重写（新键默认拒绝 `rc=2`／缺来源默认 `rc=0`／`--strict` 下悬空 `rc=1` 且 `__MODULE__` 不再一律豁免）；`id`／`prompt` 未动、`17w` 覆盖集前后相同。④ **`ITEM-1162` CI 收紧**：`Default must fail` 由「任意非零即通过」改为三判（`rc` **恰为 1** ＋ 输出含「默认判红 —— 静默绿是病根」＋ 无 `Traceback`）。⑤ **对外文案一处订正**（经追认）：`xwl.py` 的 `#36` 附注原写「不加 `--strict` 仍只告警」，实际**非 strict 根本不打印该行** ⇒ 改准；`references/faq.md` 同句同改，与语料 `id21` 三处口径统一。⚠️ 遗留：`_check_bc_contract` 406 行（不在 `_CAP_FNS`，无机械约束，下版拆）；`privacy_scan` 的 `--patterns` 清单面待本地跑。"
+    },
+    {
+      "version": "1.7.5",
+      "date": "2026-10-27",
+      "summary": "注释与实现同步（patch）：**无新子命令、无新参数、无输出变化**（`git diff` 里 `sub.add_parser` 增删 0；去 docstring 后 AST 唯一差异是一处 **doc-only 字符串常量**且**无代码消费者**；`--only docs` 输出与改前**逐字相同**）。① **按缺陷面订正 12 个位置／13 处文本**（全是注释、docstring 内文本与一处 doc-only 常量，⛔ 零可执行语句改动）：`[:16]` 前缀法被归错臂的 3 处（`17j-6` 的 `_probe = _n[:16]` vs 围栏臂 `17j-14` 的**整串**比对）；「异常把整块打崩」已过期的 7 处（`1.7.4` 序 6 已给 `_run_block` 补三支 `except`，改为「被兜住、红行点名该块，但**定向断言仍未跑到**」，并写明 `KeyboardInterrupt`／`MemoryError`／`SystemError` 是 re-raise、串行档仍整进程退出）；换 oracle 时描述未跟改的 3 处（四臂表 ②、`_real_out_corpus` docstring、`17j-14` 段头／排除理由／边界）。② **目录覆盖缺口只做只读取证、未实现**：`references/` 19 份／含 `## 目录` 7 份＝`_TOC_REQUIRED` 7 条（口径 B 现 0 红，但**不覆盖**「该有的没有目录」）；口径 A 体量阈值**无单一阈值可切**（有目录组 116–398 行、无目录组 73–173 行，区间重叠；`T≤73` 全误报 12 份）⇒ 口径待定，`ITEM-1151` 回「待定版号」。③ 判据口径两处订正：施工单「多出任何一处即越界」改**按缺陷面收口**（同缺陷其余位置须同批改并**当场申报**）；只读序的「未改动」判据由 `git status --porcelain` 为空 改**两次 `md5sum` ＋ `git diff --numstat` 逐字相同**（原式在合规实现上必然假红）。⚠️ 已知：`_check_subcommands` 余量 382 → 387（余 13），**已冻结**、动它前先把 12b 段搬出；`--only` 分支不打 `node:` 行（`ITEM-1158` 另立）。"
+    },
+    {
+      "version": "1.7.4",
+      "date": "2026-10-26",
+      "summary": "分发面适配 ＋ 内部判据（patch）：无新子命令、无新参数、无退出码变化（`git diff` 里 `sub.add_parser` 与 `rc=` 行增删均 0）。① 分发：README 首段改「Agent Skill（面向支持 Agent Skills 规范的客户端，WorkBuddy 同样可用）」＋新增「安装」节；新增 `references/distribution.md`（五条 `npx skills` 命令、`check` 与 `update` 同源的行为注记、环境依赖三件、cwd 口径、升级卸载）；`metadata` 的 references／layers 同批 +1（spec）、SKILL 索引 +1 行 ⇒ 分发面 41 → 42。② 对外文案（输出变、能力不变）：`xwl.py` 两处提示（itemids 全量重名报告／diffguard 重跑）改绝对入口 ＋ 逐参引号（新增 `script_entry()`／`quote_arg()`／`cmd_hint()`，三档引号覆盖尾反斜杠与含引号两种难例）；三份文档调用形态统一为 `python <skill根>/scripts/xwl.py`。③ CI 并入 `install-layout` job（隔离 HOME／临时 cwd、`--copy` 装到 codex 与 codebuddy 两个不同目录、断言 agent 目录本身非链接、逐文件比源树并排除 metadata.json、缺资源／路径／内容变化三态、DISABLE_TELEMETRY、`git status --ignored` 为空、`skills@^1.7` 钉版本并打印实际版本）。④ 判据六条：函数行数上限判据搬出 `_docs_tail_scaffold` 到模块级 `_fn_cap_check`（399 → 375 行，解自指）；两条判定由 if/elif 拆成两条独立 if；`_run_block` 补 SystemExit／KeyboardInterrupt／BaseException 三支（崩溃仍打汇总行并点名该块，⛔ 不改末行锚）；目录族补「该有目录却没有」（登记表 ＋ 结构特征）；围栏臂宣称改准为整句（16 字前缀属行内反引号臂）；目录完整性扩到所有 `##` 级 ＋ 4 条一次性豁免 ＋ 盲区登记。⑤ 新增入口形态守卫（源码／运行时／文档三面，15 组矩阵全过）。⚠️ `ITEM-1130` 裁定维持 5 类扩展名不动；`install-layout` 首跑结论待 CI。"
+    },
+    {
+      "version": "1.7.3",
+      "date": "2026-10-24",
+      "summary": "文档用法 ＋ 内部判据（patch）：无新子命令、无新参数、无输出格式变化，对外契约一个字节未改。① 文档：`references/js-api.md` 新增第 6 节「`Wb.getModified` —— 取 grid 的变更集（用法约定，非平台契约）」，按三层定性写（三类键 `create`／`update`／`destroy` 与入参传 grid 句柄＝可证；提交前的列标记＝取决于后端签名、只说明依赖；参数套数组＝本机语料只覆盖三分之一调用点，不进正文），定性写进标题并自动进目录，全节 0 行号锚点；同批订正该文件三处「四条」自称并给 `SKILL.md` 索引表加指针。② 对外文案：`references/faq.md` 的「不是 UTF-8 文本」示例原来把工具分两行打印的报错挤成一行、还填了样本相关的 `b3 in position 236`，改为工具真实输出的两行。③ 内部判据：新增行号锚点四形守卫（现值面裸 `:N`／`L`+数字／5 类扩展名的 `文件:行号`／中文「第 N 行」一律 0 命中，显式排除 `CHANGELOG.md`；同批迁移现值面 5 处）；新增目录完整性臂（每个 `## N.` 须恰好一条目录项，按锚点解析配对而非标签数字，补 `17j-13` 只遍历已存在条目这一结构性盲区）；`17j-14` 由前 16 字前缀收紧到整句并新增 `_vn()` 抹可变段（两侧同过，抹后只剩可变段判红）；新增自检块名基线（少一块红并点名／多一块须在 CHANGELOG 用反引号点名／块序也判）；`_ng_*` 六个子函数纳入 400 行上限（纳管后仍绿，价值是防反弹）；`diffguard` 超时降级写成常驻用例（1ms 阈值、有界返回、原因落在闭集内，臂前置到夹具之前以免被建库失败的两处 return 挡住）；文档守卫失败清单超过 12 条时显式补「另有 N 条未展开」。"
+    },
+    {
+      "version": "1.7.2",
+      "date": "2026-10-22",
+      "summary": "内部判据批（patch）：无新子命令、无新参数、无输出格式变化。① 结构：`_check_new_guards`（拆分前 1 145 行，本仓 `ast` 量法）拆成薄壳 ＋ 6 个判据族子函数，子函数按文件内连续区间切（块内输出顺序也是行为）；入口名与块名不变；`--jobs 4` 全量输出拆分前后逐行 diff 为空。② 新增自检块 `rules_lint`（第 14 块）：候选待办须同行带 `id:` 与非空 `done_when:`、引用的 id ⊆ 同一文件的登记 id 表；扫描根由 `XWL_RULES_DIR` 给出（规则在仓外、不随 skill 分发）⇒ 三态分开（已设且存在＝真校验／未设＝未执行／已设但目录不在＝FAIL）；未设变量时在汇总行单列「未执行 M 块」，⛔ 不算进全部通过。③ 性能：`diffguard` 由每文件一次 `git show` 改为按目录一次 `git cat-file --batch`，三态与文案逐字未变（旧新两树逐字节对照），60 件墙钟 13 395 ms → 1 672 ms（单目录、无并发、-B、n=3 中位数）；批量超时不可逐文件归因 ⇒ 一次红灯 ＋ k/N ＋ 未处理文件清单 ＋ 可粘贴重跑命令、rc=2；不做逐文件自动重跑。④ 判据：`SKILL.md` 容量尺子由行数换成字符数（硬 32 000／软 28 000，两条独立报出；另有 12 000 远期目标只报 [note]）；换算依据 700 行 × 46.31、600 行 × 46.31，46.31 ＝ 27 091 字符 ÷ 585 行；`README.md` 的 150 行配额未换单位（无实测密度可换算，连带换等于又改一条判据）；破例改 `references/workflow-notes-guards.md` 一处数字口径，语义未动。"
+    },
+    {
+      "version": "1.7.1",
+      "date": "2026-10-20",
+      "summary": "收口批（patch）：**无新子命令、无新参数**（`--help` 篇幅与参数表逐字未变）。① 判定面 —— 解析层统一：`check` 的 ④／`params`／`dump` 共用同一份归一化与同一解析入口，新增接受单引号键／值、未引号键、未引号值、相邻贪婪 `{...}{...}`（只取第一个）；⚠️ 真样本 30 件 `rc` 零变动（本就是标准 JSON），放宽证据来自夹具（4 件 2/2→0/0/0，另 5 件越界形态一条没动）；键名含 `-` 的未加引号键仍报 ④ FAIL（能力边界不变）；未引号值一侧 `NaN`／`Infinity` 有意不补引号（属既有判据，不是同一件事）。② 两处变严 —— `params` 的 `__MODULE__` 改两段判：能解析到真实目录而目标不在 ⇒ `[warn]`、`--strict` 下新判失败（**`__MODULE__` 之后的段本身是显式占位 `<…>`／`…` 时除外** ⇒ 按占位 `[note]`、不判失败）；解析不到 ⇒ `[note]` 并写明按显式占位处理及原因；误报面如实登记（`--module-root` 给错但目录里有 `.xwl` 时，`__MODULE__` 会像普通 `m?xwl=` 一样判 `[warn]`，继承既有根启发式、不额外开后门），并写明这是已知逃逸面。`diffguard` 补第三档（相似度）：压平＋内容被改由漏报变命中、`--strict` 下新判失败；**短行同样在射程内**（原按 40 字符长度门槛过滤，会静默漏报短行合并 —— 三条短行并成一条、合并后依然短；现改为「窗口多行总长下限 ＋ 逐行覆盖度」两道与行长无关的闸；实测三行并成一行 18 字符 ⇒ 改前 ALL OK／--strict rc=0，改后 [warn]／--strict rc=1；反面对照「只改内容」「合法删减」仍不误报）；有界（只枚举续行起点、只比完整组、长度分桶＋3-gram 松门，最坏样本 0.96s→1.71s；放开长度门槛后加**内容去重**与松门求交上限，最大样本 451 KB／28007 行 0.96s→0.98s）；残余是部分压平仍可能漏。**拒写归因文案正确化**：未引号值不再被报成未引号键（token 终止集漏了 `,`、同一 token 被数两遍），四类写法（单引号键／值、未引号键、未引号值、相邻贪婪）的**类别与处数**均与实际一致；拒写行为不变（rc=2、目标文件一个字节不动）。③ 写盘路径 —— `edit` 是文本级 ⇒ 对上述非设计器产物写法现在能直接改且不重排；`patch`／`expand` 是整份重建 ⇒ 能识别但拒写（`rc=2`、目标文件一个字节不动），理由与两条出路写进文案；`sql`／`events`／`sqlrefs`／`itemids`／`paths` 仍走 strict 入口。④ 输出面（`paths` 两条）—— 每个字段多一行值预览（单行、整行 ≤120；原值 ≤100 不截断、>100 截断带「共 N 字符」，N 取字段行声明值；`\\r`／`\\n`／`\\t` 写成字面两字符），30 件样本新增 100 行；同名 `itemId` 的 `@写法` 提示按 itemId 归并只打一次（64 块→6 块），三条要点保留；行数对账 +100 − 4×58 = −132 ＝ 实测输出行数差 −132。⑤ 结构（不改判定）—— `_check_docs` 拆成薄编排器（只做编排）＋四段，四段与归位后的 `_check_subcommands` 各自都远小于 400 行阈值；新增函数体行数上限 400 的机械断言（`ast` 量），`_check_new_guards` 远大于 400 行、有意排除（排下一版，条目 `ITEM-1077`）；块名治理 `17h`→`17w`、`17i`→`17x`（只改重复号里后出现的那个）、`17j-5` 并入 `17k`（判据一条未丢），块基线 37→36；18 份 references 的层归属从首行声明迁到本文件 `layers`（spec 11／evidence 7）。⑥ 已知偏离施工单：拆分四刀而非三刀（3×400 装不下正文）；`_splits` 只做**零损合并** 32 → 26（6 组同锚点同目标的条目合并、`keys` 取并集 ⇒ 承载词槽位仍 83、一条判据未退役；实测 29/32 的指针句仍在锚点小节内，收缩到 5–8 条等于删 24 条仍有判别力的守卫）；「键名含 `-` 仍报错」未按未复现删除（复核为可复现）。"
+    },
+    {
+      "version": "1.7.0",
+      "date": "2026-10-20",
+      "summary": "能力补齐批（minor）：新增 `check` 第 `⑩` 项「`configs` 值类型」＋ 开关 `--no-cfgtype`，另加一条无编号 `[note]`（主 grid 的 `store.autoLoad`）与一处 `rc` 语义变化（`--controls` 取不到注册表 ⇒ `rc=2`），并新建 3 份参考材料。① ⑩ 判据：逐节点看 `configs` 的每个值，任一个不是字符串即 `FAIL`（进 `rc`）；只判类型不判语义（`\"300px\"` 不报）；与注册表无关，给 `--controls` 不改结论；**只在 `check` 生效**（写盘后自检仍只判 ①–⑥）；通过态与跳过态都留行（`[ok]   ⑩ configs 值类型：N 个节点、0 个非字符串值` / `[note] ⑩ … 已按 --no-cfgtype 跳过`）。档位依据：开工当场随机抽 1 个工程按当期状态复量 ⇒ **命中 0**，故一刀到位判 `FAIL`、无 `[warn]` 过渡；零命中的含义是「防将来」、当前召回为 0（数量本身不作判据）。② `--controls` 取不到注册表 ⇒ `rc=2`：路径不存在／读不了／不是可解析的 JSON，**含「是 JSON 但一个控件 type 都没有」的 `{}` / `[]` / `{\"foo\":1}`**（堵「形状错」的假绿）；**不整条拒跑** —— ①–⑧⑩ 与逐文件结论照常产出，只跳过 ⑨ 与 `configs` 内联 `[js]`，末了打一行 `[note]` ＋ `=== 结果: FAIL`；注册表改按 `utf-8-sig` 读（带 BOM 的合法注册表不再被误判为取不到）。③ 主 grid `autoLoad` 的 `[note]`：初始化加载不经过查询条件面板 ⇒ 默认筛选失效；**主 grid 识别改为「① `viewport` 下第一个 `grid` → ② 否则第一个 `tab` 之内第一个 `grid` → ③ 都没有 ⇒ 判不出」**（按「第一个 tab 的后代 tab」取会把编辑签页里的明细表当主列表、并对真主 grid 命中的形态完全静默）；直接子 `store` **全部**参与（任一 `autoLoad` 即命中）、直接子无 store 而深层有 ⇒ 打「未识别（store 不在主 grid 的直接子节点）」；无 `grid` 的文件不打；用 ⑧ 的闸 ⇒ `patch` 输出逐字节不变。④ 写盘命令（`patch` / `edit` / `expand` / `new`）新增一条 `[warn]`：本次写入含非字符串 `configs` 值时提示「check 的 ⑩ 会判 FAIL，请改成字符串」（列名最多 8 个；`rc` 仍 0、不改值、不阻断写盘；configs 全为字符串时不打）。⑤ 与 `itemids` / `params` 的契约有意不同：那两个命令取不到注册表是回退内置兜底 ＋ `rc` 不变（只影响白名单精度），`check` 的 ⑨ 是判定项 ⇒ 回退即假绿，故判 `rc=2`。⑥ 新增 references/layout.md（布局：面板高度算法、列网格与列宽、`region` 拉伸、数字列右对齐、工具条两条硬规则）、references/value-mapping.md（`keyName` vs `renderer`、禁在 SQL 里翻译、多选三路来源、值往返与存储格式代价、缓存提醒）、references/generation.md（脚本化：何时该脚本、`configs` 的 `str()` 收口、双层闸、换行对齐、可重跑；`new --eol` 默认 `lf` 已写明）。⑦ 既有件：faq.md 删「不新增第 ⑨ 项」承诺句并补 ⑨ 说明 ＋ 5 条症状条（4 条新开 Q ＋ 1 条「子目录 folder.json」并入既有那条，符合「⛔ 不新开」）＋ 1 条额外新 Q（「patch 显示 ALL OK、check 却报 ⑩」）⇒ FAQ 的 Q 总数 19 → 24（净增 5 ＝ 4＋1）；controls.md 补 `renderer`/`keyName` 最小写法、workflow-notes.md 补「参考页可复用边界」、SKILL.md 与 README.md 的 `check` 表述改九项 ＋ 四道验收（＋ 条件附加道）、SKILL.md 删两处越界指针、exit 2 行补 check 的 `--controls` 情形、随包样板 7 处 `width` 由数字改字符串。⑧ 绑定 `M4` 节点 2 的口径（⑧ 的数据加载链），`M4` 是验收侧指标节点编号、不是本仓检查项编号。"
+    },
+    {
+      "version": "1.6.7",
+      "date": "2026-10-19",
+      "summary": "账实对齐版（patch）：不改 `scripts/xwl.py` 任何字节，不改任何判定／输出／`rc`。① 退役 4 个死项 —— `17a`（标题禁 emoji，只服务样式一致性、本仓无出处）、`17j-2`（「N 份参考材料」三数相等：`SKILL.md` 里该措辞 0 次 ⇒ 循环体永不进入，大绿行仍宣称通过＝假绿；职责已由 `17j-3` 覆盖）、`17j-9`（旧措辞文本扫描：已由 `17j-10` 行为级判据守住）、`17s`（检的是本文件自身注释、属脚手架自检）；块基线 39 → 35。② 块基线判据**有意放宽**并登记：改为「块总数 ≥ 基线」＋「基线外块名必须在本文件声明」；残余（净 0 偷换在已声明时不再机械判红）如实写明；注入验证先红后绿三条各跑一次。③ 清掉注释里 4 处工作区私有计划文档指针 ＋ 18 处对已退役块名的悬空引用。④ `SKILL.md` 594 → 573 行（只削不增，每处确认 `references/` 指针仍在）。⑤ 规模数改口径：能力声明改为**下界**「≥2.5 万 `.xwl`」＋口径＋时点，精确值／复算命令／语料快照指纹落依据层第十节（工程侧天天在变，裸精确值落笔即过期）；`17q` 对 `SKILL.md` 当期无 token 可查一事**显式登记**（不是失效，写裸数即恢复生效）。⑥ 同步面：CHANGELOG / metadata.json / SKILL.md（version）。"
+    },
+    {
+      "version": "1.6.6",
+      "date": "2026-10-17",
+      "summary": "check 判据口径对齐与取法统一版（patch，段 3）：无新子命令、无新参数。① `check` ④ 判据**接受**加载器（org.json）也接受的 3 类写法（单引号键／未引号键／相邻的贪婪 `{...}{...}` 只取第一个）—— ⚠️ 性质是**口径对齐**、**当前语料实测零实例** ⇒ **现存文件判定零变化**，`rc` 只可能 1 → 0；第四类「非标准转义」加载器同样拒绝 ⇒ 维持报错。② `check` ⑧「加载链完整性」并入 **M4 节点 2**：页内有 `store`，却既无 `configs.autoLoad`、页内也扫不到 `.load(`／`store.reload(` ⇒ 打一条 `[warn]`（**不进 `rc`**、不改判定、⛔ 不新增第 ⑨ 项）。③ `scripts/selftest.py` 为「文档里写给用户看的命令样例，照抄必须跑得通」增设**通用解析式守卫**（`#82`：逐条喂 `build_parser().parse_args()`，与具体 flag 名无关，并入既有 17h 块）。④ 管道与取法：模块级入口兜 `BrokenPipeError` —— ⚠️ **射程限定**为「下游读走一行后关闭」（由 traceback ＋ `rc=1` 改为无 traceback ＋ `rc=0`；**一行不读直接 close** 仍 `rc=1` ＋ traceback，⛔ 不在覆盖内）；`check` 的 `--no-js` 取值统一为 `getattr(..., False)`（同义重构、行为无变化）。⑤ 同步面：CHANGELOG / metadata.json / SKILL.md（version）；references/faq.md 的 ④／⑧ 判据表述同步。"
+    },
+    {
+      "version": "1.6.5",
+      "date": "2026-10-16",
+      "summary": "超时路径有界兜底版（patch）：对外能力零变化 —— 无新子命令、无新参数、无新输出行；**正常路径的判定行为与命令行输出【零变化】**。本版唯一新增的是**超时路径的有界兜底**（⛔ 显式报出、不静默 —— 本仓判据：静默一律算缺陷）：① scripts/xwl.py 新增 `_cap_run()` —— 子进程的 `stdout`/`stderr` 改落**临时文件**（⛔ 非管道）＋ `timeout` ⇒ **有界返回**（管道下**后代进程**可能一直持写端 ⇒ 收尾等 EOF **永不返回**、连 `timeout` 也卡在等管道那一步）；超时 ⇒ 显式把原因写进 `stderr` 开头（与 `text=True` 同口径、两路不合并）。② scripts/xwl.py 给 git 探针加**超时哨兵**（`_GIT_TIMEOUT` / `_GIT_REV_TIMEOUT`）：`_git_prefix`／`_git_has_rev`／`_git_show`／`cmd_diffguard` **超时**不再被折成「不在仓库 / 基线不存在」，而是**显式诊断**（`diffguard --rev` 超时时**仍 `rc=2`**，severity 未变；成功/否定路径一字未动）。③ scripts/selftest.py：`_run_cli`／`_run_cli_env` 等改用 `_cap_run()`；**并行派发**（`--jobs N`）新增**单块兜底超时** —— 单块超过阈值仍未退出 ⇒ **杀掉该 worker 并显式记进失败清单**（⛔ 既不跳过、也不通过），父进程因此**有界返回**；阈值取环境变量 `XWL_SELFTEST_JOB_TIMEOUT`（整数秒，默认 **1800**；`≤ 0` ⇒ 关闭兜底、退回无界行为，并打印一行 `[note]` **显式声明**）。④ 相关断言里的 `%d` 收口为 `%s` —— 超时路径的 `returncode` 是 `None`，⛔ 不能再当整数格式化。⑤ references/workflow-notes-guards.md 新增「七、自检运行器：并行派发与单块兜底超时」。⑥ 同步面：CHANGELOG / metadata.json / SKILL.md（version）。"
+    },
+    {
+      "version": "1.6.4",
+      "date": "2026-10-15",
+      "summary": "随包样板值规范一致性修正 ＋ 声明措辞明确化版（patch）：对外能力零变化 —— 无新子命令、无新参数、无新输出行；**判定行为与命令行输出【零变化】**。① examples/ops-set-store-url.json 里 store 的 autoLoad 由裸布尔 true 改为字符串 \"true\" —— 属**规范一致性修正**（与该文件其余各处、以及本仓文档所写的形态对齐；⚠️「平台是否接受裸布尔」本机不可证，故只作规范一致性表述、⛔ 不声称是缺陷修复）。② metadata.json 的 file_ops 声明措辞明确为「不擅自遍历未指定的树、不批量删除」—— 属**声明措辞的明确化**，不改任何行为。③ 其余为文档／依据／规则的一致性订正（加载器宽容面的表述与取证、转写默认做法的条目拆分与理据、归档指针的自足表述等）；本段不新增／不修改任何校验判据，判定行为与输出零变化，该结论由旧／新树差集机械验证。④ 同步面：CHANGELOG / metadata.json / SKILL.md（version）。"
+    },
+    {
+      "version": "1.6.3",
+      "date": "2026-10-14",
+      "summary": "params 判定与诚实化版（patch，段 4）：对外能力零变化 —— 无新子命令、无新参数；本段唯一改**判定**的是 #36（params --strict 下真·悬空取数 url 由预告改判失败），另有 3 处「不再静默回退/谎报/误标」的输出面修正与 1 处新增用法错。① #36：params --strict 下真·悬空取数 url（m?xwl= 目标载体文件不存在）由「只打 [warn] 预告、rc 不变」改为判失败（rc=1）——⛔ 不给 --strict 一律不变（默认面零影响）；显式占位（<…>／…／__MODULE__）与 common/ 框架端点继续豁免、不进 rc；早返出口与末行出口两处都承载（「悬空-only」页走早返）。影响面（实测）：候选 1473 页里新增红 901 页 ＝ 全语料（24986 页）的 ≈3.6%。② #74：params／itemids 给了坏 --controls（读不动）时不再静默回退、也不再把用户给的坏路径当「来源」打印 —— 先如实打 [warn] 读注册表失败：…、来源行按「未找到」（与 check 的诚实做法对齐）。③ #75：params 模块根不可用（存在但不像模块根）时不再谎报「未找到」，改「未核对（模块根不像模块根：…）」（store.url 与 m?xwl 直接引用两处同口径）；⭐ 新增：--module-root 指向不存在的路径 / 不是目录 ⇒ 用法错 rc=2（⛔ 不受 --strict 影响）。④ #73：edit 的 --old-file／--new-file 的值指向不存在的文件 ⇒ 由裸 traceback 改为可读 [FAIL] ＋ rc=2（与 patch --ops／new --from-json 同族口径）。⑤ #80：params 的 m?xwl 引用分组名由「Wb.request 直接调用的 m?xwl」改为「url:'m?xwl=…' 引用的 m?xwl（不区分调用方）」—— 原名把 Wb.open／store.load 也算进去 ⇒ 误标。⑥ 同步面：CHANGELOG / metadata.json / SKILL.md（version）；守卫与注入用例同步（--only docs 39/39、--only new_guards 全绿、check_params_baseline 3/3）。"
+    },
+    {
+      "version": "1.6.2",
+      "date": "2026-10-13",
+      "summary": "params 假阴性修复与守卫收口版（patch，段 3）：对外能力零变化 —— 无新子命令、无新参数；本段唯一改判定的行为是 #83（修 params 漏报绑定参数的假阴性）⇒ 可见输出有变化、按本仓尺子判 patch。① #83：params 需求侧剥 SQL 注释时**保护 `{#…#}` 模板区块**（`#` 只按 MySQL 行注释剥），不再吞掉**同行其后**的 `{?名?}` ⇒ 修「同行 `{#…#}` 在 `{?名?}` 之前」形态的假阴性；行首 / 行尾的**真** `#` 注释、`--`、`/* */` 行为不变。② #54：patch --dry-run 的 diff 不再截断（行数 40 行 → 全量、单行行长 200 字符 → 整行）。③ #79：check ⑤ 先剥净尾空行再判（以「反斜杠＋换行」结尾、其后还有空行的文件不再漏判）。④ #78：check ⑥ / ⑥-ext 报错正文改取**真诊断行**（如 SyntaxError: …），不再给已删除的临时文件路径（死链）。⑤ #76：⑨ 量纲统一为「个」（运行级汇总「N 个节点（涉及 M 个文件）」、[ok] 明细行「N 个节点、0 个非法键」）。⑥ #77：patch 的 op 清单在 --help epilog / --ops help / README.md / SKILL.md / references/sql-fragments.md 各处统一为「五种」，并以机械断言绑到同一份权威清单。⑦ #57：folders 结论行按「有无 folder.json」分岔（缺则给「先建 folder.json」提示、不引向 --register）。⑧ #66：转写默认做法的 expanded 一条补理据。⑨ #82：test-prompts.json 随本段新能力同步（评测样本新增与订正）。⑩ 同步面：CHANGELOG / metadata.json / SKILL.md（version）；守卫与注入用例同步（--only docs 39/39）。"
+    },
+    {
+      "version": "1.6.1",
+      "date": "2026-10-11",
+      "summary": "params 判定与输出修正版（patch，段 2）：对外能力零变化 —— 无新子命令、无新参数；本段唯一的「新输出段」（#53 载体反查）复用既有 --upstream、只换目标类别 ⇒ 按本仓尺子「新输出仅指由新子命令／新参数带来的输出」判 patch。① #50：params 需求侧提取 {?名?} 前先剥注释（SQL 侧自实现剥 -- / #（MySQL）与 /* */，⛔ 不再委托 JS 剥离器、引号内不动）⇒ 注释里的占位符不再计入（消假阳性）、'http://…' 一类串里的 // 不误切。② #51：「跳过交叉核对」两句无条件加 [warn] 前缀（rc 不变）⇒ 与「已核对完成」不再肉眼难分。③ #58：「SQL 侧没有 {?名?}/app.get」按页面有无 store 拆两句文案（无 store ⇒ 未发现 store）。④ #56：同载体被多 store 引用时「SQL 侧」段合并打印并标（同载体 ×N）保留引用计数（去重键改物理文件同一性）。⑤ #53：_is_sql_carrier 收窄为「根 module 直挂 dataprovider 且不含 store/grid」⇒ --upstream 目标为 SQL 载体时文案分场景为「谁引用本载体」。⑥ #36：--strict 下悬空取数 url 打 [warn] 预告（rc 仍 0；早返与最终返回两路径都打）、显式占位（<…>/__MODULE__）只 [note]；未定位模块根则跳过分类（不谎报）、目标先去空白、空目标视为无引用。⑦ 另含插队两条：check 的 ⑥-ext（configs 内联 [js] 语法错）行序改为确定（_scan_configs_js 迭代 sorted，不再随 PYTHONHASHSEED 变）；patch 的 set/insertKey 把已存在容器键覆盖成标量时多打一条 [warn]（只加信号、rc 不变；容器→容器、标量→标量均不打）。⑧ 同步面：CHANGELOG / SKILL.md（--upstream 载体文案）/ references/faq.md（#36 能力边界）；守卫与注入用例同步（--only docs 39/39、inject_runner --all 52/0、check_params_baseline 3/3 diff=0）。"
+    },
+    {
+      "version": "1.6.0",
+      "date": "2026-10-10",
+      "summary": "注册表口径能力补齐版（minor）：把「设计器控件注册表」这条线在 check / schema / patch 三处补齐 —— 版本位依据是这三处新增对外能力（新参数 ＋ 新输出 ＋ 新 op）。① `check --controls`（#37②）：给注册表路径时另校两件事 —— ⑨ `configs` 键合法性（按 controls.json 逐键核对该控件类型认得的键，违规打 `[warn]`、不进退出码）＋ ⑥ 扩到 `configs` 里标 `[js]` 的键（renderer/validator/handler…，提取后交 node --check，语法错打 `[FAIL]`、进退出码）；⚠️ 两者只在显式给 `--controls` 时才跑（缺省不跑、也不自动找注册表）⇒ 不给开关时输出与判定逐字节不变，且这两项不计入 check 原有八项。② `schema --json`（#55）：以 JSON 输出供工具消费（`schema <type> --json` 出单个对象、`--list --json` 出数组），与 `--observed` 同用含实测段；与 `--tree` 不能同用。③ `schema --observed [ROOT]`（#46）：统计该类型在语料里实测用过的 configs 键 ＋ 频次（＝含该键的节点数），与注册表给差集；默认扫 `<工程>/wb/modules/**/*.xwl`（大仓会慢，用 ROOT 限定范围），针对一个控件类型、不与 --list/--tree 同用。④ `patch` 的 `insertKey`（#44）：把对象键插到指定位置（before/after/index 三选一、缺省末尾），补 set 的缺口（set+create 只能放路径末端）；新建键自授权但以 [note] 列出可见；拼块用 before:<固定兄弟> 或 index 递增，别共用 after:/同一 index。⑤ --help / 子命令表 / SKILL.md / README.md / references 同步。⑥ 随版并入的**文档与示例批**（#68 分页 totalSql 分场景 ＋ 外链两分法；#69 examples/ops-*.json 8 份新增 ＋ ops-add-button 改多 op 序列 ＋ examples/README 清单与规范节）**为 patch 性质、不抬版本号**（版本位依据仍是上述段 1 能力）；references/faq.md 的 check 校验面清单同步（configs 键/内联 [js] 标注「给了 --controls 时会校」、适用版本改当前发布版）。"
+    },
+    {
+      "version": "1.5.3",
+      "date": "2026-10-10",
+      "summary": "文档与口径批（patch）：把实例测试得出的「转写默认做法 ＋ 平台惯例 ＋ 无现成对应物的形态落法」落成一份新的参考材料（references/transcription-defaults.md；每条带出处与证据强度、未独立复现者明写），并修正三处会把人带错的口径 —— 隐藏参数选型（由\"用 `hidden` 控件\"改为「用其语义类型的控件 ＋ `configs.hidden:\"true\"`」，并补同名不同型：页面顶层 `hidden` 是 bool、控件 `configs` 级是字符串）、列 `itemId` 命名（默认＝字段名、仅同页多网格才加后缀）、控件树里工具条的挂载层（属网格的 `children`、不是网格的兄弟）；另同步两处同型副本（`references/walkthrough.md` 的控件树示例、`references/checklist.md` 的列命名项）。`check` 的能力边界改写为「稳定声明 ＋ 详细清单落 references」——`SKILL.md` 只留一句不随时间变的声明，当前校验面清单与注册表发现规则落 `references/faq.md`。对外能力零变化（不改判定、不改退出码、无新子命令／新参数）；唯一可感知的输出变化是两处提示文案（新建 SQL 载体时多一行\"种子为占位、必须替换\"提示；`itemids` 的后缀提示由恒现改为按\"同页是否多网格\"条件触发）⇒ 仍属 patch。"
+    },
+    {
+      "version": "1.5.2",
+      "date": "2026-10-08",
+      "summary": "文档读者分层版（patch）：`CHANGELOG.md` 文首的维护者规程迁出本文件 ⇒ 文首只留使用者向内容（介绍段 ＋ 数字说明）；升级须知这一结构约定改由不随包发布的开发者规则承载，并加一条文首行数上限守卫钉住；指针改指（workflow-notes ×3 ＋ README ×1，改后 0 残留）；`README.md` 移除两条发版类维护者动作（改由不随包发布的开发者规则落点承载）。另随版本并入一条与本主题无关的内部守卫修正：分发面自包含守卫的条代号判据由窄字符类改为结构化「字母-数字」形态，并配编码名词形豁免与 metadata.json 的 update_history 按段豁免；依据层 workflow-notes-guards.md 的判据说明同步。对外能力零变化（不改 xwl.py 一个字节、无新子命令／新参数／新增输出行）。"
+    },
+    {
+      "version": "1.5.1",
+      "date": "2026-10-06",
+      "summary": "适配与加固版（patch）：补 references/ 发布声明、拆记忆类文档、加隐私扫描与 CI 挂载 —— 对外能力零变化（子命令总数仍 15、无新参数、无新子命令、无新增输出行；不改 xwl.py 的对外面、不动 core_capabilities），全在 references/、scripts/（守卫与扫描器）与 CI 侧。① references/ 补发布声明（14 份）：每份 .md 首行加统一发布声明「> 发布面：随 skill 发布 ｜ 层归属：依据层|规格层」，编年三臂（17l）与权威面（17p／17q）由「写死文件名单」改为「按首行『层归属』机械选取」（声明即豁免、删声明即失效），并新增守卫块 17u 校验声明齐不齐、字段合不合法（动态遍历 references/ 实际文件、不写死清单）；doc_names 由写死清单改为按磁盘实际文件推导（12 → 17）；17u 另加依据层家族结构佐证（声明依据层者 stem 须属 measured-data／workflow-notes 家族），堵住「把规格层文件改成依据层即自授豁免」，另有 6 处硬编码名单改结构判据（按首行『层归属』选取，不再点名具体文件）。② 记忆类文档拆分（2 份 → 7 份）：measured-data.md 拆出 measured-data-addressing／designer／criteria／skeleton.md、workflow-notes.md 拆出 workflow-notes-guards.md（5 份均归依据层），节号不重编、原节标题原样保留，主文件保留主题文件索引。③ 隐私扫描＋ CI 挂载：新增 scripts/privacy_scan.py 与 scripts/privacy_patterns.example.json（发布前跑、白名单外 0 命中），.github/workflows/selftest.yml 挂载该扫描；「发布前跑该脚本」写在 README.md 的「依赖与许可」维护者段（与「改完 scripts/xwl.py 后先跑 selftest」并列）——它扫的是本仓自身分发面，不是用户的 .xwl 工作流。④ 守卫同步与指针改指：_chron_exempt 覆盖 4 → 9（CHANGELOG.md ＋ metadata.json ＋ 依据层 7 份）、_splits 9 条 _dst 改指、跨文件节号指针 27 处改指（改指后 0 残留）。⑤ 打包元数据与评测契约同步：metadata.json 的 references 9 → 14（守卫 17i 强制）、test-prompts.json 1 处指针改指（id 与条目数不动）。既有子命令行为与输出逐字不变。"
+    },
+    {
+      "version": "1.5.0",
+      "date": "2026-10-01",
+      "summary": "默认值翻转版（minor）：翻转两处默认值并新增一个全局逃生开关 ⇒ 对外能力有新增（新参数 `--allow-new-key`），按本仓尺子发 minor（子命令总数仍 15、无新子命令）。① `patch` 的 `set` 新建键默认被拒绝（打印 `[FAIL]`、rc=2、不写盘），报错文本直接教两条出路 —— 给该 op 加 `\"create\": true`（逐条放行）或命令行加 `--allow-new-key`（全局放行，两者任一即放行）；走全局开关放行时打一行 `[warn] --allow-new-key 已放行 N 个新建键：…` 留痕，`--dry-run` 下带 `create` 的待建键仍单列 `[new-key]`。② `params` 缺来源默认退出码由 1 改为 0（只告警），要阻塞须显式加逃生开关 `--strict`（rc=1，与 `diffguard --strict` 同名同义）；`--strict` 引入时「与默认同效」的预留说明全部翻成终态（`--help` / `SKILL.md` 两表 / `scripts/xwl.py` 运行期 `[note]` / `scripts/selftest.py` 断言文字）。③ `--strict` 登进 `core_capabilities` 并补 `test-prompts.json` 评测契约（`id 3` 期望同步、新增 `id 17`）；`--help` 行数上限随 `patch` / `params` 变化同步上调。既有 ops（写到已存在的键）与无 miss 的 `params` 页面行为不变。"
+    },
+    {
+      "version": "1.4.4",
+      "date": "2026-09-30",
+      "summary": "分发物纪律／守卫修正版（patch）：对外能力零变化（子命令总数仍 15、无新参数、无新子命令、无新增输出行；不改 xwl.py、不动 core_capabilities），全在文档守卫与分发文档侧。① 非 git 停用面：**默认判红**（[FAIL]、rc=1）＋ 显式 `--allow-nogit` 才降级 —— 三条依赖 git ls-files 的守卫（17j-9／编年／17r）在 zip 分发解包（本无 .git）时取不到清单；原口径只标注、绝不判红，副作用是「一个没跑的守卫族，全绿输出仍读得出一切正常」⇒ **有意收窄**为默认判红，确无 .git 须 `--allow-nogit` 才降级为打印 `[note] …本次没扫`（降级仍保留汇总行「本次 … 未执行：无 git」标注）；② 17j-14 围栏块输出文案臂**跳过 CHANGELOG.md**（M-09，与全族历史豁免口径对齐）；③ 17j 节号臂**判据修正**（M-08，既有 bug）：§N.M 两位数原先因负前瞻回溯误判成 §1，现整体不匹配、交 17j-12 判，消除双报；④ 结构收口（#15/#10b）：跨守卫分工表移出 `_check_docs` 函数体、`11k` 章节顺序守卫归位（判据不变）；⑤ 分发文档纪律：SKILL.md §六 4 个内联实测数字下沉为定性句＋指向 references/measured-data.md §11.4/§11.3、§4.2 退出码表补 sql／events 空结果 rc=1 两行（M-14/M-15）；⑥ 仪表审计整改（同版追加）：`params --upstream` 补真覆盖（真实上游调用方 ＋ 非 `m?xwl` 的 `store.url`，节点级三分类之和＝本页 `store.url` 数）；`sql`／`events`／`dump` 补命令级断言（`sql` 抽全含 `totalSql`、`events --outdir` 指向新目录须**自建**、`dump` 输出**多行**）；文档守卫改**块名多重集**守卫（少一个／多一个未登记块／「净 0 偷换块」都判红）；**扫描面含未跟踪文件**（`ls-files` ∪ `--others --exclude-standard`）；命令级断言改走**子进程真 CLI**（`_run_cli`：真实退出码、异常隔离、只看 stdout）。升级须知：对外能力无变化、直接替换；对「跑自检的环境」变严（无 `.git` 默认判红；块名多重集不符即判红），对 `.xwl` 与工具判定**无影响**"
+    },
+    {
+      "version": "1.4.3",
+      "date": "2026-09-29",
+      "summary": "守卫与尺子版（patch）：对外能力零变化（子命令总数仍 15、无新参数、无新子命令、无新增输出行）—— check 的文档守卫三处加严：① 跨文件节号指针检查纳入代码围栏内（原先跳过围栏；实测净增只两类：第N节（中文数字）与紧贴文件名的小节名，「§N.M」/「§N」早有别的守卫管；围栏内误报面实测 0）；② --help 行数上限表新增「防过松」半臂（上限 − 实测 > 设计余量即红，单子命令 5／顶层 10；不改任何上限值、不改 --help 输出）；③ 口径声明由「文件级布尔」收紧为「口径词须与采集日期同行」才算声明（只核日期形状、不核真伪，是提高绕过门槛而非不可绕过）；另：CHANGELOG 文首补「新输出」判据一句、references/workflow-notes.md 四处知识下沉；无变严项"
+    },
+    {
+      "version": "1.4.2",
+      "date": "2026-09-24",
+      "summary": "判据修正／输出新增版（patch）：check 新增第 ⑧ 维「加载链完整性」（只提示、不进退出码）—— 判据对齐框架的取键方式（children 须存在＋数组＋非空、children[0].configs 与 roles 须存在＋对象；框架这几处缺失即抛 / 类型不符即抛）⇒ 这类文件能被 ④ 解析、页面却在加载期打不开，定位「防手写 / 半成品」；⑧ 违规只打 [warn] ⑧ 加载链完整性：…（逐条含键名与期望类型）、check 退出码仍 0（不阻塞、不让 CI / pre-commit 变红），恒留一行、三形态定死（无异常 / [warn] / 因解析失败跳过——其 rc=1 是 ④ 给的）；patch / edit / expand 写盘后的自动校验不纳入 ⑧（与 ⑥⑦ 同口径：写盘后只判 ①–⑥）；对外能力不变（子命令总数仍 15、无新参数、无新子命令）、①–⑤ 判定面未动、无变严项"
+    },
+    {
+      "version": "1.4.1",
+      "date": "2026-09-24",
+      "summary": "判据修正版（patch）：读入面放宽 —— 所有读盘路径统一接受带尾随逗号的 .xwl（对齐框架加载器 org.json 的宽容面；parse_xwl 是所有读盘路径的唯一入口，故 check / patch / expand / edit / dump / params / sqlrefs 同源放宽；只放宽「读入」、不代表尾随逗号是合法 JSON，写盘会把它归一掉），并修 diffguard 精确命中在工作区该行带尾随空白时报出行号 0 的问题（改报真实物理行号）；对外能力不变（子命令总数仍 15、无新参数、无新子命令）、无变严项"
+    },
+    {
+      "version": "1.4.0",
+      "date": "2026-09-23",
+      "summary": "params 新增两个参数：--upstream（默认关，在 --module-root 内单根全扫上游调用方与传入键，末尾新增独立分组 [外部可传入] 与一行载入侧汇总——节点级三分类「同根命中 / 本根未找到 / 非 m?xwl 的 url」＋出现级「动态写法 / 非 m?xwl 字面量」、两种量纲分开标、只认字面量键、out: app.<容器> 与运行时拼接 url 只计数、不并入 provided 不改退出码）与 --strict（本版与默认同效，为下一版默认退出码翻转预留）；params 缺来源时新增一行 [note] 留痕（有 miss 的页面输出比旧版多一行、无 miss 的页面逐字不变）；folders 结论行改报 index 悬空项（「未登记」移出结论行、只进明细）；子命令总数仍 15、无新子命令"
+    },
+    {
+      "version": "1.3.5",
+      "date": "2026-09-21",
+      "summary": "重名口径改为按注册键（normalName 优先、回退 itemId）分组、分级只两级（被事件 JS 引用 error / 未被引用 benign，取消 warn 级）、节点集纳入只有 normalName 的节点、js_refs_of 增认 app['名']、params 侧 app-ref 提取与 js_refs_of 同源；check ② 改「风格集合」判据（混用 FAIL、纯 CR 降 warn）、patch/expand/edit 共用两层 eol 规则（新建 detect_eol / pick_eol_for_auto、含纯 CR 沿用）、非原样排版提示具体化三类改写计数、params 与 check ⑦ 也打印注册表来源；_number 保真写出整数值浮点（含 0.0）⇒ expand/patch 对整数值浮点样本由 rc=2 改为 rc=0；check ④ 把空文件 / 设计器模板 / 真坏三类文案分开"
+    },
+    {
+      "version": "1.3.3",
+      "date": "2026-09-20",
+      "summary": "判据修 bug：field_types/normalname_types 改「注册表 ∪ 内置兜底」（少 1057 条假阳 miss）、等价比对改规范化文本（含键序与值类型，`1`/`1.0`/`true` 互不通过）、diffguard 精确命中加前置必要条件（修真实历史版本误报）、check 的编码报错与 dump 统一文案、字符串里裸 NUL 判 warn 不进 rc、paths 与 patch 寻址同源、params 并入 store 自身 params 并按来源分桶输出、新增「判据依据」自检断言"
+    },
+    {
+      "version": "1.3.2",
+      "date": "2026-09-20",
+      "summary": "文档/注释/引文/契约同步（零判定变化）：跨页面传参写清为能力边界、新增依据层 references/workflow-notes.md 与编年守卫、--safe 定性改为两模式语义等价并补 warn、修两处悬空引用与两处与实现不符的说明、description 瘦身"
+    },
+    {
+      "version": "1.3.1",
+      "date": "2026-09-18",
+      "summary": "修 Windows 上 diffguard 整组静默跳过（相对路径改由 git 自报）；examples 改为自举"
+    },
+    {
+      "version": "1.3.0",
+      "date": "2026-09-18",
+      "summary": "新增 diffguard（相对 git 基线检测压平）"
+    }
   ]
 }

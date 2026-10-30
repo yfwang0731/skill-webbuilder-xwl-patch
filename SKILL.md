@@ -2,7 +2,7 @@
 name: webbuilder-xwl-patch
 slug: skill-webbuilder-xwl-patch
 displayName: webbuilder-xwl-patch
-version: 1.7.7
+version: 1.7.8
 license: MIT
 metadata:
   category: development-tools
@@ -73,14 +73,14 @@ WebBuilder 的页面与查询定义都写在 `.xwl` 里。它**看起来像 JSON
 | 先搞懂 xwl 是什么、有哪些硬规则 | 第一、二章 |
 | 动手改（第一次用） | **第三章**，照第 0 → 5 步走 |
 | 查子命令 / 退出码 / 环境依赖 | 第四章 |
-| 改引用、传参、写 `events` 里的 JS | 第五章 + [`references/js-api.md`](references/js-api.md) |
+| 改引用、传参、写 `events` 里的 JS | [`references/js-api.md`](references/js-api.md) |
 | 加 / 改窗口（`createInstance`、`closeAction`、`app._X`） | [`references/js-api.md`](references/js-api.md) §5 |
 | 提交前取 grid 的变更集（新增 / 修改 / 删除） | [`references/js-api.md`](references/js-api.md) §6《`Wb.getModified` —— 取 grid 的变更集（用法约定，非平台契约）》 |
-| 改 SQL 片段（`serverScript` ↔ `dataprovider`） | 第六章 + [`references/sql-fragments.md`](references/sql-fragments.md) |
-| 处理注册键重名 / `@itemId#N` 寻址 | 第七章 |
-| 出问题了（按症状查） | 第八章 + [`references/faq.md`](references/faq.md) |
+| 改 SQL 片段（`serverScript` ↔ `dataprovider`） | [`references/sql-fragments.md`](references/sql-fragments.md) |
+| 处理注册键重名 / `@itemId#N` 寻址 | [`references/faq.md`](references/faq.md)「附录：itemId 命名规范与重名处置」 |
+| 出问题了（按症状查） | 第五章 + [`references/faq.md`](references/faq.md) |
 | **动手前**扫一遍"别这么干" | [`references/anti-patterns.md`](references/anti-patterns.md) —— 23 条，标了哪些是**静默**的 |
-| **交活前**逐条过 | 第九章 + [`references/checklist.md`](references/checklist.md) —— 30 项 |
+| **交活前**逐条过 | 第六章 + [`references/checklist.md`](references/checklist.md) —— 30 项 |
 | 换控件 / 不知道用哪个 / 该挂哪里 | [`references/controls.md`](references/controls.md) |
 | 定布局：面板该多高、列宽与列网格、`region` 拉伸、工具条挂法 | [`references/layout.md`](references/layout.md) |
 | 值映射：`keyName` vs `renderer`、多选三路来源、值往返与存储格式 | [`references/value-mapping.md`](references/value-mapping.md) |
@@ -127,10 +127,7 @@ WebBuilder 的页面与查询定义都写在 `.xwl` 里。它**看起来像 JSON
 | **独立页面** | 能由菜单 / `inframe` / 直接 URL 打开 | 一般 `title` + `roles` 齐备，`inframe` / `pageLink` 有值 |
 | **被引用的片段** | 不是给人直接打开的页面，而是被别的 xwl 用 `url: 'm?xwl=…'` 加载：store 数据源、子面板、动作片段、SQL 载体 | 被别处引用；典型命名如 `xxxSql/queryXxx`、`.../insert`、`.../delete`、`.../fileUpload` |
 
-**两类的格式规则与处置方式完全相同**，区别只在于：改片段时你要额外确认"谁在用它"。
-
-> SQL 类片段（`dataprovider` + `serverScript` + `{#…#}` / `{?…?}` 占位符）的引用规则见**第五章**，
-> 写法见**第六章**。
+**两类的格式规则与处置方式完全相同**，区别只在于：改片段时你要额外确认"谁在用它"。SQL 类片段（`dataprovider` + `serverScript` + `{#…#}` / `{?…?}` 占位符）的写法见 §2.7。引用规则见 [`references/js-api.md`](references/js-api.md)「附录：引用通路总表与代码位置」。
 
 ### 1.2 控件节点的标准形态
 
@@ -138,6 +135,8 @@ WebBuilder 的页面与查询定义都写在 `.xwl` 里。它**看起来像 JSON
 两种键集（**键序固定** `configs, expanded, children, type`，有事件时末尾多 `events`）、
 `itemId` 的**唯一性**（工具寻址用 `@itemId`）与「少写 `expanded` / `children` 会**与设计器产物不一致**」见
 [`references/controls.md`](references/controls.md) §4.2 典型骨架；查单个控件用 `xwl.py schema --help`。
+
+注册键是 `normalName || itemId`，**必须唯一**；重名且被事件 JS 引用会**静默取不到值**（`error`），未被引用为 `benign`。处置顺序：**先读父子关系判断真实目标 → 把候选交给用户选**，⛔ 不要"删一个"或"挑一个"；分类表／命令／JSON 契约见 [`references/faq.md`](references/faq.md) 附录，框架机制（`ComponentManager`／`unregister`）见 [`references/measured-data-addressing.md`](references/measured-data-addressing.md) 的 `7.5`。
 
 ### 1.3 页面顶层骨架（7 把钥匙，键序固定）
 
@@ -156,6 +155,8 @@ hidden, children, roles, title, iconCls, inframe, pageLink
 > 所以**新建时不要手写顶层键** —— 用 `xwl.py new`（内置了这套键序，见**第三章第 0 步**）。
 > 7 把钥匙各自的**取值形态与实测分布**（1635 个页面类文件的计数）见
 > [`references/measured-data-skeleton.md`](references/measured-data-skeleton.md) §九。
+
+引用三种写法：`m?xwl=<模块相对路径，不带 .xwl>`／注册短名／外部 URL，**外部地址须 `inframe:true`**；写在不同位置（事件／store／列配置／服务端脚本／页面顶层），位置表见 [`references/js-api.md`](references/js-api.md)「附录：引用通路总表与代码位置」。
 
 > **要补齐这类「缺钥匙」文件时**：`set` 一个**原本不存在**的顶层键就是**新建键**，该 op 要带 `"create": true`
 > （或命令行加 `--allow-new-key` 全局放行；不给则默认拒绝、rc=2 —— 示例与两条出路见 §3.1）。
@@ -210,6 +211,18 @@ hidden, children, roles, title, iconCls, inframe, pageLink
 > `diffguard` 的**判据**（定义级 / **粗筛**）、漏报面、前置必要条件、跳过与退出码、成本与 `--rev` 用法见
 > [`references/faq.md`](references/faq.md) §三 与 [`references/workflow-notes-guards.md`](references/workflow-notes-guards.md) §二③；
 > **它只在 git 仓库里有意义**，且**只扫改动过的文件**，别对整个 `wb/` 跑。提交前该跑一次，见**第三章第 5 步**。
+
+### 2.7 SQL 载体的两级结构
+
+被 store 引用的 SQL 文件是固定的**两级结构**：
+
+```text
+(7 把钥匙，键序见 1.3)
+└─ type="module"  configs{ itemId, serverScript }  ← 取参数、拼条件
+   └─ type="dataprovider"  configs{ itemId, sql, totalSql?, … }  ← 执行 SQL、出数据
+```
+
+`serverScript` 只产**条件片段**（`{#x#}` 是**文本替换**，⛔ 别在 `dataprovider` 再写一遍完整 SELECT），其余见 [`references/sql-fragments.md`](references/sql-fragments.md)。`params --upstream` **默认关**：开时单根全扫、多两段分组、**不并入 `provided`、不改退出码**；零成本与那条 `[note]` 见 [`references/faq.md`](references/faq.md)，口径见 [`references/measured-data-criteria.md`](references/measured-data-criteria.md) 的 `11.3`／`11.4`。
 
 ## 三、处理流程
 
@@ -279,11 +292,11 @@ python <skill根>/scripts/xwl.py new wb/modules/<模块>/xxxSql/queryXxx.xwl --k
 
 > `ops.json` 的五种 op（`set` / `insertKey` / `insert` / `append` / `delete`）示例见 `xwl.py patch --help`（`epilog`）。
 
-> `path` 里对象键的 `@itemId` 写法与**不猜顺序**的三种出路（`@名字#N`、串联 `@`）见 `xwl.py patch --help`；重名处置见第七章。
+> `path` 里对象键的 `@itemId` 写法与**不猜顺序**的三种出路（`@名字#N`、串联 `@`）见 `xwl.py patch --help`，重名处置见 1.2 节。
 
 > ⚠️ `paths` **只列** `sql` / `totalSql` / `serverScript` / `url` 四类字段 ——
 > **按钮、网格等控件的 `itemId` 不在它的输出里**。要 `patch` 某个 `events.*`（如给按钮改 `click`）时，
-> 用 **`xwl.py itemids <file>`** 看重名报告（第七章），或直接试跑并接受工具的候选清单报错。
+> 用 **`xwl.py itemids <file>`** 看重名报告，或直接试跑并接受工具的候选清单报错；处置见 §1.2。
 
 > `paths` / `dump` 的用途与选项见各自的 `--help`（写 `path` 时**别漏 `configs` 一层**）。
 
@@ -337,7 +350,7 @@ python <skill根>/scripts/xwl.py patch <file.xwl> --ops ops.json --backup
    转成续行形态，你不用管。JS 里请用**单引号**。
 > 重排的"顺带规整"与 diff 最小化口径见 [references/measured-data-designer.md](references/measured-data-designer.md) §五；想压小 diff 改用 3.2 的 `edit`（语义相同、只含你改的那一处）。
 
-> 改 **SQL / serverScript** 时，`path` 用 `["@dataprovider","configs","sql"]` 这类写法 —— 见第六章。
+> 改 **SQL / serverScript** 时，`path` 用 `["@dataprovider","configs","sql"]` 这类写法 —— 见 §2.7。
 
 #### 3.2 文本级 `edit`（例外情况）
 
@@ -421,68 +434,7 @@ python <skill根>/scripts/xwl.py diffguard <改过的文件或目录> --strict  
 > 找不到降级）见本文「适用范围与前提」的环境行与 [`README.md`](README.md)。
 > 全部参考材料与示例的索引在**本文开头的「怎么用」表**里（那张表就是索引），此处不重复。
 
-## 五、xwl 的引用方式（数据源 / 子页面 / 后台方法）
-
-按引用对象选择 store 数据源、服务端片段、子页面、上传、Spring 方法或服务端 `app.execute`。通路总表、最短骨架、回传取值与代码位置见 [references/js-api.md](references/js-api.md)「附录：引用通路总表与代码位置」。
-样本调用量级见 [references/measured-data.md](references/measured-data.md) §一；事件 JS 使用单引号。
-
-### 5.1 怎么读一个 `m?xwl=` 引用
-
-引用使用模块相对路径、不带 `.xwl`；补上后缀才是文件路径。引用读法与从文件找引用方见 [references/sql-fragments.md](references/sql-fragments.md) §3.3。
-
-### 5.2 url 的三种写法
-
-三种写法为 `m?xwl=…`、注册短名与外部 URL；外部地址须 `inframe:true`。完整示例见 [references/js-api.md](references/js-api.md)「附录：引用通路总表与代码位置」；解析边界见 [references/sql-fragments.md](references/sql-fragments.md) §3.4。
-
-### 5.3 引用位置：这些代码写在 xwl 的哪一处
-
-事件、store、列配置、服务端脚本与页面顶层的引用位置不同。逐项位置表见 [references/js-api.md](references/js-api.md)「附录：引用通路总表与代码位置」。
-
-### 5.4 四条最容易踩的
-
-四条通路的完整写法、回传处理与边界见 [references/js-api.md](references/js-api.md)；调用场景契约见 `test-prompts.json`。
-
-## 六、SQL 片段：`module.serverScript` ↔ `dataprovider`
-
-被 store 引用的「SQL 文件」不是散装 SQL，而是固定的**两级结构**：
-
-```text
-(页面钥匙 7 把，真实键序见 1.3)
-└─ type="module"          configs{ itemId, serverScript }        ← 取参数、拼条件
-   └─ type="dataprovider" configs{ itemId, sql, totalSql?, … }   ← 执行 SQL、出数据
-```
-
-> 其余全部展开在 [`references/sql-fragments.md`](references/sql-fragments.md)：三条最易错规则、serverScript 的源码硬规则与常用 API、三种占位符（`{#sys.*#}` / `{#任意名#}` / `{?名字?}`）、`out` / `params` 两条通路（含同名谁赢、命名契约），以及 `paths` / `sqlrefs` / `params` 三个检查工具。
-
-**`params --upstream`（可选能力，默认关）**：核对「**谁在调用本页**」（目标为 **SQL 载体**时**段头为** `=== [引用本载体的页面] ===`）—— 在 `--module-root` 内**单根全扫**一遍，
-末尾加独立分组 `[外部可传入]`（各上游调用方与传入键），再给一行**载入侧汇总**（节点级「同根命中 / 本根未找到 / 非 m?xwl 的 url」＋
-出现级「动态写法 / 非 `m?xwl` 字面量」；**两种量纲分开标**；节点级三数**之和 = 本页 store.url 数**）。**默认关 ⇒ 零成本**（不开时**不出现**这两段；**唯一例外**见 §4.2 的留痕规则 —— 缺来源时本就有一行 `[note]` 预告）；
-开了才单根全扫一遍（≈5 秒量级）。它只认 `params: {名:值}` **字面量键**，`out: app.<容器>` 与运行时拼接的 url **只计数**；
-**不并入 `provided`、不改退出码**。命中量级的**完整口径**（节点级「同根命中／本根未找到」＋出现级「动态写法／非 `m?xwl` 字面量」，**两种量纲分开**）与**多根三分类**（同根命中 / 跨工程 / 全根不存在）见 [`references/measured-data-criteria.md`](references/measured-data-criteria.md) **§11.4（节点级多根三分类）与 §11.3（`url:` 三类形态）**。
-
-## 七、itemId 命名规范与重名处置
-
-按注册键 `normalName || itemId` 分组：重名且被事件 JS 引用为 `error`，未被引用为 `benign`。
-控件分类、命名约定、处置顺序与 JSON 字段契约见 [references/faq.md](references/faq.md)「附录：itemId 命名规范与重名处置」。
-实测依据见 [references/measured-data-addressing.md](references/measured-data-addressing.md) §七。
-
-### 7.1 框架怎么把控件交给 JS（这决定了重名的后果）
-
-注册键优先取 `normalName`；重名会覆盖，任一重复项销毁会删除同名键。框架源码与确切机制见 [references/measured-data-addressing.md](references/measured-data-addressing.md) §7.5。
-
-### 7.2 三类控件，三种规则
-
-列、取值控件、按钮与面板等按不同命名约定处理；非合法 JS 标识符须用取名 API。
-分类表见 [references/faq.md](references/faq.md)「附录：itemId 命名规范与重名处置」。
-`normalName` 合法性与样本分布见 [references/measured-data-addressing.md](references/measured-data-addressing.md) §7.1 与 §7.2。
-
-### 7.3 遇到重名：先读父子关系，再把候选交给用户选
-
-先判断真实目标，再交候选清单；不要随意删除或挑选。
-建议依据见 [references/measured-data-addressing.md](references/measured-data-addressing.md) §7.6；完整命令与 JSON 字段契约见 [references/faq.md](references/faq.md)「附录：itemId 命名规范与重名处置」。
-精确寻址 `@itemId#N` 与串联 `@` 仍见 §3.1。
-
-## 八、常见问题（FAQ）
+## 五、常见问题（FAQ）
 
 **24 条**高频问题在 [`references/faq.md`](references/faq.md)，按四组归类：① 格式与解析 / ② 命名与引用 /
 ③ 能不能这么改 / ④ 命令行为（设计器看不到新文件、SQL 抽取报 `1064`、`check` 慢或没装 `node`、脚本 / CI 怎么判断成败等）。
@@ -490,7 +442,7 @@ python <skill根>/scripts/xwl.py diffguard <改过的文件或目录> --strict  
 > 出问题**第一站是那份 FAQ**（按症状查）；**动手前**想避开已知的坑，看
 > [`references/anti-patterns.md`](references/anti-patterns.md)。
 
-## 九、改完的自检清单
+## 六、改完的自检清单
 
 **30 项**清单（改已有文件 24 项 + 新建文件 6 项）在 [`references/checklist.md`](references/checklist.md) ——
 交活前逐条过一遍。按主题分了七组，**与 [`references/anti-patterns.md`](references/anti-patterns.md) 的分组对齐**（七组 ↔ 反模式组的对照表在 [`references/checklist.md`](references/checklist.md) 开头）。
