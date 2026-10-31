@@ -293,26 +293,49 @@ jobs:
           listed = ["%s：%d 个文件" % (n, len(want)) for n in TARGETS]
           print("逐文件比对（源树 %d 个必需文件，已排除 %s）：%s" % (len(want) - len(SKIP & set(want)),
                                                               "／".join(sorted(SKIP)), "；".join(listed)))
-          # ⚠️ **单向下限**：上面只判"这些必须在且逐字节相同"。反向（副本多出／少掉 **必需清单之外** 的文件，
-          #   例 `LICENSE`／`test-prompts.json`／`.github/**`）**只报 [note]、不进 rc** —— 理由：拷贝范围由
-          #   安装器自己定（`copyDirectory` 的排除清单会变），判死会造"正确实现也恒红"的假红。
-          #   ⇒ 属**已知覆盖缺口**（已登记）；要闭环得先做一次真装确认拷贝范围，再改成双向比对。
+          # 双向：副本多出源树没有的文件，白名单之外的判红。
+          #   白名单放行的是安装器或 runner 自己会带上、不属于本仓内容的东西：
+          #   · LICENSE —— 安装器按包元数据补的许可证，源树不一定有同名文件；
+          #   · test-prompts.json —— 评测契约，安装布局不保证原样带上；
+          #   · .github/** —— CI 自己的 workflow，不随 skill 副本分发；
+          #   · node_modules/** —— runner 装依赖时留下的，不是源树内容；
+          #   · 锁文件 —— 只放行 .skill-lock.json。本 workflow 只用 npx，没有 npm ci / npm install / yarn / pnpm，另外三个锁不会产生，不放行；
+          #   · __pycache__/** —— 解释器字节码缓存，跑过一次就会出现。
+          _EXTRA_ALLOW = ("LICENSE", "test-prompts.json")
+          _EXTRA_ALLOW_PREFIXES = (".github/", "node_modules/", "__pycache__/")
+          _EXTRA_ALLOW_LOCKS = (".skill-lock.json",)
+
+          def _extra_allowed(rel):
+              if rel in _EXTRA_ALLOW or rel in _EXTRA_ALLOW_LOCKS:
+                  return True
+              return any(rel.startswith(p) for p in _EXTRA_ALLOW_PREFIXES)
+
           _all_src = set()
           for _dp, _dn, _fns in os.walk(SRC):
               _dn[:] = [x for x in _dn if x not in (".git", "__pycache__")]
               for _fn in _fns:
                   _all_src.add(os.path.relpath(os.path.join(_dp, _fn), SRC).replace(os.sep, "/"))
           _all_src -= SKIP
+          _extra_bad = []
           for name, d in TARGETS.items():
               _have = set()
               for _dp, _dn, _fns in os.walk(d):
                   for _fn in _fns:
                       _have.add(os.path.relpath(os.path.join(_dp, _fn), d).replace(os.sep, "/"))
-              _extra = sorted(_have - _all_src - SKIP)          # 副本里出现源树没有的
-              _missing_note = sorted(_all_src - _have)          # 上面已按 miss 判过，这里只做对账展示
-              print("[note] %s：必需清单之外 —— 副本多出 %d 个 %s；源树 %d 个功能文件里副本没有 %d 个 %s"
-                    "（仅记录、不进 rc）"
-                    % (name, len(_extra), _extra[:6], len(_all_src), len(_missing_note), _missing_note[:6]))
+              _extra = sorted(r for r in (_have - _all_src - SKIP) if not _extra_allowed(r))
+              _extra_ok = sorted(r for r in (_have - _all_src - SKIP) if _extra_allowed(r))
+              _missing_note = sorted(_all_src - _have)
+              if _extra_ok:
+                  print("[note] %s：白名单内多出 %d 个 %s（放行）" % (name, len(_extra_ok), _extra_ok[:6]))
+              if _missing_note:
+                  print("[note] %s：源树 %d 个功能文件里副本没有 %d 个 %s（已在上方按缺资源判）"
+                        % (name, len(_all_src), len(_missing_note), _missing_note[:6]))
+              for rel in _extra:
+                  _extra_bad.append("%s：副本多出 %s（不在白名单）" % (name, rel))
+          if _extra_bad:
+              print("双向比对＝**副本多出**（%d 条，白名单之外）" % len(_extra_bad))
+              for m in _extra_bad[:20]:
+                  print("  - " + m)
           if unreadable:
               print("三态＝**路径问题**（源树侧，%d 条）" % len(unreadable))
               for m in unreadable[:20]:
@@ -325,7 +348,7 @@ jobs:
               print("三态＝**内容变化**（%d 条）" % len(changed))
               for c in changed[:20]:
                   print("  - " + c)
-          sys.exit(1 if (unreadable or missing or changed) else 0)
+          sys.exit(1 if (unreadable or missing or changed or _extra_bad) else 0)
           PY
 
       # 硬要求③：**从业务目录执行**（cwd 不是 skill 根 —— 这正是"裸相对路径在业务工程里跑不通"的场景）。

@@ -3,7 +3,7 @@
   "name_en": "webbuilder-xwl-patch",
   "displayName": "webbuilder-xwl-patch",
   "author": "yfwang0731",
-  "version": "1.7.8",
+  "version": "1.7.9",
   "schema_version": "1.0",
   "description": "WebBuilder（wb）平台 .xwl 定义文件的处理与安全编辑：结构级 patch（只给值 / 子树，工具按设计器自己的算法重建整份文件）+ 格式校验 + 相对 git 基线的压平检测。",
   "core_capabilities": [
@@ -161,6 +161,11 @@
     "references/workflow-notes-guards-maintenance.md": "evidence"
   },
   "update_history": [
+    {
+      "version": "1.7.9",
+      "date": "2026-10-31",
+      "summary": "判据体系整改（patch）：**无新子命令、无新参数**，`xwl.py` 未改一个字节。十条驱动全部是「判据看起来在判、实际判不到」，按病根分四族收口。① **围栏伪标题三面收口**（`ITEM-1153`）：新增模块级助手 `_fence_mask`（1 定义 ＋ 4 调用），17j-13 的 `for` 扫描、同函数上游 `_body` 构造、`_region_after_anchor` 的**匹配阶段**共用；另加「同层命中 ≠1 即判红」（原为「取第一个命中」，层号判红只能兜异层）。② **围栏臂消灭唯一示意实例**（`ITEM-1140`）：`SKILL.md` 的 `L316` 是 6 条围栏标签行里唯一的示意行（其余 5 条全是逐字真文案）且上一行明写「真跑时打这条痕」＝承诺 ⇒ 改成真跑输出（`--allow-new-key 已放行 2 个新建键：…`）＋ `_real_out_corpus` 补一次该调用；`_fence_ph` 语义不动。③ **`_FN_CAP` 纳管**（`ITEM-1170`）：先**临时纳管取证必红 → 撤销 → 拆 → 正式纳管**；`_check_basics` 482→**313**、`_check_bc_contract` 406→**366**，拆出的 `_check_basics_tail`／`_check_bc_contract_tail` 一并入表 ⇒ `_CAP_FNS` 13→**17**（⛔ 不纳管等于把缺口从大函数搬到助手）。④ **章数阈值出处**（`ITEM-1174`）：下限 `≥5` 保留阻断（出处＝闭环五段）、上限 `≤10` **降为 `[note]`**（无可引用出处，写成阻断就是拿拍的数当判据）；`[ok]` 文案同步改「章数 ≥5」。⑤ **目录登记机制**（`ITEM-1151`）：加「有 `## 目录` 却未登记 `_TOC_REQUIRED` ⇒ 判红」；`_TOC_REQUIRED` 仍 7 份、与现网精确 `^## 目录$` 完全对齐（⚠️ 数这个必须用**精确**匹配，`grep \"^## 目录\"` 会把 `README.md` 的 `## 目录结构` 算进来）。⑥ **豁免表锚点式**（`ITEM-1154`）：`_TOC_HEAD_EXEMPT` 改 `(文件, 标题前缀)`，并加「恰好命中一个」自校验（0 个＝失效、≥2 个＝前缀太泛）。⑦ **入口射程**（`ITEM-1149`）：文档面把 `python …selftest.py` 的调用形态一并纳管，规则与 `xwl.py` 同一条；⛔ 不扩到 `.py` 源码（`selftest.py` 自己的 docstring 有裸写，是用法自述）。⑧ **`--only` 快照自证 node**（`ITEM-1158`）：`--result` 的 JSON 由 list 改 dict（`node` ＋ `failures`），父进程读点同步改；未给 `--result` 时把 node 并入已有那行（**行数不变**）；⛔ 不把 `node:` 的 `print` 提到 `--only` 分支之前。⑨ **`KeyboardInterrupt` 取证**（`ITEM-1152`）：子进程内注入，本机 3 次 rc 一致。⑩ **CI 装副本比对改双向**（`ITEM-1156`，搭车不占版本位）：白名单**只放 `.skill-lock.json`**（本 workflow 全文只用 `npx`，`package-lock.json`／`yarn.lock`／`pnpm-lock.yaml` 不可能产生），白名单之外多出即 `sys.exit(1)`。⑪ 搭载 `ITEM-1173`（`SKILL.md` 1.2 节行内双竖线被渲染成无表头表格）：改写为「注册键取 `normalName`（优先），否则取 `itemId`」，去竖线、语义不变。⚠️ **已知盲区（如实登记）**：全仓 `startswith(\"```\")` 仍有 6 处未走 `_fence_mask` —— 其中 `_region_after_anchor` 截断阶段（原有正确逻辑，删了区间会跨过围栏）、`17j-14` 围栏臂（属 `ITEM-1140`）不该动，另 4 处在 `_doc_prompt_cmds`／`_docs_xfile_consistency`／`_docs_numbers_and_tables`×2、与本条无关，统一与否留后续批判；`17j-6` 在 `SKILL.md` 上检查点为 **0**（既有状态、非本批引入）；CI 双向比对**未真跑过**，红了按「整序回退、另立条目」处理。⚠️ `selftest.py` +252/−57；全量 16 秒、14 块；`--only docs` 零 FAIL；`--help` 与改前**逐字节相同**（对外契约零变化）。"
+    },
     {
       "version": "1.7.8",
       "date": "2026-10-30",

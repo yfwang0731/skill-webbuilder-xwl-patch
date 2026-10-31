@@ -579,6 +579,17 @@ def _check_basics(tmp, node, failures, write) -> None:
         else:
             failures.append(f"{name} 失败（产出前 200 字符={after[:200]!r}）")
 
+    # 尾部（非 UTF-8 文案 / 调用点探针 / 裸 NUL / ops 草稿 / NaN / 负零金标 / 写盘原子性）
+    #   已下沉为模块级 `_check_basics_tail`（ITEM-1170：本函数 482 行，要进 400 的上限）。
+    #   判据文本逐字未改，只换了宿主。
+    _check_basics_tail(tmp, failures)
+
+
+def _check_basics_tail(tmp, failures) -> None:
+    """`_check_basics` 的尾部（有界下沉，判据文本逐字未改）。
+
+    只依赖 `tmp` 与 `failures` 两个入参，其余都是模块级名字。
+    """
     # ---- 判据依据：`check` 与 `dump` 对非 UTF-8 必须报**同一段**可读文案 ----
     # 起因：`check` 曾直接甩 Python 的 codec 原文（既不说是编码问题、也不给修法），
     #   而 FAQ 与 `test-prompts.json` 引的正是"工具报「不是 UTF-8 文本」"这个问法 ⇒ 文档与实现对不上。
@@ -3355,6 +3366,51 @@ def _real_out_corpus(tmp: str) -> str:
         json.dump([{"op": "set", "path": ["title"], "value": "c2"}], f)
     _cap(xwl.cmd_patch, file=_pw, ops=_pops, eol="auto", indent=1, dry_run=False,
          backup=False, allow_new_key=False, node=None, no_js=True)
+    # `--allow-new-key` 放行新建键的那条 `[warn]`：两个新建键、真写盘。
+    # 文档围栏里的例子就是这一次的输出（`@panel1.configs.newKeyA` / `newKeyB`），
+    # 不补这一次，那行在语料里找不到。
+    _ank = _w("corpus_allownew.xwl", xwl.dumps_designer(
+        {"title": "c", "roles": {}, "children": [
+            {"configs": {"itemId": "panel1", "html": "x"},
+             "type": "text", "expanded": False, "children": []}]},
+        1, CRLF))
+    _ank_ops = os.path.join(tmp, "corpus_allownew_ops.json")
+    with open(_ank_ops, "w", encoding="utf-8") as f:
+        json.dump([
+            {"op": "set", "path": ["@panel1", "configs", "newKeyA"], "value": "v1"},
+            {"op": "set", "path": ["@panel1", "configs", "newKeyB"], "value": "v2"},
+        ], f)
+    _cap(xwl.cmd_patch, file=_ank, ops=_ank_ops, eol="auto", indent=1, dry_run=False,
+         backup=False, allow_new_key=True, node=None, no_js=True)
+    # itemids 全量重名报告：两个按钮共用注册键 `btn`，其中一个被事件 JS 引用
+    # ⇒ 打出 `[error] 重名 + 已被 JS 引用` 与「全量重名报告」这一族。不补这一次，文档里对这些句的承诺在语料里找不到。
+    _idup = _w("corpus_itemids.xwl", xwl.dumps_designer(
+        {"title": "dups", "roles": {}, "children": [
+            {"configs": {"itemId": "btn", "text": "a"},
+             "type": "button", "expanded": False, "children": [],
+             "events": {"click": "app.btn.setText('x');"}},
+            {"configs": {"itemId": "btn", "text": "b"},
+             "type": "button", "expanded": False, "children": []}]},
+        1, CRLF))
+    _cap(xwl.cmd_itemids, file=_idup, name=None, dups_only=False, suggest=False,
+         fix="auto", controls=None, json=False)
+    # 「全量重名报告」那句不在 itemids 的报告里，它在重名寻址失败时由
+    # `format_itemid_candidates` 抛出。用一次会撞上重名 `@btn` 的 patch 把它打出来。
+    _iops = os.path.join(tmp, "corpus_itemids_ops.json")
+    with open(_iops, "w", encoding="utf-8") as f:
+        json.dump([{"op": "set", "path": ["@btn", "configs", "text"], "value": "z"}], f)
+    _cap(xwl.cmd_patch, file=_idup, ops=_iops, eol="auto", indent=1, dry_run=True,
+         backup=False, allow_new_key=False, node=None, no_js=True)
+    # diffguard 重跑提示：不在 git 仓的文件会走「跳过」支，文案要求用户改完再跑一次。
+    # ⚠️ 用独立临时目录，不把 skill 仓自己的 .git 当成本条的基线。
+    _dg = tempfile.mkdtemp(prefix="xwl_corpus_dg_")
+    try:
+        _dgf = os.path.join(_dg, "plain.xwl")
+        with open(_dgf, "w", encoding="utf-8", newline="") as _fh:
+            _fh.write("{not json")
+        _cap(xwl.cmd_diffguard, targets=[_dgf], rev="HEAD", strict=False)
+    finally:
+        shutil.rmtree(_dg, ignore_errors=True)
     return "\n".join(re.sub(r"\s+", "", _ln) for _t in _buf for _ln in _t.splitlines())
 
 
@@ -3414,6 +3470,22 @@ _VOLATILE_RE = re.compile(r"0x[0-9a-fA-F]{2}|position\s*\d+|第\s*\d+\s*行|\bli
 def _vn(_s):
     """抹掉可变段。⚠️ 比对**两侧都要过**本函数，⛔ 只抹一侧（那会把"文案被改坏"也一起豁免掉）。"""
     return _VOLATILE_RE.sub("«V»", _s)
+
+
+def _fence_mask(_lines):
+    """返回与 `_lines` 等长的布尔序列：该行是否落在代码围栏内。
+
+    围栏行本身（以 ``` 开头）不算围栏内。三面共用这一份，⛔ 不许各自再数一遍。
+    """
+    _inside = False
+    _out = []
+    for _line in _lines:
+        if _line.strip().startswith("```"):
+            _inside = not _inside
+            _out.append(False)
+        else:
+            _out.append(_inside)
+    return _out
 
 
 _trig = ["加删控件", "挂改事件", "改网格列", "SQL 片段", "传参链路", "重名", "从零新建页面",
@@ -3482,26 +3554,35 @@ def _region_after_anchor(_lines, _anchor, _lvl):
 
     匹配是**包含**（`_anchor` 出现在标题文本里），不是前缀：锚点已改成去编号的语义关键词，
     要在改前（带编号）与改后（重编号）两种标题里都能命中。层级仍按命中标题自身的层号计。
+
+    围栏内的标题行不算命中。同层命中超过一次也返回 `(None, None)`：命中第一个就返回
+    只能挡住异层，挡不住同层多命中。
     """
+    _mask = _fence_mask(_lines)
+    _hits = []
     for _k, _l in enumerate(_lines):
+        if _mask[_k]:
+            continue
         _hm0 = re.match(r"^(#{1,6}) (.*)$", _l)
         if _hm0 and _anchor in _hm0.group(2):
-            # 层级取**命中标题自身**的层号，不取调用方传入的 `_lvl`：锚点已是关键词，
-            # 标题写了几个 `#` 只有命中那一行知道。`_lvl` 保留在签名里是为了不改调用处。
-            _own = len(_hm0.group(1))
-            _out = []
-            _fen = 0
-            for _j in range(_k + 1, len(_lines)):
-                _cur = _lines[_j]
-                if _cur.strip().startswith("```"):
-                    _fen += 1
-                elif _fen % 2 == 0:
-                    _hm = re.match(r"^(#{1,6}) ", _cur)
-                    if _hm and len(_hm.group(1)) <= _own:
-                        break
-                _out.append(_cur)
-            return _out, _own
-    return None, None
+            _hits.append((_k, len(_hm0.group(1))))
+    if len(_hits) != 1:
+        return None, None
+    _k, _own = _hits[0]
+    # 层级取**命中标题自身**的层号，不取调用方传入的 `_lvl`：锚点已是关键词，
+    # 标题写了几个 `#` 只有命中那一行知道。`_lvl` 保留在签名里是为了不改调用处。
+    _out = []
+    _fen = 0
+    for _j in range(_k + 1, len(_lines)):
+        _cur = _lines[_j]
+        if _cur.strip().startswith("```"):
+            _fen += 1
+        elif _fen % 2 == 0:
+            _hm = re.match(r"^(#{1,6}) ", _cur)
+            if _hm and len(_hm.group(1)) <= _own:
+                break
+        _out.append(_cur)
+    return _out, _own
 
 
 def _pt_heads(_ls):
@@ -3523,9 +3604,11 @@ def _toc_key(_t):
     return re.sub(r"[-]", "", _s).replace(" ", "")
 
 
-# 目录完整性臂的**一次性豁免清单**：标题**有意不进目录**的小节，逐条写全（文件 ＋ 标题逐字，锚点式）。
-#   ⛔ 不建"免目录登记机制"：那等于写死名单（与"⛔ 不许退化成写死的名单"那条明令相撞），且每条都要人填。
-#   ⚠️ 这是**一次性**清单，不是扩充口子 —— 新增带 `## 目录` 的文件时本臂会把它的小节当缺失判红，
+# 目录完整性臂的豁免清单：标题**有意不进目录**的小节。每条是 `(文件, 标题前缀)`，
+#   用前缀而不是全文，避免标题后半句一改说法就静默对不上。
+#   存在性由下面的自校验钉住：每条必须命中目标文件里**恰好一个** `##` 标题。
+#   0 个 ⇒ 标题改了、豁免失效；≥2 个 ⇒ 前缀太泛。两种都判红。
+#   ⚠️ 新增带 `## 目录` 的文件时本臂仍会把它的小节当缺失判红，
 #     需人工确认"该补目录项"还是"该补豁免"，⛔ 别默认往这里加。
 _TOC_HEAD_EXEMPT = {
     ("references/anti-patterns.md", "速查"),
@@ -3583,7 +3666,10 @@ def _doc_guard_xfile_pt(docs, doc_fail, real_out):
     for _nm, _ls in docs.items():
         if _nm == "CHANGELOG.md":
             continue
+        _mask12 = _fence_mask(_ls)
         for _i, _l in enumerate(_ls, 1):
+            if _mask12[_i - 1]:
+                continue
             _segs = _l.split("|") if _l.strip().startswith("|") else re.split(r"[。；！？]", _l)
             for _seg in _segs:
                 _fils = [(_m.start(), _m.end(), _m.group(1))
@@ -3660,8 +3746,10 @@ def _doc_guard_xfile_pt(docs, doc_fail, real_out):
             if _ls[_j].strip():
                 _toc.append(_ls[_j])
             _j += 1
+        _mask13 = _fence_mask(_ls)
         _body = [_toc_key(_hm.group(1)) for _hm in
-                 (re.match(r"^#{1,6}\s*(.+?)\s*$", _x) for _x in _ls[_j:]) if _hm]
+                 (re.match(r"^#{1,6}\s*(.+?)\s*$", _x) for _k, _x in enumerate(_ls[_j:])
+                  if not _mask13[_j + _k]) if _hm]
         _idxs = []
         for _t in _toc:
             _m = _toc_link(_t)
@@ -3695,7 +3783,9 @@ def _doc_guard_xfile_pt(docs, doc_fail, real_out):
         #     的前导整数是 3，会跟 `## 3.` 撞车（假重复）。⇒ 只认"这个正文小节有没有被某条目录项命中"。
         _tc_num_bi = []
         _tc_k = -1
-        for _tcx in _ls[_j:]:
+        for _tco, _tcx in enumerate(_ls[_j:]):
+            if _mask13[_j + _tco]:
+                continue
             _tch = re.match(r"^#{1,6}\s*(.+?)\s*$", _tcx)
             if not _tch:
                 continue
@@ -3706,7 +3796,7 @@ def _doc_guard_xfile_pt(docs, doc_fail, real_out):
             # 一次性豁免清单：**标题有意不进目录**的小节，逐条写全（文件 ＋ 标题逐字，锚点式）。
             #   ⛔ 不建"免目录登记机制" —— 那等于写死名单（与"⛔ 不许退化成写死的名单"那条明令相撞），
             #     且每条都要人填，与"制度靠人记"同病 ⇒ 只豁免现网这几处，⛔ 不预留扩充机制。
-            if (_nm, _tctitle) in _TOC_HEAD_EXEMPT:
+            if any(_nm == _ef and _tctitle.startswith(_ep) for _ef, _ep in _TOC_HEAD_EXEMPT):
                 continue
             _tcc = _idxs.count(_tcbi)
             if _tcc == 0:
@@ -3716,6 +3806,34 @@ def _doc_guard_xfile_pt(docs, doc_fail, real_out):
             elif _tcc > 1:
                 doc_fail.append("17j-13 %s 小节「%s」的目录条目**重复 %d 条**"
                                 % (_nm, _tctitle[:28], _tcc))
+
+    # 豁免存在性自校验：每条前缀必须命中目标文件里**恰好一个** `##` 标题。
+    #   0 个 ⇒ 标题改了、这条豁免已经对不上（静默失效）；≥2 个 ⇒ 前缀太泛，会放过不该放的标题。
+    for _ef, _ep in sorted(_TOC_HEAD_EXEMPT):
+        _els = docs.get(_ef)
+        if _els is None:
+            doc_fail.append("17j-13 豁免条目 %s「%s」的目标文件读不到 —— 改名了？" % (_ef, _ep))
+            continue
+        _emask = _fence_mask(_els)
+        _ehits = [(_ei, _el[3:].strip()) for _ei, _el in enumerate(_els, 1)
+                  if _el.startswith("## ") and not _emask[_ei - 1]
+                  and _el[3:].strip().startswith(_ep)]
+        if len(_ehits) == 0:
+            doc_fail.append("17j-13 豁免条目 %s「%s」失效，标题改了？（前缀一个 `##` 都对不上）"
+                            % (_ef, _ep))
+        elif len(_ehits) >= 2:
+            doc_fail.append("17j-13 豁免条目 %s「%s」前缀太泛，收紧（命中 %d 个 `##`：%s）"
+                            % (_ef, _ep, len(_ehits),
+                               "、".join(_et[:20] for _en, _et in _ehits)))
+
+    # 「有目录就必须登记」：精确 `^## 目录$` 的文件若不在 `_TOC_REQUIRED` 里 ⇒ 判红。
+    #   ⛔ 用精确匹配，不用前缀 —— `## 目录结构` 不是目录节（README.md 就是这种）。
+    #   现网精确 7 份与表内 7 份对齐，所以这条上线后现网 0 红；证据靠注入，不靠这次绿。
+    for _tn, _tls in docs.items():
+        if _tn == "CHANGELOG.md":
+            continue
+        if any(re.match(r"^##\s*目录\s*$", _tl) for _tl in _tls) and _tn not in _TOC_REQUIRED:
+            doc_fail.append("17j-13 %s 有目录但未登记 `_TOC_REQUIRED`（新增文件请登记）" % _tn)
 
     # 登记表自校验：登记了却读不到的 ⇒ 报红（⛔ 不许静默跳过）。**没有它**，文件一改名，
     #   `_TOC_REQUIRED` 就悄悄变成一条什么都管不着的死条目 —— 而"少判一份"不会有任何症状。
@@ -4119,10 +4237,13 @@ _ABSENT_S_PROBE = [False]
 #     把命令样例整体下沉到 `references/` 是**被预算守卫鼓励**的动作，逼每份文件必须有样例会与之相撞。
 _ENTRY_SKIP = ("CHANGELOG.md",)
 
-# 入口形态的**唯一判据**：`python` 家族命令里，`scripts/xwl.py` 前必须有**路径前缀**
-#   （占位符 `<…>` ／ Unix 绝对 `/…` ／ 盘符绝对 `X:…`）。写成"整条命令能命中本正则"而非手工找斜杠，
-#   是因为手工写法要先剥引号、再处理空格与反斜杠，三处任一漏掉就假绿（实测栽过两处）。
-_ENTRY_OK_RE = re.compile(r"""(?:\A|[\s"'])(?:<[^>\n]*>|/|[A-Za-z]:)[^"\n]*?/scripts/xwl\.py""")
+# 入口形态的**唯一判据**：`python` 家族命令里，`scripts/xwl.py` 与 `scripts/selftest.py` 前
+#   必须有**路径前缀**（占位符 `<…>` ／ Unix 绝对 `/…` ／ 盘符绝对 `X:…`）。写成"整条命令能命中本正则"
+#   而非手工找斜杠，是因为手工写法要先剥引号、再处理空格与反斜杠，三处任一漏掉就假绿（实测栽过两处）。
+#   ⚠️ `selftest.py` 与 `xwl.py` **同一条规则**，不另造一套。只扩文档面（`.md` ＋ `examples/README.md`），
+#   ⛔ 不扩到 `.py` 源码：`selftest.py` 自己的 docstring 在 skill 根下跑，裸写是对的。
+_ENTRY_OK_RE = re.compile(
+    r"""(?:\A|[\s"'])(?:<[^>\n]*>|/|[A-Za-z]:)[^"\n]*?/scripts/(?:xwl|selftest)\.py""")
 
 # `python` 家族的命令头：`python`／`python3`／`py -3`／`uv run python`。
 #   ⚠️ 只认 `python ` 会让后三种写法**完全不在射程内**（实测抽取数 0 ⇒ 绿得毫无道理）。
@@ -4146,14 +4267,15 @@ def _entry_cmds(line: str) -> list:
 
 
 def _entry_prefix_missing(cmd: str) -> bool:
-    """命令里的 `scripts/xwl.py` 是否**缺路径前缀**（`<…>` 占位符／Unix 绝对／盘符绝对都不算缺）。
+    """命令里的 `scripts/xwl.py` 或 `scripts/selftest.py` 是否**缺路径前缀**。
 
+    `<…>` 占位符／Unix 绝对／盘符绝对都不算缺。两条脚本同一条规则。
     ⚠️ 两处归一化缺一即错：① **反斜杠视同 `/`**（Windows 写法；否则 `scripts\\xwl.py` 会被上层的
     "含 `scripts/xwl.py`"过滤整条跳过 ⇒ 判绿）；② **引号包裹必须放行**（`python "<skill根>/scripts/xwl.py"`
     正是文档教人"路径带空格就加引号"时的写法，不放行会假红）。
     """
     _c = cmd.replace("\\", "/")
-    if "scripts/xwl.py" not in _c:
+    if "scripts/xwl.py" not in _c and "scripts/selftest.py" not in _c:
         return False
     return not _ENTRY_OK_RE.search(_c)
 
@@ -4214,7 +4336,7 @@ def _entry_form_problems(root: str) -> list:
             continue
         for _ln, _l in enumerate(_ls):
             for _c in _entry_cmds(_l):
-                if "scripts/xwl.py" not in _c:
+                if "scripts/xwl.py" not in _c and "scripts/selftest.py" not in _c:
                     continue
                 _cnt_all += 1
                 # 同行 `cd <…> && python …` 的写法放行（cwd 由这一行自己给定，不是"靠环境"）。
@@ -4438,8 +4560,19 @@ def _docs_xfile_consistency(_S) -> None:
     # 不一致就判红（防锚点关键词命中了错误层级的标题而无人察觉）。
 
     for _lab, _src, _dst, _anchor, _lvl_noted in _SPLIT_POINTERS:
-        _region, _hit_lvl = _region_after_anchor(docs.get(_src, []), _anchor, _lvl_noted)
-        if _region is None:
+        _src_lines = docs.get(_src, [])
+        _src_mask = _fence_mask(_src_lines)
+        _n_hits = sum(
+            1 for _k, _l in enumerate(_src_lines)
+            if not _src_mask[_k]
+            and (_hm := re.match(r"^(#{1,6}) (.*)$", _l))
+            and _anchor in _hm.group(2))
+        _region, _hit_lvl = _region_after_anchor(_src_lines, _anchor, _lvl_noted)
+        if _n_hits > 1:
+            doc_fail.append(
+                "外移点「%s」：锚点「%s」在 %s 里同层命中 %d 次 —— 唯一性被打破，层号判红兜不住"
+                % (_lab, _anchor, _src, _n_hits))
+        elif _region is None:
             doc_fail.append(
                 "外移点「%s」：锚点「%s」在 %s 里找不到 —— 这是**锚点问题**（锚点行被改或删），不是缺指针"
                 % (_lab, _anchor, _src))
@@ -5282,7 +5415,11 @@ _CAP_FNS = ("_check_docs", "_docs_xfile_consistency", "_docs_numbers_and_tables"
             "_ng_cli_readonly", "_ng_check_controls", "_ng_contract_and_unit", "_ng_write_overwrite", "_ng_params_defaults", "_ng_platform",
             # ⚠️ `_doc_guard_xfile_pt` 是 17j-12／13／14 ＋「该有目录却没有」四臂的宿主，一直在长
             #   （216 → 242 行）却**不在本表** ⇒ "防止反弹"在这条臂上是空的。纳管当场仍是绿，价值就是防反弹。
-            "_doc_guard_xfile_pt")
+            "_doc_guard_xfile_pt",
+            # ITEM-1170：先拆后纳管。两个原函数拆到 ≤400，拆出的助手一并入表，
+            #   否则缺口只是从大函数搬到了助手里。
+            "_check_basics", "_check_basics_tail",
+            "_check_bc_contract", "_check_bc_contract_tail")
 
 
 def _fn_cap_check(doc_fail) -> None:
@@ -5739,16 +5876,21 @@ def _check_docs_section_order(failures) -> None:
                     body.append(nxt)
             if not body:
                 bad.append("带编号章「%s」下面没有正文" % line.strip()[:24])
-        # ③ 带编号的 `##` 总数在 5–10 之间（防结构膨胀）。
-        if not 5 <= len(numbered) <= 10:
-            bad.append("带编号的 ## 章有 %d 个，不在 5–10 之间" % len(numbered))
+        # ③ 下限：带编号的 `##` 至少 5 个。出处：闭环至少需要「是什么／硬规则／怎么做／工具／收口」五段。
+        if len(numbered) < 5:
+            bad.append("带编号的 ## 章有 %d 个，少于 5 个" % len(numbered))
+        # 上限：超过 10 个只提示、不阻断。「10」没有任何可引用的出处，写成阻断就是拿拍的数当判据。
+        # ⛔ 上限不再当阻断；要给上限找出处才可恢复阻断。
+        if len(numbered) > 10:
+            print("[note] SKILL.md 带编号章 %d 个，超过 10 —— 只提示、不阻断"
+                  "（上限没有出处；要恢复阻断先给出处）" % len(numbered))
         # ④ 「单行源 vs 多行源」不得单列一章（应并入格式章）。
         if any("单行源" in t for t in raw if t.startswith("## ")):
             bad.append("「单行源 vs 多行源」应并入格式章，不该单列一章")
         if bad:
             failures.extend("SKILL.md 章节结构：%s" % b for b in bad)
         else:
-            print("[ok]  SKILL.md 章节结构合规（序号连续、无空节、章数在 5–10）")
+            print("[ok]  SKILL.md 章节结构合规（序号连续、无空节、章数 ≥5）")
     else:
         print("[note] 未找到 SKILL.md，跳过章节结构守卫")
 
@@ -7462,6 +7604,16 @@ def _check_bc_contract(tmp, node, failures, write) -> None:
                    % (sorted(ids15_shared), sorted(pm15), sorted(ids15_shared ^ pm15)))
     _ok("params 侧与 itemids 侧对 app['名'] / app.<名> 的容器名认定逐名一致", f15)
 
+    # 尾部两组（`app._X` 欠报 / params 按注册键找容器）已下沉为 `_check_bc_contract_tail`
+    #   （ITEM-1170：本函数 406 行，要进 400 的上限）。判据文本逐字未改。
+    _check_bc_contract_tail(write, node, bc, _page, _ok)
+
+    if bc:
+        failures.extend(bc)
+
+
+def _check_bc_contract_tail(write, node, bc, _page, _ok) -> None:
+    """`_check_bc_contract` 的尾部两组（有界下沉，判据文本逐字未改）。"""
     # ---- 回归：只以 `app._X` 形式被引用的重名组也必须判 error（欠报修复）----
     # 注入判据：把 `audit_itemids` 的 `referenced = (name in refs_all) or ("_" + name in refs_all)`
     #   改回 `referenced = name in refs_all` ⇒ 本条**必须转红**（该组退回 benign、check rc 变 0）。
@@ -7505,9 +7657,6 @@ def _check_bc_contract(tmp, node, failures, write) -> None:
     if "app.tbrO" not in out18 or "容器内取值控件" not in out18:
         f18.append("params 未把 app.tbrO 当容器列出并给容器内取值控件")
     _ok("params 按**注册键**找容器（normalName=tbrO 的 toolbar 命中、无假「找不到容器」）", f18)
-
-    if bc:
-        failures.extend(bc)
 
 
 def _blocks() -> list[tuple[str, object]]:
@@ -7641,7 +7790,10 @@ def _run_block(name: str, fn, node) -> list[str]:
                         % (name, exc.code))
     except KeyboardInterrupt:
         # Ctrl-C 必须还能打断：记成"块失败"再接着跑下一块，等于把中断变成"再按 N 次"。
-        # ⚠️ 本支**无法用注入测**（测试进程会被自己打断）⇒ 它的保障只有这段注释与人工复核。
+        # 注入（2026-10-31，ITEM-1152）：在**子进程**里让块函数抛 KeyboardInterrupt，
+        #   父进程连跑 3 次都看到子进程 rc=3，且该块**没有被记成通过**（异常原样抛出，
+        #   不进 failures、不打印汇总行）。所以本支的行为是"中断整个自检"，不是"记成失败后继续"。
+        #   夹具在施工临时目录的 seq7_child.py / seq7_parent.py，不进仓。
         raise
     except BaseException as exc:        # noqa: BLE001
         # 先留调用栈再记一行：只记 `type: msg` 时，`RecursionError`／`MemoryError` 这类
@@ -7805,7 +7957,11 @@ def _run_parallel_dispatch(rdir: str, blocks, node, jobs: int) -> list[str]:
         if not (name in timed_out and not os.path.exists(result)):
             try:
                 with open(result, encoding="utf-8") as fh:
-                    failures.extend(json.load(fh))
+                    _payload = json.load(fh)
+                # `--result` 现为 dict（`node` ＋ `failures`）。只取 failures，
+                # node 不进 stdout：单块快照的行数不能变。
+                failures.extend(_payload["failures"] if isinstance(_payload, dict)
+                                else _payload)
             except Exception as exc:  # noqa: BLE001
                 failures.append("块 %s 的失败清单读不到：%s" % (name, exc))
     return failures
@@ -7896,17 +8052,23 @@ def main(argv: list[str] | None = None) -> int:
             _blk_prob = _blocks_baseline_problem()
             if _blk_prob:
                 failures = [_blk_prob] + list(failures)
-            # 人工单跑、未给 `--result` ⇒ 只跑并打印、不落 JSON；rc 据本次结果
-            print("[note] 未给 `--result` ⇒ 只跑并打印、不落 JSON；要落 JSON 才加 `--result <路径>`")
+            # 人工单跑、未给 `--result` ⇒ 只跑并打印、不落 JSON；rc 据本次结果。
+            # node 并进这一行（行数不变，只加字段）：单块快照也要能自证跑在哪台机器上。
+            _node_here = xwl.find_node()
+            print("[note] 未给 `--result` ⇒ 只跑并打印、不落 JSON；要落 JSON 才加 `--result <路径>`"
+                  "（node: %s）" % (_node_here or "(未找到)"))
             if failures:
                 # 单跑也要**看得到失败原因**（"有 rc 却看不到原因"是病根）；逐条 + 汇总格式照全量分支
                 for f in failures:
                     print(f"[FAIL] {f}")
                 print(f"=== selftest FAIL（{len(failures)} 项）")
             return 1 if failures else 0
-        # 内部契约（`--jobs>1` 父进程派发用）：failures 写 JSON 即退出 0，rc 由父进程据 JSON 定
+        # 内部契约（`--jobs>1` 父进程派发用）：写 JSON 即退出 0，rc 由父进程据 JSON 定。
+        # 内容是 dict，不是 list：带上 node，跨机复跑时才看得出差异从哪来。
+        # ⚠️ 取值在本分支内就地调，⛔ 不把下面那行 `node:` 的 print 提前到这里。
         with open(args.result, "w", encoding="utf-8") as fh:
-            json.dump(failures, fh, ensure_ascii=False)
+            json.dump({"node": xwl.find_node() or "", "failures": failures}, fh,
+                      ensure_ascii=False)
         return 0
 
     node = xwl.find_node()

@@ -2,7 +2,7 @@
 name: webbuilder-xwl-patch
 slug: skill-webbuilder-xwl-patch
 displayName: webbuilder-xwl-patch
-version: 1.7.8
+version: 1.7.9
 license: MIT
 metadata:
   category: development-tools
@@ -136,7 +136,7 @@ WebBuilder 的页面与查询定义都写在 `.xwl` 里。它**看起来像 JSON
 `itemId` 的**唯一性**（工具寻址用 `@itemId`）与「少写 `expanded` / `children` 会**与设计器产物不一致**」见
 [`references/controls.md`](references/controls.md) §4.2 典型骨架；查单个控件用 `xwl.py schema --help`。
 
-注册键是 `normalName || itemId`，**必须唯一**；重名且被事件 JS 引用会**静默取不到值**（`error`），未被引用为 `benign`。处置顺序：**先读父子关系判断真实目标 → 把候选交给用户选**，⛔ 不要"删一个"或"挑一个"；分类表／命令／JSON 契约见 [`references/faq.md`](references/faq.md) 附录，框架机制（`ComponentManager`／`unregister`）见 [`references/measured-data-addressing.md`](references/measured-data-addressing.md) 的 `7.5`。
+注册键取 `normalName`（优先），否则取 `itemId`。**必须唯一**；重名且被事件 JS 引用会**静默取不到值**（`error`），未被引用为 `benign`。处置顺序：**先读父子关系判断真实目标 → 把候选交给用户选**，⛔ 不要"删一个"或"挑一个"；精确表达式与分类表见 [`references/faq.md`](references/faq.md) 附录，框架机制（`ComponentManager`／`unregister`）见 [`references/measured-data-addressing.md`](references/measured-data-addressing.md) 的 `7.5`。
 
 ### 1.3 页面顶层骨架（7 把钥匙，键序固定）
 
@@ -313,7 +313,7 @@ python <skill根>/scripts/xwl.py new wb/modules/<模块>/xxxSql/queryXxx.xwl --k
 > 归全局开关 `--allow-new-key` 放行的那批新建键，真跑时在 stdout 打这条痕（`--dry-run` 另把**带 `create`** 的待建键单列一行 `[new-key]`）：
 
 ```text
-[warn] --allow-new-key 已放行 N 个新建键：<path1>, <path2>, …
+[warn] --allow-new-key 已放行 2 个新建键：@panel1.configs.newKeyA, @panel1.configs.newKeyB
 ```
 
 1. **能用 `@itemId` 就别手写下标** —— `paths` 给出的 `["@dataprovider","configs","sql"]`
