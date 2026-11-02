@@ -45,6 +45,9 @@ jobs:
           python scripts/xwl.py --help
           python scripts/xwl.py folders --help
 
+      - name: Privacy scan selftest（扫描器自身行为断言）
+        run: python scripts/privacy_scan.py --selftest
+
       # 隐私扫描·**结构面**：本机路径（.py）/ 邮箱 / 手机号 / 疑似 token / uid 形状。
       #   这里**不传** `--patterns` —— 外置业务标识清单面**只在本地跑**（真实清单落在仓库之外）。
       #   未传清单时脚本会**显式打印**「本地业务标识清单未参与」，**不静默跳过**；

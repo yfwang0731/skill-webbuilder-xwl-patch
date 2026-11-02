@@ -1242,6 +1242,394 @@ def _check_subcommands(tmp, node, failures, write) -> None:
         print("[ok]  sql / events / dump 命令级：sql 抽全 2 条（含 totalSql）、"
               "events --outdir 自建新目录并落文件、dump 多行美化")
 
+    # ---- 12c/12d/12e：events 落点与命名、expand --backup、--outdir 前置错误 ----
+    #   这三段合起来约 280 行；`_check_subcommands` 已顶到 399/400（上限 400，⛔ 不许调高）
+    #   ⇒ 单独成函数。⚠️ 判据文本逐字未改，只换了宿主。
+    _check_events_and_expand(tmp, failures)
+    # 跳链护栏：三跳里任一跳被删，下游断言会整段静默消失（行为面查不出来）⇒ 只能守形状。
+    failures.extend(_block_chain_fails())
+
+
+def _block_chain_fails() -> list[str]:
+    """三跳调用链的**形状断言**：`_check_subcommands` → `_check_events_and_expand` → `_check_subcommands_tail`。
+
+    为什么只能守形状（与 `_fn_cap_check` 同族、⛔ 不得用它替代行为判据）：三段都是"跑断言"的函数体，
+    任何一跳被删，下游断言会**整段静默消失**而自检照绿 —— 没有行为面能把"少跑了一段"变成红。
+    ⚠️ 判据是 `ast.Call` 的 `func.id`，比 `grep` 稳（注释/字符串里出现同名不会误判）。
+    """
+    import ast as _ast
+    try:
+        with io.open(os.path.join(HERE, "selftest.py"), encoding="utf-8", newline="") as _fh:
+            _tree = _ast.parse(_fh.read())
+    except (OSError, SyntaxError) as _exc:
+        return ["块间跳链：读不出/解析不了 selftest.py（%s）⇒ 不敢判" % (_exc,)]
+    _bodies = {n.name: n for n in _tree.body if isinstance(n, _ast.FunctionDef)}
+
+    def _calls(_fn: str, _target: str) -> bool:
+        _node = _bodies.get(_fn)
+        if _node is None:
+            return False
+        return any(isinstance(_c, _ast.Call) and isinstance(_c.func, _ast.Name)
+                   and _c.func.id == _target for _c in _ast.walk(_node))
+
+    _out = []
+    if not _calls("_check_subcommands", "_check_events_and_expand"):
+        _out.append("块间跳链断了：`_check_subcommands` 函数体里没有 `_check_events_and_expand(...)` 调用")
+    if not _calls("_check_events_and_expand", "_check_subcommands_tail"):
+        _out.append("块间跳链断了：`_check_events_and_expand` 函数体里没有 `_check_subcommands_tail(...)` 调用")
+    return _out
+
+
+def _check_events_and_expand(tmp, failures) -> None:
+    """`events` 落点/命名 ＋ `expand --backup` ＋ `--outdir` 前置错误（12c/12d/12e）。
+
+    只依赖 `tmp` 与 `failures`，其余都是模块级名字。
+    """
+    # 本函数有两处要 `mock` 与 `ast`（跨盘桩、调用点形状断言、realpath 次数），就近引入一次。
+    import ast as _ast
+    from unittest import mock as _umock
+
+    # ---- 12c. events 的**落点**与**命名**（文件名来自数据 ⇒ 落点必须独立校验）----
+    #   起因（删了会怎样）：事件键直接拼进文件名 ⇒ 键里带 `../` 就能把 `.js` 写到 `--outdir`
+    #   之外；而"名字已白名单化"只防**输入**（名字里没有分隔符），防不了平台层让同一个安全名
+    #   指向目录外（符号链接 / 短名 / 大小写折叠）⇒ 落点要有一道**独立**校验。
+    #   两套夹具**各管一件事**（⛔ 不混用，否则红了归因不唯一）：
+    #     · 夹具 A：只放 1 个逃逸键，专测**落点**（outdir 的父目录不许新增、探针字节不许变）；
+    #     · 夹具 B：4 个键，专测**命名与索引行**（这一份不要求逃逸）。
+    ev_fail: list[str] = []
+    _ea_dir = os.path.join(tmp, "ce_ev_escape")
+    os.makedirs(_ea_dir, exist_ok=True)
+    _ea_out = os.path.join(_ea_dir, "out")          # 故意指向**不存在**的新目录
+    _ea_probe = os.path.join(_ea_dir, "probe.txt")  # outdir 的**父目录**里的探针（越界就写这儿旁边）
+    with open(_ea_probe, "wb") as _f:
+        _f.write(b"probe-keep-me")
+    _ea_md5 = hashlib.md5(open(_ea_probe, "rb").read()).hexdigest()
+    # ⚠️ 快照必须在**夹具写完、CLI 跑之前**取 —— 否则 `ev_a.xwl` 与自建的 `out/` 会被当成"新增"。
+    # ⚠️ 逃逸键为什么要**三层** `..`：文件名的前缀 `event_1_` 会吃掉第一个 `..`（它先拼进
+    #   同一段名里），`../../evil` 规范化后仍落在 outdir 内 ⇒ 测不到越界。
+    _ea_xwl = os.path.join(_ea_dir, "ev_a.xwl")
+    with open(_ea_xwl, "w", encoding="utf-8", newline="") as _f:
+        _f.write(xwl.dumps_designer({"title": "逃逸页", "children": [
+            {"configs": {"itemId": "btn"}, "type": "button", "expanded": False, "children": [],
+             "events": {"../../../evil": "var x = 1;"}}]}, 1, CRLF))
+    _ea_before = sorted(os.listdir(_ea_dir))     # 夹具与 outdir 都还没跑 ⇒ 这里才是基线
+    _rc_ea, _out_ea, _err_ea = _run_cli(["events", _ea_xwl, "--outdir", _ea_out])
+    _ea_after = sorted(os.listdir(_ea_dir))
+    # 父目录里"新增"的只允许是**自建的 outdir 本身**（导出目录当然会被创建）；其余任何新增都算越界。
+    _ea_new = [n for n in _ea_after if n not in _ea_before and n != os.path.basename(_ea_out)]
+    if _ea_new:
+        ev_fail.append("events 把文件写到 `--outdir` **之外**（父目录新增 %s）：\n%s"
+                       % (_ea_new, _cli_text(_out_ea, _err_ea)))
+    if hashlib.md5(open(_ea_probe, "rb").read()).hexdigest() != _ea_md5:
+        ev_fail.append("events 越界写改动了 outdir 外探针的字节")
+    _ea_js = [n for n in (os.listdir(_ea_out) if os.path.isdir(_ea_out) else []) if n.endswith(".js")]
+    if len(_ea_js) != 1:
+        ev_fail.append("events 逃逸键场景下 outdir 里的 `.js` 应**恰好 1 个**，实得 %s" % (_ea_js,))
+    if _rc_ea != 0:
+        ev_fail.append("events 逃逸键场景 rc=%r（应 0：键只作标签、不该失败）：\n%s"
+                       % (_rc_ea, _cli_text(_out_ea, _err_ea)))
+
+    # 夹具 B：命名 + 清单。⚠️ 期望值**手推**（白名单 `[A-Za-z0-9_-]` / 不保留 `.` / 全被替换则省略
+    #   标签段），⛔ 不许用被测助手现算 —— 那是自证循环（白名单写错两边一起错而"相等"）。
+    _eb_dir = os.path.join(tmp, "ce_ev_name")
+    os.makedirs(_eb_dir, exist_ok=True)
+    _eb_out = os.path.join(_eb_dir, "out")
+    _eb_keys = ("../../evil", "a/b", "click", "中文")
+    _eb_xwl = os.path.join(_eb_dir, "ev_b.xwl")
+    with open(_eb_xwl, "w", encoding="utf-8", newline="") as _f:
+        _f.write(xwl.dumps_designer({"title": "命名页", "children": [
+            {"configs": {"itemId": "btn"}, "type": "button", "expanded": False, "children": [],
+             "events": {k: "var x = 1;" for k in _eb_keys}}]}, 1, CRLF))
+    _rc_eb, _out_eb, _err_eb = _run_cli(["events", _eb_xwl, "--outdir", _eb_out])
+    _eb_want = {"event_1_______evil.js", "event_2_a_b.js", "event_3_click.js", "event_4.js"}
+    _eb_got = set(os.listdir(_eb_out)) if os.path.isdir(_eb_out) else set()
+    if _eb_got != _eb_want:
+        ev_fail.append("events 导出文件名与**独立规格**不符\n  实得 %s\n  期望 %s\n%s"
+                       % (sorted(_eb_got), sorted(_eb_want), _cli_text(_out_eb, _err_eb)))
+    _idx = [ln for ln in _out_eb.splitlines() if "← 原事件键：" in ln]
+    if len(_idx) != 4:
+        ev_fail.append("events 的「← 原事件键：」索引行应 4 行，实得 %d：\n%s" % (len(_idx), _out_eb))
+    _got_json = [ln.split("← 原事件键：", 1)[1].strip() for ln in _idx]
+    _want_json = [json.dumps(k, ensure_ascii=False) for k in _eb_keys]
+    if sorted(_got_json) != sorted(_want_json):
+        ev_fail.append("索引行里的原事件键不是 JSON 字符串表示（`ensure_ascii=False`）\n"
+                       "  实得 %s\n  期望 %s" % (sorted(_got_json), sorted(_want_json)))
+    for _ln in _idx:
+        if _ln.lstrip().startswith("[ok]") or _ln.lstrip().startswith("[note]"):
+            ev_fail.append("索引行被加了输出标记（会进本仓文案面）：%s" % _ln)
+    # 「每个文件**后**跟一行」——只数总数不够：把索引行全挤到末尾也满足"共 4 行"（实测过）。
+    #   判据：每出现一行"路径行"（两空格 + 非空白），**下一行**必须是索引行。
+    _eb_lines = _out_eb.splitlines()
+    _pair_bad = []
+    for _i, _ln in enumerate(_eb_lines):
+        if _ln.startswith("  ") and not _ln.lstrip().startswith("←") and _ln.strip():
+            _nxt = _eb_lines[_i + 1] if _i + 1 < len(_eb_lines) else ""
+            if "← 原事件键：" not in _nxt:
+                _pair_bad.append(_ln.strip())
+    if _pair_bad:
+        ev_fail.append("索引行没有紧跟在其对应文件之后（应逐文件相邻）：%s" % (_pair_bad[:3],))
+
+    # 「截断到 60」——标签上限改大也全绿过：用直调把边界钉住（期望值**手推**）。
+    _tag60 = xwl._event_file_tag("a" * 70)
+    if _tag60 != "a" * 60:
+        ev_fail.append("安全标签没截断到 60（实得 %d 字符）" % len(_tag60))
+
+    # 「无 events 节点」的老行为（rc=1）不许被顺手改成 0/2。
+    _noev = os.path.join(tmp, "ce_ev_none.xwl")
+    with open(_noev, "w", encoding="utf-8", newline="") as _f:
+        _f.write(xwl.dumps_designer({"title": "空事件页", "children": []}, 1, CRLF))
+    _rc_ne, _out_ne, _err_ne = _run_cli(["events", _noev])
+    if _rc_ne != 1:
+        ev_fail.append("无 events 节点时 rc=%r（应 1）：%s" % (_rc_ne, _cli_text(_out_ne, _err_ne)))
+    if "无 events 节点" not in _err_ne:
+        ev_fail.append("无 events 节点时没给提示（stderr 应含「无 events 节点」）：%s" % (_err_ne,))
+
+    # 覆盖提示（`Q11`）：预置一个同名文件 ⇒ 必须打 `[note] 已存在、已覆盖`，且内容被替换。
+    #   判据要**两条同时**：只判 note 会漏"note 打了但没真写"，只判内容会漏"静默覆盖"。
+    _ov_dir = os.path.join(tmp, "ce_ev_overwrite")
+    os.makedirs(_ov_dir, exist_ok=True)
+    _ov_out = os.path.join(_ov_dir, "out")
+    os.makedirs(_ov_out, exist_ok=True)
+    _ov_xwl = os.path.join(_ov_dir, "ev_ov.xwl")
+    with open(_ov_xwl, "w", encoding="utf-8", newline="") as _f:
+        _f.write(xwl.dumps_designer({"title": "覆盖页", "children": [
+            {"configs": {"itemId": "btn"}, "type": "button", "expanded": False, "children": [],
+             "events": {"click": "var x = 1;"}}]}, 1, CRLF))
+    _ov_stale = os.path.join(_ov_out, "event_1_click.js")
+    with open(_ov_stale, "w", encoding="utf-8", newline="") as _f:
+        _f.write("STALE-USER-FILE")
+    _rc_ov, _out_ov, _err_ov = _run_cli(["events", _ov_xwl, "--outdir", _ov_out])
+    if _rc_ov != 0:
+        ev_fail.append("覆盖场景 rc=%r（应 0）：\n%s" % (_rc_ov, _cli_text(_out_ov, _err_ov)))
+    if "[note] 已存在、已覆盖" not in _out_ov:
+        ev_fail.append("覆盖已存在文件时没打 `[note] 已存在、已覆盖`（静默覆盖）：\n%s" % _out_ov)
+    if open(_ov_stale, "r", encoding="utf-8", newline="").read() == "STALE-USER-FILE":
+        ev_fail.append("预置的同名文件没被新内容替换（提示与实际不一致）")
+
+    # `Q12`：`realpath(outdir)` 只在循环外算一次 ⇒ `os.path.realpath` 调用次数必须恰为 `1 + N`。
+    #   ⚠️ **先有这条次数断言，再谈缓存**：没有它，"缓存"很容易退化成"跳过每个文件的校验"。
+    #   ⚠️ 只数 `realpath`，⛔ 别把 `abspath` 也算进去（`_ensure_within` 里两者都有，数错会得 `2+2N`）。
+    _rp_seen = []
+    _rp_real = os.path.realpath
+
+    def _rp_spy(_p, *a, **kw):
+        _rp_seen.append(_p)
+        return _rp_real(_p, *a, **kw)
+
+    _q12_out = os.path.join(tmp, "ce_ev_realpath")
+    with _umock.patch("os.path.realpath", _rp_spy):
+        _q12_rc = xwl.cmd_events(type("NS", (), {"file": _eb_xwl, "outdir": _q12_out})())
+    _q12_n = len(_eb_keys)                       # 夹具 B 有 4 个事件
+    if _q12_rc != 0:
+        ev_fail.append("`realpath` 次数场景 rc=%r（应 0）" % (_q12_rc,))
+    if len(_rp_seen) != 1 + _q12_n:
+        ev_fail.append("`os.path.realpath` 调用次数=%d（应 1＋%d＝%d）：outdir 应在循环外只算一次"
+                       % (len(_rp_seen), _q12_n, 1 + _q12_n))
+
+    # 落点校验本身（直调）：夹具 A 证明的是**清洗**，这条证明"清洗之后仍可能越界"那道防线还在。
+    # ⚠️ 本机建符号链接报 `WinError 1314`（无权限）⇒ 不为它造真实链接，用 `..` 构造即可。
+    try:
+        xwl._ensure_within(_ea_out, os.path.join(_ea_out, "..", "x.js"))
+        ev_fail.append("落点校验没拦住 `..` 越界（`_ensure_within` 未抛 XwlWriteError）")
+    except xwl.XwlWriteError as _exc:
+        if "落点越界" not in str(_exc):
+            ev_fail.append("落点越界的报错文案里没有「落点越界」：%s" % _exc)
+    except Exception as _exc:      # noqa: BLE001
+        ev_fail.append("落点校验抛了非 XwlWriteError 的异常：%s: %s" % (type(_exc).__name__, _exc))
+    # 单里 ⛔ 明令"不许用 `startswith` 判前缀"。只喂 `..` 分不出 `relpath` 与 `startswith`
+    #   （实测：换成 startswith 的实现照样全绿）⇒ 补一个**近邻前缀**：`<out>2/x.js` 不是越界之外的另一回事，
+    #   它必须被判**越界**（因为它确实不在 `<out>` 里）。
+    try:
+        xwl._ensure_within(_ea_out, _ea_out + "2" + os.sep + "x.js")
+        ev_fail.append("落点校验对**近邻前缀**（`<out>2/x.js`）没拦住 —— `startswith` 式实现即此形态")
+    except xwl.XwlWriteError:
+        pass
+    except Exception as _exc:      # noqa: BLE001
+        ev_fail.append("近邻前缀校验抛了非 XwlWriteError 的异常：%s: %s" % (type(_exc).__name__, _exc))
+    # 跨盘：`realpath` 解析后落在另一个驱动器 ⇒ `relpath` 抛 `ValueError`（单特意声明"不是死代码"）。
+    #   ⚠️ 必须分两段验，否则这条断言**只会在 Windows 绿**（CI 实测：ubuntu 四组全红）：
+    #     (a) **处理器**：桩住 `os.path.relpath` 直接抛 `ValueError` ⇒ 必须转成 `XwlWriteError`。
+    #         POSIX 的 `relpath` 不认盘符，**不会**因跨盘抛错 ⇒ 只有桩住才验得到这一支；全平台可跑。
+    #     (b) **真实触发**：ntpath 才会跨盘抛 `ValueError`，所以这一段只在 `os.name == "nt"` 跑，
+    #         用桩把 **fp** 的 realpath 指到 D:（⛔ 不为它造跨盘真实文件）。
+    with _umock.patch("os.path.relpath",
+                      side_effect=ValueError("path is on mount 'D:', start on mount 'C:'")):
+        try:
+            xwl._ensure_within(_ea_out, os.path.join(_ea_out, "x.js"))
+        except xwl.XwlWriteError:
+            pass
+        except Exception as _exc:      # noqa: BLE001
+            ev_fail.append("跨盘校验抛了非 XwlWriteError 的异常：%s: %s"
+                           % (type(_exc).__name__, _exc))
+        else:
+            ev_fail.append("跨盘（`relpath` 抛 `ValueError`）没被当成越界"
+                           " —— `except ValueError` 这一支没接住")
+    if os.name == "nt":
+        _drive_fp = "C" + ":" + os.sep + "elsewhere" + os.sep + "x.js"
+        try:
+            with _umock.patch("os.path.realpath") as _rp:
+                _rp.side_effect = (lambda p: ("D:" + os.sep + "elsewhere") if p == _drive_fp else _ea_out)
+                xwl._ensure_within(_ea_out, _drive_fp)
+            ev_fail.append("跨盘（另一个驱动器）没被当成越界")
+        except xwl.XwlWriteError:
+            pass
+        except Exception as _exc:      # noqa: BLE001
+            ev_fail.append("跨盘校验抛了非 XwlWriteError 的异常：%s: %s" % (type(_exc).__name__, _exc))
+    # 调用点必须**在**：清洗已挡住所有可达输入 ⇒ 行为面造不出红，只能守形状（与 `_fn_cap_check` 同族）。
+    _ce_src = io.open(os.path.join(HERE, "xwl.py"), encoding="utf-8").read()
+    _ce_fn = [n for n in _ast.parse(_ce_src).body
+              if isinstance(n, _ast.FunctionDef) and n.name == "cmd_events"]
+    _ce_has = any(
+        isinstance(_c, _ast.Call) and isinstance(_c.func, _ast.Name) and _c.func.id == "_ensure_within"
+        for _n in _ce_fn for _c in _ast.walk(_n))
+    if not _ce_has:
+        ev_fail.append("`cmd_events` 里没有调用 `_ensure_within`（落点防线被摘掉了）")
+    for _lbl, _e in (("夹具 A", _err_ea), ("夹具 B", _err_eb)):
+        if "Traceback" in (_e or ""):
+            ev_fail.append("events（%s）stderr 冒了 traceback：%s" % (_lbl, _e))
+    if ev_fail:
+        failures.extend(ev_fail)
+    else:
+        print("[ok]  events：文件名只由「序号 + 安全标签」构成、落点独立校验拦得住 `..`、"
+              "每个文件后跟一行「← 原事件键」")
+
+    # ---- 12d. `expand --backup`：同文件判定按**路径 + 文件身份**，不按字符串相等 ----
+    #   起因（删了会怎样）：`--out` 给的是同一文件的**别名**（同一路径里多一段 `./`）时，字符串相等判不出来
+    #   ⇒ 该拍的 `.bak` 不拍、原文件被就地覆盖 —— 后果不是"备份写坏"，而是**唯一恢复点没了**。
+    #   ⚠️ 能暴露旧缺陷的必要关系（三条同时成立，缺一条就测不到）：
+    #     ① `--file` 与 `--out` 的**字符串不同**；② 两者**指向同一文件**；③ 真的写盘（非 dry-run）。
+    #   ⇒ `expand <别名> --backup --out <别名>`（两个都给别名）**不满足**：字符串相等，
+    #     旧代码照样拍备份 ⇒ 改前就绿。所以本段的用法固定为「`--file` 给原名、`--out` 给别名」。
+    ex_fail: list[str] = []
+    _flat = '{"hidden":false,"children":[],"roles":{},"title":"t","iconCls":""}'
+    _ex_c1 = os.path.join(tmp, "ce_ex_alias")
+    os.makedirs(_ex_c1, exist_ok=True)
+    _p1 = os.path.join(_ex_c1, "p.xwl")
+    with open(_p1, "w", encoding="utf-8", newline="") as _f:
+        _f.write(_flat)
+    _p1_raw = open(_p1, "rb").read()
+    _p1_alias = os.path.join(_ex_c1, ".", "p.xwl")   # 同一文件、**不同字符串**（`./` 段仍在串里）
+    _rc_e1, _out_e1, _err_e1 = _run_cli(["expand", _p1, "--backup", "--out", _p1_alias, "--no-js"])
+    if _rc_e1 != 0:
+        ex_fail.append("expand --backup --out <别名> rc=%r（应 0）：\n%s"
+                       % (_rc_e1, _cli_text(_out_e1, _err_e1)))
+    if not os.path.exists(_p1 + ".bak"):
+        ex_fail.append("`--out` 给同一文件的**别名**时没拍 `.bak`（原文件被就地覆盖 ⇒ 恢复点丢了）：\n%s"
+                       % _cli_text(_out_e1, _err_e1))
+    elif open(_p1 + ".bak", "rb").read() != _p1_raw:
+        ex_fail.append("`.bak` 的字节 ≠ 原件原字节")
+    _p1_now = open(_p1, "rb").read()
+    if _p1_now == _p1_raw:
+        ex_fail.append("expand 没改写原文件（夹具就不是单行压缩形态？）")
+    elif len(_p1_now.decode("utf-8").splitlines()) <= 1:
+        ex_fail.append("expand 的产出仍是单行（应扩成设计器多行形态）")
+
+    # 写到**别的**文件：保持现语义（不拍备份、只覆盖那个文件）＋目标本来不存在时不许崩。
+    _ex_c3 = os.path.join(tmp, "ce_ex_other")
+    os.makedirs(_ex_c3, exist_ok=True)
+    _p3 = os.path.join(_ex_c3, "p.xwl")
+    with open(_p3, "w", encoding="utf-8", newline="") as _f:
+        _f.write(_flat)
+    _p3_raw = open(_p3, "rb").read()
+    _new3 = os.path.join(_ex_c3, "new.xwl")          # 目标**不存在**（专治"用 samefile 不先判存在"）
+    _rc_e3, _out_e3, _err_e3 = _run_cli(["expand", _p3, "--backup", "--out", _new3, "--no-js"])
+    if _rc_e3 != 0:
+        ex_fail.append("expand --out 指向别的文件 rc=%r（应 0）：\n%s"
+                       % (_rc_e3, _cli_text(_out_e3, _err_e3)))
+    if not os.path.exists(_new3):
+        ex_fail.append("expand --out 指向别的文件时没生成目标")
+    for _bad_bak in (_new3 + ".bak", _p3 + ".bak"):
+        if os.path.exists(_bad_bak):
+            ex_fail.append("`--out` 指向**别的**文件时不该拍备份，却生成了 %s" % _bad_bak)
+    if open(_p3, "rb").read() != _p3_raw:
+        ex_fail.append("`--out` 指向别的文件时，原文件字节被改了")
+
+    # 硬链接别名：`./` 别名分辨不出"备份到 `file.bak` 还是 `dest.bak`"（两者是同一路径）。
+    #   硬链接下这两个名字**不同** ⇒ 才能证明"备份名仍跟在 `--file` 上"。
+    try:
+        _p4 = os.path.join(_ex_c1, "hl.xwl")
+        with open(_p4, "w", encoding="utf-8", newline="") as _f:
+            _f.write(_flat)
+        _p4_raw = open(_p4, "rb").read()
+        _hl = os.path.join(_ex_c1, "hl_alias.xwl")
+        os.link(_p4, _hl)
+        _rc_e4, _out_e4, _err_e4 = _run_cli(["expand", _p4, "--backup", "--out", _hl, "--no-js"])
+        if _rc_e4 != 0:
+            ex_fail.append("硬链接别名 rc=%r（应 0）：\n%s" % (_rc_e4, _cli_text(_out_e4, _err_e4)))
+        if not os.path.exists(_p4 + ".bak"):
+            ex_fail.append("硬链接别名没按 `--file` 的名字拍 `.bak`（备份名跟着 `--out` 走了）")
+        elif open(_p4 + ".bak", "rb").read() != _p4_raw:
+            ex_fail.append("硬链接场景下 `.bak` 字节 ≠ 原件原字节")
+        if os.path.exists(_hl + ".bak"):
+            ex_fail.append("硬链接场景下多出了一份 `dest.bak`（备份名不该跟着 `--out` 走）")
+    except OSError as _exc:
+        ex_fail.append("硬链接夹具没造出来（%s）" % _exc)
+
+    # `samefile` 抛 `OSError`（不支持/权限受限）时必须**退回规范化路径比较**，而不是判"不同文件"。
+    try:
+        with _umock.patch("os.path.samefile", side_effect=OSError("stub")):
+            _sf_same = xwl._same_file(_p3, _p3)
+        if not _sf_same:
+            ex_fail.append("`samefile` 抛 OSError 时没退回规范化比较（同一文件竟判 False）"
+                           " ⇒ 该拍备份的会被跳过")
+    except Exception as _exc:      # noqa: BLE001
+        ex_fail.append("`_same_file` 的 OSError 兜底跑不通：%s: %s" % (type(_exc).__name__, _exc))
+    for _lbl, _e in (("别名同文件", _err_e1), ("写到别的文件", _err_e3)):
+        if "Traceback" in (_e or ""):
+            ex_fail.append("expand（%s）stderr 冒了 traceback：%s" % (_lbl, _e))
+    if ex_fail:
+        failures.extend(ex_fail)
+    else:
+        print("[ok]  expand --backup：`--out` 给同一文件的别名时按**文件身份**判、真拍 `.bak` 且字节一致；"
+              "写到别的文件时不拍备份、原文件不动、目标不存在也不崩")
+
+    # ---- 12e. `--outdir` 指到**普通文件**：必须走统一写盘出口，⛔ 不许冒 traceback ----
+    #   起因（删了会怎样）：建目录那句原是**裸调用**，而 `main()` 只 catch `XwlWriteError`
+    #   ⇒ 前置条件不满足时甩一段 Python traceback（本仓明令禁止）。
+    #   ⚠️ 判据看 **rc==2 且文案点名「导出目录」**，⛔ 不判"非零"了事（别的失败也非零）。
+    me_fail: list[str] = []
+    _me_dir = os.path.join(tmp, "ce_ev_repbad")
+    os.makedirs(_me_dir, exist_ok=True)
+    _me_file = os.path.join(_me_dir, "not_a_dir")     # **普通文件**，不是目录
+    with open(_me_file, "w", encoding="utf-8", newline="") as _f:
+        _f.write("occupied")
+    _me_xwl = os.path.join(_me_dir, "ev.xwl")
+    with open(_me_xwl, "w", encoding="utf-8", newline="") as _f:
+        _f.write(xwl.dumps_designer({"title": "占位页", "children": [
+            {"configs": {"itemId": "btn"}, "type": "button", "expanded": False, "children": [],
+             "events": {"click": "var x = 1;"}}]}, 1, CRLF))
+    _rc_me, _out_me, _err_me = _run_cli(["events", _me_xwl, "--outdir", _me_file])
+    if _rc_me != 2:
+        me_fail.append("`--outdir` 指向普通文件时 rc=%r（应 2）：\n%s"
+                       % (_rc_me, _cli_text(_out_me, _err_me)))
+    if "[FAIL]" not in _out_me or "导出目录" not in _out_me:
+        me_fail.append("`--outdir` 指向普通文件时的输出没走统一出口（应含 `[FAIL]` 与「导出目录」）：\n%s"
+                       % _cli_text(_out_me, _err_me))
+    if "Traceback" in ((_out_me or "") + (_err_me or "")):
+        me_fail.append("`--outdir` 指向普通文件时冒了 traceback：\n%s" % _cli_text(_out_me, _err_me))
+    # "走统一出口"与"自己 print 一句再 return 2"输出几乎一样 ⇒ 用 `main()` 的样板行做判据：
+    #   只有**抛 XwlWriteError 交给 main** 才会有那三行「可能原因：…」（自己 return 的话没有）。
+    if "可能原因" not in _out_me:
+        me_fail.append("没走统一写盘出口（输出里缺 `main()` 对 XwlWriteError 的「可能原因：…」样板）")
+    if open(_me_file, "r", encoding="utf-8", newline="").read() != "occupied":
+        me_fail.append("`--outdir` 指向普通文件时，那个文件被改写了")
+    if me_fail:
+        failures.extend(me_fail)
+    else:
+        print("[ok]  events 的 `--outdir` 指到普通文件时走统一写盘出口（rc=2 ＋ 点名「导出目录」＋ 无 traceback）")
+
+    # ---- 尾部（13. new … 17v）：整段下沉为模块级 `_check_subcommands_tail` ----
+    #   起因：本函数实测 387 行、`_FN_CAP` 上限 400，余量只剩 13 行；本批要往本函数里加三段
+    #   **命令级**断言（越界落点／备份同文件／目录前置错误）⇒ 先把尾段整段下沉，腾出预算。
+    #   ⚠️ 判据文本**逐字未改**，只换了宿主；⛔ 不调 `_FN_CAP`、⛔ 不从 `_CAP_FNS` 删名字。
+    _check_subcommands_tail(tmp, failures)
+
+
+def _check_subcommands_tail(tmp, failures) -> None:
+    """`_check_subcommands` 的尾段（有界下沉，判据文本逐字未改）。
+
+    只依赖 `tmp` 与 `failures` 两个入参，其余都是模块级名字。
+    """
     # ---- 13. new：从零生成（内置骨架 / 设计器键序 / 拒绝覆盖 / 补齐缺键）----
     new_fail: list[str] = []
     a_sql = os.path.join(tmp, "new_sql.xwl")
@@ -5412,6 +5800,10 @@ def _docs_layers_and_distribution(_S) -> None:
 #     `_ng_params_defaults` 337 行，都在 400 之下却没人管 ⇒ 纳管当场仍是**绿**，价值是防反弹。
 _FN_CAP = 400
 _CAP_FNS = ("_check_docs", "_docs_xfile_consistency", "_docs_numbers_and_tables", "_docs_layers_and_distribution", "_docs_tail_scaffold", "_check_subcommands",
+            # 尾段下沉出来的助手一并纳管：⛔ 只拆不纳管＝缺口从大函数搬到了助手身上。
+            "_check_subcommands_tail",
+            # `12c/12d/12e` 三段合起来约 300 行 ⇒ 再拆一层（主函数已顶到 399/400）。同样纳管。
+            "_check_events_and_expand",
             "_ng_cli_readonly", "_ng_check_controls", "_ng_contract_and_unit", "_ng_write_overwrite", "_ng_params_defaults", "_ng_platform",
             # ⚠️ `_doc_guard_xfile_pt` 是 17j-12／13／14 ＋「该有目录却没有」四臂的宿主，一直在长
             #   （216 → 242 行）却**不在本表** ⇒ "防止反弹"在这条臂上是空的。纳管当场仍是绿，价值就是防反弹。

@@ -14,6 +14,42 @@
 
 ---
 
+## [1.7.10] - 2026-11-02
+
+落盘与外部边界（patch）：**无新子命令、无新参数**。七条驱动全部是「边界靠『人不会这么输』来保证，而不是靠代码判」——事件导出把事件键直接拼进文件名、`expand --backup` 用字符串相等判同文件、目录创建裸 `OSError` 冒 traceback、扫描器的 `git` 子进程无 `timeout`／无显式 `env`、`ls-files` 按行 `strip`（含空格与换行的文件名身份丢失）、占位豁免按整行（同行别处有 `<` 就整行免检）。
+
+⚠️ **本版有 4 处对外契约变更 ＋ 4 处新增输出**，逐条列在下面第 ⑤ 条之后；升级前请对照。
+
+① **`ITEM-1199` 子进程边界**：`_collect_files` 的 `subprocess.run` 补 `timeout=_GIT_TIMEOUT`（30 秒）与显式 `env`（`dict(os.environ)` 起手，补 `GIT_TERMINAL_PROMPT=0`／`GIT_OPTIONAL_LOCKS=0`）；错误分三类 `no_git`／`timeout`／`io`。`TimeoutExpired` **不是** `OSError` 子类，单独一支接住。
+
+② **`ITEM-1184` 事件导出落点**：文件名改为 `event_<序号>_<安全标签>.js`（标签只留 `[A-Za-z0-9_-]`、≤60、全被替换则省略标签段）；另加 `_ensure_within` 做**独立落点校验**（`realpath` ＋ 包含关系，链接／短名／大小写折叠都兜住），⛔ 不靠"名字已清洗"。
+
+③ **`ITEM-1185` `expand --backup` 同文件判定**：`dest == args.file` 的字符串相等改为 `_same_file`（`realpath` ＋ `os.path.samefile`，兜 `OSError`；任一路径不存在 ⇒ 判不同文件）。原来用「同一文件的相对路径别名」时**不拍备份**、原文件被就地覆盖，丢了唯一恢复点。
+
+④ **`ITEM-1196` 统一写盘出口**：`os.makedirs` 纳入 `XwlWriteError`（⛔ 不再冒 traceback）；外置标识清单加**元素类型先验**（容器类型报错，不再静默 `str()` 转串）。
+
+⑤ **`ITEM-1198`／`ITEM-1197` 扫描器判据**：`git ls-files` 改 `-z` ＋ `_split_z`（⛔ 不用 `splitlines`／`strip` 切名）；`_scan_files` 返回五元组 `(hits, scanned, skipped, unreadable, missing)`——「读不出」与「有意排除的二进制」**分桶**，「索引里有、盘上无」单独第三桶；占位豁免从「整行」改到「**路径段**」（按 `[\\/]` 切段，某段整体是占位形态才豁免）。
+
+**对外契约变更（4 处）**
+
+- `privacy_scan`：应扫文本**读不出**（坏编码／读不动）由 `rc=0` → **`2`**。⚠️ 非 UTF-8 编码的文本文件（GBK／UTF-16）属此列 —— 它们会被判"读不出"而返回 `2`，转码后即可扫描。
+- `privacy_scan --allow-nogit`：**适用面收窄** —— `--root` 不存在、`git` 未安装、`git` 超时，原可降级 `0`，现一律 `2`；只有「**确无 `.git`**」这一种形态可降级。
+- `privacy_scan --patterns`：清单元素为**容器类型**（dict／list／null）由「静默 `str()` 照扫」改为报错 `rc=1`；`int` 同样报错（避免"数字 id 被转成单字符模式"而在全仓满屏命中）。
+- `xwl events --outdir`：导出文件名格式变更（见 ②）。⚠️ **全非 ASCII 的事件键会丢标签段**（`event_4_中文.js` → `event_4.js`）。按文件名反查事件键的脚本请改用新增的索引行。
+
+**新增输出（4 处）**
+
+- `events` 每个导出文件后新增一行 `← 原事件键：<JSON 字符串表示>`（文件名与事件键可能不同串，靠这行对照）。
+- `events` 覆盖已存在的同名文件时新增 `[note] 已存在、已覆盖`（覆盖不可逆，且删掉一个事件会让后续序号整体错位）。
+- `privacy_scan` 新增 `[note] 索引里有、盘上无 N 个（不计入「未完成」，不影响退出码）`。
+- `privacy_scan` **零可跟踪文件**时末行改为 `=== privacy_scan OK（未发现可扫描文件）`（**替换**原 `ALL OK`；`rc` 仍为 `0`），并加一行 `[note] 未发现可跟踪文件…` 提示 `--root` 可能指错。
+
+**内部**：`selftest.py` 的三个命令级断言函数按 `_FN_CAP`（400 行）边界下沉为 `_check_subcommands`（104）／`_check_events_and_expand`（326）／`_check_subcommands_tail`（292），三者均登记进 `_CAP_FNS`；新增 `_block_chain_fails()` 守三跳调用链（AST 形状断言：任一跳被删即红、文件读不出则报错而不静默）。判据文本逐字未改，`_FN_CAP` 未调。跨盘 `ValueError` 那条断言拆为**平台无关**两段：桩住 `os.path.relpath` 抛错 ⇒ 全平台验「转成 `XwlWriteError`」这一支；真实跨盘触发只在 `nt` 上跑（POSIX 的 `relpath` 不认盘符，原先那段在 ubuntu 上**必红**）。
+
+**一处已知边界（本版不改）**：`--allow-nogit` 显式降级时，同一次输出里既有「本次没扫」又有末行 `ALL OK` —— 它是**用户显式授权**的降级，与「未完成」分档；措辞上的易误读登记在案，留待后续处理。
+
+---
+
 ## [1.7.9] - 2026-10-31
 
 判据体系整改（patch）：**无新子命令、无新参数**，`xwl.py` 未改一个字节。十条驱动全是「判据看起来在判、实际判不到」，按病根分四族收口；对外契约零变化（`--help` 与改前**逐字节相同**）。

@@ -1996,6 +1996,26 @@ def cmd_edit(args) -> int:
 # --------------------------------------------------------------------------- #
 # expand
 # --------------------------------------------------------------------------- #
+def _same_file(a: str, b: str) -> bool:
+    """两个路径是否指向**同一个文件**（不是"两个字符串相等"）。
+
+    起因（不这么做会漏什么）：`--out` 给同一文件的**别名**（同一路径里多一段 `./`、大小写差异、
+    硬链接、符号链接）时，字符串相等判不出来 ⇒ 该拍的 `.bak` 不拍，原文件被就地覆盖、
+    丢掉唯一的恢复点。
+
+    ⚠️ 先判**存在**再 `samefile`：`samefile` 在目标不存在时抛 `FileNotFoundError`
+    （`OSError` 子类），只靠 `except` 会把"目标不存在"错判成"不同文件"。
+    任一不存在 ⇒ `False` —— 这与 `--out` 指向一个**别的、还不存在**的文件时的语义一致。
+    """
+    if not (os.path.exists(a) and os.path.exists(b)):
+        return False
+    try:
+        return os.path.samefile(a, b)
+    except OSError:
+        # 文件系统不支持 `samefile`（或权限受限）⇒ 退到规范化路径比较；大小写按平台折叠。
+        return os.path.normcase(os.path.realpath(a)) == os.path.normcase(os.path.realpath(b))
+
+
 def cmd_expand(args) -> int:
     """把（通常是单行的）xwl 规范成设计器同款多行形态。
 
@@ -2067,7 +2087,8 @@ def cmd_expand(args) -> int:
         return 0
 
     dest = args.out or args.file
-    if args.backup and dest == args.file:
+    # 「同文件」按**路径 + 文件身份**判，不按字符串相等 —— 同一路径里多一段 `./` 仍是同一个文件。
+    if args.backup and _same_file(dest, args.file):
         bak = args.file + ".bak"
         write_bytes(bak, read_bytes(args.file))
         print(f"备份 -> {bak}")
@@ -2965,7 +2986,7 @@ def cmd_itemids(args) -> int:
 
     # `#74`（`itemids` 侧）：给了 `--controls` 但**读不动 / 不是注册表** ⇒ ⛔ 不再**静默**回退、
     #   且来源行**不再打印用户给的坏路径**（形态与 `params` 侧同一口径）。
-    #   ⚠️ 只改调用方 —— `controls_source_line`（`:2151`）三处复用，⛔ 不动它（否则连带 `check ⑦`）。
+    #   ⚠️ 只改调用方 —— `controls_source_line`（`:2173`）三处复用，⛔ 不动它（否则连带 `check ⑦`）。
     _i_ctl = getattr(args, "controls", None)
     ctl = _i_ctl or discover_controls(args.file)
     _ctl_bad = bool(_i_ctl) and _registry_configs(_i_ctl) is None
@@ -5849,6 +5870,53 @@ def cmd_sql(args) -> int:
     return 0
 
 
+# 事件导出的**文件名**只由「序号 + 安全标签」构成（标签由事件键清洗而来）：
+#   · 保留 `[A-Za-z0-9_-]`，其余**逐字符**替换成 `_`；截断到 60 字符（防超长名撞系统上限）；
+#   · 全被替换（如纯中文键）⇒ 标签退化为空 ⇒ 文件名只留序号：`event_<序号>.js`。
+#   ⚠️ `.` **不保留** —— 这样不必再单独判"以点开头的段"（`..` 之类压根成不了标签）。
+_EVENT_TAG_BAD = re.compile(r"[^A-Za-z0-9_-]")
+_EVENT_TAG_MAX = 60
+
+
+def _event_file_tag(name: str) -> str:
+    """把事件键清洗成文件名里的**安全标签**；空串表示"没有可用标签"（省略标签段）。
+
+    ⚠️ 不做 `str(name)` 兜底：`events` 的键来自 JSON，恒为 `str`；留着转换只会把
+    "上游给了非串"这件事**静默转成看起来正常**（与清单侧 `str(it)` 同族的病）。
+    """
+    tag = _EVENT_TAG_BAD.sub("_", name)[:_EVENT_TAG_MAX]
+    if not tag or set(tag) == {"_"}:
+        return ""
+    return tag
+
+
+def _ensure_within(outdir: str, fp: str, out_real: str | None = None) -> None:
+    """校验 `fp` 的**真实落点**仍在 `outdir` 之内；越界抛 `XwlWriteError`。
+
+    为什么"名字已白名单化"还要这道校验：清洗管的是**输入**（名字里没有分隔符），管不了
+    **平台行为** —— 大小写折叠、8.3 短名、符号链接（`outdir` 自身是链接，或目录里那个"安全名"
+    其实是通向别处的链接）都会让同一个名字落到目录外。两者防的是不同层，⛔ 不能互相替代。
+
+    `out_real` 是**可选的预计算值**（`realpath(abspath(outdir))`）：`outdir` 在一次运行内不变，
+    批量导出时每文件重算是纯浪费。默认 `None` ⇒ 在本函数内算（保持单点直调时的自足性），
+    ⚠️ 但调用方**必须**把校验留在每个 `fp` 上——⛔ 不许"缓存了 outdir 就把校验也跳过"。
+
+    ⚠️ ⛔ 不许用 `str.startswith` 判前缀：它比的是**字符串**、不是**路径**（`/out` 与 `/out2`
+    这种近邻前缀，以及大小写/短名/链接，都能骗过它）。
+    """
+    if out_real is None:
+        out_real = os.path.realpath(os.path.abspath(outdir))
+    fp_real = os.path.realpath(os.path.abspath(fp))
+    try:
+        rel = os.path.relpath(fp_real, out_real)
+    except ValueError:
+        # 跨盘：`realpath` 解析后落在**另一个驱动器**上（如 outdir 里那个安全名是指向 D: 的链接）
+        #   ⇒ `relpath` 抛 ValueError。这一支不是死代码，按越界处理。
+        raise XwlWriteError("导出落点越界：%s（outdir=%s）" % (fp, outdir)) from None
+    if rel == os.pardir or rel.startswith(os.pardir + os.sep):
+        raise XwlWriteError("导出落点越界：%s（outdir=%s）" % (fp, outdir))
+
+
 def cmd_events(args) -> int:
     try:
         _text, _has_bom, obj = load_xwl(args.file)
@@ -5860,15 +5928,36 @@ def cmd_events(args) -> int:
         print("(无 events 节点)", file=sys.stderr)
         return 1
     if args.outdir:
-        os.makedirs(args.outdir, exist_ok=True)
+        # 建目录**也**走统一写盘出口：原来这句是裸调用，`main()` 只 catch `XwlWriteError`
+        #   ⇒ `--outdir` 指到普通文件／无权限目录时会甩一段 Python traceback（本仓明令禁止）。
+        try:
+            os.makedirs(args.outdir, exist_ok=True)
+        except OSError as exc:
+            # 措辞与 `_write_file` 同形（`getattr(exc, "strerror", None) or exc`），且必须点名「导出目录」——
+            #   断言要看"红的是这一条"，不能只判"非零"（别的失败也非零）。
+            raise XwlWriteError("无法创建导出目录 %s：%s"
+                                % (args.outdir, getattr(exc, "strerror", None) or exc)) from None
         written = []
+        # `outdir` 在一次运行内不变 ⇒ `realpath` 在**循环外**算一次；每个 `fp` 的那次仍逐文件算。
+        _out_real = os.path.realpath(os.path.abspath(args.outdir))
         for i, (name, code) in enumerate(events, 1):
-            fp = os.path.join(args.outdir, f"event_{i}_{name}.js")
+            tag = _event_file_tag(name)
+            fname = f"event_{i}_{tag}.js" if tag else f"event_{i}.js"
+            fp = os.path.join(args.outdir, fname)
+            _ensure_within(args.outdir, fp, _out_real)   # 落点**独立**校验（⛔ 不靠"名字已清洗"）
+            # 覆盖**不可逆** ⇒ 必须在 `write_text` **之前**判（写完再判毫无意义）。
+            #   序号来自事件顺序：删掉一个事件再导出，就会整体错位覆盖上一批的同名文件。
+            #   ⚠️ 这行**不缩进**：导出清单里"两空格打头"的行被当作路径行，`← 原事件键` 必须紧跟其后。
+            if os.path.exists(fp):
+                print("[note] 已存在、已覆盖：%s" % fname)
             write_text(fp, code.replace(CRLF, "\n"))
-            written.append(fp)
+            written.append((fp, name))
         print(f"已导出 {len(written)} 个事件 JS -> {args.outdir}")
-        for fp in written:
+        for fp, name in written:
             print(" ", fp)
+            # 文件名与事件键**可能不是同一个串**（键已被清洗成标签）⇒ 紧跟一行原键。
+            #   位置选"导出清单"而不是 `--help`／`references/`：这是"用 `--outdir` 就一定看得见"的地方。
+            print("   ← 原事件键：%s" % json.dumps(name, ensure_ascii=False))
     else:
         for i, (name, code) in enumerate(events, 1):
             print(f"----- [{i}/{len(events)}] events.{name} -----")
