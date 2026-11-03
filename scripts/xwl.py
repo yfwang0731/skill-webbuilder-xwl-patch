@@ -33,7 +33,9 @@ import argparse
 import collections
 import difflib
 import functools
+import errno
 import json
+import math
 import os
 import re
 import shlex
@@ -275,6 +277,18 @@ def loader_text(text: str) -> str:
     return re.sub(r"\\(?:\r\n|\r|\n)", r"\\n", text)
 
 
+def _finite_float(s: str) -> float:
+    """`json.loads` 的 `parse_float`：拒绝**溢出**成非有限值的字面量（`1e999` → `inf`）。
+
+    `parse_constant` 只接 `NaN`/`Infinity` 这两个 **token**，接不到字面量溢出。这里与
+    `_reject_nonfinite` 同族文案：不是有限浮点 ⇒ `ValueError`，否则原样返回。
+    """
+    v = float(s)
+    if not math.isfinite(v):
+        raise ValueError("非有限数值 `%s` 不是合法 xwl（org.json 会把它当字符串，且工具写不回）" % s)
+    return v
+
+
 def _reject_nonfinite(name: str):
     """`json.loads` 的 `parse_constant` 回调：**拒绝** `NaN` / `Infinity` / `-Infinity`。
 
@@ -478,7 +492,8 @@ def loader_parse(text: str):
     if pos < 0:
         raise ValueError("文件里找不到 `{` —— 不是 xwl 内容（空文件或纯文本）")
     end = json.JSONDecoder(strict=False,
-                           parse_constant=_reject_nonfinite).raw_decode(t[pos:])[1]
+                           parse_constant=_reject_nonfinite,
+                           parse_float=_finite_float).raw_decode(t[pos:])[1]
     return parse_xwl(t[:pos + end])
 
 
@@ -510,7 +525,8 @@ def parse_xwl(text: str):
         raise ValueError("文件里找不到 `{` —— 不是 xwl 内容（空文件或纯文本）")
     # ④ 对齐加载器宽容面：org.json 接受尾随逗号 ⇒ 解析前先归一（只删字符串外的尾随逗号）。
     return json.loads(_strip_trailing_commas(t[i:]), strict=False,
-                      parse_constant=_reject_nonfinite)
+                      parse_constant=_reject_nonfinite,
+                      parse_float=_finite_float)
 
 
 # --------------------------------------------------------------------------- #
@@ -568,12 +584,14 @@ def _number(v) -> str:
     `equivalent(parse_xwl(dumps(obj)), obj)` 判**不一致**（写回后值类型从 float 漂成 int）。
     本工具改为**保留 float 的 `.0`**（含 `0.0` / `2.0` …），让往返等价成立 —— 真实工程里
     **整数值浮点 0 例**（全量 24933 文件零例外），所以改动对外无副作用。
-    非有限值（`NaN`/`Infinity`）已在解析阶段被拒，这里不重复兜。
+    解析侧拒 token 与溢出；序列化侧再兜一次（防绕过解析的对象）。
     """
     if isinstance(v, bool):
         return "true" if v else "false"
     if isinstance(v, int):
         return str(v)
+    if isinstance(v, float) and not math.isfinite(v):
+        raise XwlWriteError("非有限数值不能写入 xwl：%r" % (v,))
     if isinstance(v, float) and v == 0 and str(v).startswith("-"):
         # 负零：**保留 `-0.0`**（不可折叠成 `-0`/`0`）。虽与下面的 float 分支同效，
         # 但单列出来是为了钉住这条"不可折叠"的语义（与 `0.0` 保真写出的情形同型参照）。
@@ -806,6 +824,64 @@ def collect_events(obj) -> list[tuple[str, str]]:
     return out
 
 
+def _iter_events(obj, path=None):
+    """与 `collect_events` 同口径的全树事件扫描，额外带上位置。
+
+    遍历规则逐字对齐 `collect_events`：凡 `key == "events"` 且值为 dict 即收，
+    **全树**（含根级、含 `configs` 内部）。产出 `(path, ev_name, code)`：
+    `path` 是到达该 `events` 容器的键序列（dict 键原样、list 用下标）。
+    ⛔ 不用 `_iter_controls` —— 它跳过 `configs`、只收带字符串 `type` 的节点，比 ⑥ 窄。
+    """
+    if path is None:
+        path = []
+    if isinstance(obj, dict):
+        for k, v in obj.items():
+            if k == "events" and isinstance(v, dict):
+                for ev_name, code in v.items():
+                    if isinstance(code, str):
+                        yield list(path), ev_name, code
+            yield from _iter_events(v, path + [k])
+    elif isinstance(obj, list):
+        for i, v in enumerate(obj):
+            yield from _iter_events(v, path + [i])
+
+
+def _event_map(obj) -> dict | None:
+    """事件身份 → 源码。身份是 `(tuple(path), ev_name)`，元素保留原类型。
+
+    同一结构体出现两次 ⇒ 返回 `None`（键冲突，身份不可证，不得据此豁免）。
+    `obj is None` ⇒ `None`（原文解析失败，身份不可证）。
+    """
+    if obj is None:
+        return None
+    out: dict = {}
+    for path, name, code in _iter_events(obj):
+        key = (tuple(path), name)
+        if key in out:
+            return None
+        out[key] = code
+    return out
+
+
+def _event_labels(keys) -> tuple:
+    """给人看的显示串。两个不同结构体渲染成同一串时加 `#2`／`#3`，并记下冲突说明。"""
+    raw = {}
+    for key in keys:
+        path, name = key
+        shown = _fmt_keypath(path) + "#" + str(name)
+        raw.setdefault(shown, []).append(key)
+    labels = {}
+    notes = []
+    for shown, group in raw.items():
+        if len(group) == 1:
+            labels[group[0]] = shown
+        else:
+            notes.append("两处同名同渲染：%s" % shown)
+            for i, key in enumerate(group, 1):
+                labels[key] = shown if i == 1 else "%s#%d" % (shown, i)
+    return labels, notes
+
+
 def collect_sql(obj) -> list[tuple[str, str]]:
     """抽取所有键名含 'sql' 的字符串值，返回 [(键名, SQL)]。"""
     out: list[tuple[str, str]] = []
@@ -835,6 +911,140 @@ def find_node(explicit: str | None = None) -> str | None:
         if os.path.exists(p):
             return p
     return shutil.which("node") or shutil.which("node.exe")
+
+
+# 同一进程同一 exe 的 `--version` 结论。测试注入前可 `clear()`。
+_NODE_PROBE_CACHE: dict = {}
+
+
+def _probe_node(exe) -> bool:
+    """执行器是不是 node：跑 `--version`，首行须是 v 加数字再加一个点。
+
+    跑不起来或不匹配 ⇒ False。`None` 由调用方另判（那是「不可用」，不是「不是 node」）。
+    同一进程、同一路径只跑一次，结果放 `_NODE_PROBE_CACHE`（测试可清空）。
+    """
+    if not exe:
+        return False
+    cached = _NODE_PROBE_CACHE.get(exe)
+    if cached is not None:
+        return cached
+    ok = False
+    try:
+        proc = _cap_run([exe, "--version"], timeout=30)
+        text = ((proc.stdout or "") + "\n" + (proc.stderr or "")).strip()
+        ok = bool(re.match(r"^v\d+\.", text))
+    except Exception:  # noqa: BLE001
+        ok = False
+    _NODE_PROBE_CACHE[exe] = ok
+    return ok
+
+
+_NODE_BATCH_PROBE_JS = """
+let raw = '';
+process.stdin.setEncoding('utf8');
+process.stdin.on('data', d => { raw += d; });
+process.stdin.on('end', () => {
+  let segs;
+  try { segs = JSON.parse(raw); } catch (e) { process.exit(3); }
+  const out = [];
+  for (const s of segs) {
+    let rc = 0, err = '';
+    try { new Function(s.code); }
+    catch (e) {
+      rc = 1;
+      const name = (e && e.name) ? e.name : 'Error';
+      err = name + ': ' + ((e && e.message) ? e.message : String(e));
+    }
+    out.push({ rc: rc, err: err });
+  }
+  process.stdout.write(JSON.stringify(out));
+});
+"""
+
+
+def _probe_kind(rc, err) -> tuple[str, str]:
+    """把一次编译的返回码与诊断收成 ok／syntax／error，口径与单段探针一致。"""
+    text = (err or "").strip()
+    if rc == 0:
+        return "ok", ""
+    if rc == 1 and "SyntaxError" in text:
+        return "syntax", text
+    if not text:
+        text = "rc=%s" % rc
+    return "error", text
+
+
+def _node_probe_batch(node, codes) -> list:
+    """一次 node 进程验多段。返回与 `codes` 等长的 `(kind, err)`。
+
+    进程起不来、输出不是等长数组 ⇒ 整批 `error`（与单段「不是 syntax 即 error」同口径）。
+    """
+    if not codes:
+        return []
+    try:
+        proc = _cap_run([node, "-e", _NODE_BATCH_PROBE_JS],
+                        input=json.dumps([{"code": c} for c in codes]), timeout=300)
+        if proc.returncode == 0:
+            got = json.loads(proc.stdout)
+            if isinstance(got, list) and len(got) == len(codes):
+                return [_probe_kind(g.get("rc"), g.get("err") or "") for g in got]
+        err = ((proc.stderr or "") or (proc.stdout or "")).strip() or "rc=%s" % proc.returncode
+    except Exception as exc:  # noqa: BLE001
+        err = "node 调用失败: %s" % exc
+    return [("error", err) for _c in codes]
+
+
+def _js_verdicts(node_exe, codes) -> list:
+    """多段事件一次判定。返回与 `codes` 等长的状态串。
+
+    对象字面量复验只对「裸验是 syntax 且 strip 后以 `{` 开头以 `}` 结尾」的那些发第二批。
+    """
+    if not codes:
+        return []
+    if node_exe is None:
+        return ["unavailable" for _c in codes]
+    if not _probe_node(node_exe):
+        return ["error:不是 node 可执行" for _c in codes]
+    first = _node_probe_batch(node_exe, list(codes))
+    retry = [i for i, ((kind, _err), code) in enumerate(zip(first, codes))
+             if kind == "syntax" and code.strip().startswith("{") and code.strip().endswith("}")]
+    second = {}
+    if retry:
+        again = _node_probe_batch(node_exe, ["(" + codes[i] + ")" for i in retry])
+        second = dict(zip(retry, again))
+    out = []
+    for i, (kind, err) in enumerate(first):
+        if kind == "ok":
+            out.append("ok")
+            continue
+        if kind == "error":
+            out.append("error:" + (err or ""))
+            continue
+        if i in second:
+            kind2, err2 = second[i]
+            if kind2 == "ok":
+                out.append("ok")
+            elif kind2 == "error":
+                out.append("error:" + (err2 or ""))
+            else:
+                out.append("bad:" + ((err2 or err) or ""))
+            continue
+        out.append("bad:" + (err or ""))
+    return out
+
+
+def _js_verdict(node_exe, code) -> str:
+    """单个事件的状态：`ok`／`bad:<诊断>`／`error:<诊断>`／`unavailable`。
+
+    四层，按结构化事实分，⛔ 不许只看诊断前缀：
+      1. 执行器身份：`None` ⇒ unavailable；`--version` 对不上 ⇒ error（都不得进 bad）；
+      2. `--check` 返回码：ok／syntax／error；
+      3. 对象字面量复验：裸验 `syntax` 且 `strip` 后 `{…}` ⇒ 包一层括号再验；
+         裸验 `error` ⇒ 直接 error，⛔ 不重试；形态不匹配的 syntax ⇒ bad；
+      4. 异常已在第 2 层收成 error。
+    """
+    got = _js_verdicts(node_exe, [code])
+    return got[0] if got else "error:node 调用失败"
 
 
 def node_check(node: str, code: str) -> tuple[bool, str]:
@@ -1428,13 +1638,37 @@ def cmd_check(args) -> int:
 
         # ⑥ 事件 JS 语法
         events: list[tuple[str, str]] = []
+        _js_box = getattr(args, "js_detail", None)
         if obj is not None and node and not no_js and 6 in checks:
-            events = collect_events(obj)
-            results = node_check_many(node, [code for _name, code in events])
-            for (name, _code), (ok, err) in zip(events, results):
-                if not ok:
-                    head = _js_err_head(err)
-                    errors.append(f"⑥ events.{name} JS 语法错误: {head}")
+            if isinstance(_js_box, dict):
+                # 写后采集：与写前门禁同一套逐事件判定（拿得到 error/syntax）。
+                # 对外错误行仍按 events.<名> 报，集合与判定不变。
+                events = [(str(n), c) for _p, n, c in _iter_events(obj)]
+                _ev_keys = []
+                for _p, name, code in _iter_events(obj):
+                    _ev_keys.append((tuple(_p), name))
+                _ev_labels, _ev_notes = _event_labels(_ev_keys)
+                _ev_rows = list(_iter_events(obj))
+                _ev_verdicts = _js_verdicts(node, [code for _p, name, code in _ev_rows])
+                for (_p, name, code), verdict in zip(_ev_rows, _ev_verdicts):
+                    if verdict == "ok":
+                        continue
+                    head = verdict.split(":", 1)[-1].splitlines()[0] if ":" in verdict else verdict
+                    head = _js_err_head(head) if verdict.startswith("bad:") else head
+                    errors.append("⑥ events.%s JS 语法错误: %s" % (name, head or "语法错误"))
+                    _st = "error" if verdict.startswith("error:") else "syntax"
+                    _slot = _js_box.setdefault("js", {"state": _st, "events": []})
+                    if _st == "error":
+                        _slot["state"] = "error"
+                    _shown = _ev_labels.get((tuple(_p), name), _fmt_keypath(_p) + "#" + str(name))
+                    _slot["events"].append("%s %s" % (_shown, head))
+            else:
+                events = collect_events(obj)
+                results = node_check_many(node, [code for _name, code in events])
+                for (name, _code), (ok, err) in zip(events, results):
+                    if not ok:
+                        head = _js_err_head(err)
+                        errors.append(f"⑥ events.{name} JS 语法错误: {head}")
 
         # ⑦ 注册键重名（分级）—— 按 `normalName || itemId` 分组；只有「重名 **且** 已被
         #    事件 JS 引用」才算 FAIL（**只两级**：被引用 error / 未被引用 benign）
@@ -1721,7 +1955,8 @@ def _wide_kinds(text: str) -> str:
     pos = dst.find("{")
     if pos >= 0:
         try:
-            end = json.JSONDecoder(strict=False, parse_constant=_reject_nonfinite).raw_decode(
+            end = json.JSONDecoder(strict=False, parse_constant=_reject_nonfinite,
+                                   parse_float=_finite_float).raw_decode(
                 dst[pos:])[1]
             if dst[pos + end:].strip():
                 labels.append("相邻贪婪 `{...}{...}`（只取第一个）")
@@ -1751,7 +1986,125 @@ def _reject_non_designer(cmd_name: str, path: str, text: str) -> int:
     return 2
 
 
-def _post_check(file: str, args, obj=None) -> int:
+def _prewrite_gate(orig_obj, cand_obj, node_exe, no_js):
+    """写盘前 ⑥。返回 `(verdict, notes)`，`verdict ∈ {write, reject2, reject1}`。
+
+    ⑥-a（`--no-js` 或 node 找不到）⇒ `write` ＋ 一条 `[note]`（原因二选一）。
+    ⑥-b（探针报 error）⇒ `reject2`，不并入「既有失败」。
+    文件级：一个不能合法保留的失败 ⇒ `reject1`。
+    """
+    notes: list[str] = []
+    # 撞名说明与执行器无关：它是「两个不同结构体渲染成同一串」这个**身份事实**。
+    #   ⇒ 必须在两条提前返回**之前**算，否则 `--no-js` / 无 node 时这条提示会整条消失。
+    cand = _event_map(cand_obj)
+    labels: dict = {}
+    if cand is not None:
+        labels, clashes = _event_labels(list(cand))
+        for line in clashes:
+            notes.append("[note] " + line)
+    if no_js:
+        notes.append("[note] ⑥ 事件 JS 未执行：显式 --no-js")
+        return "write", notes
+    if node_exe is None:
+        notes.append("[note] ⑥ 事件 JS 未执行：Node 不可用")
+        return "write", notes
+
+    if cand is None:
+        notes.append("[FAIL] ⑥ 无法证明是既有失败：候选事件身份冲突")
+        return "reject1", notes
+    orig = _event_map(orig_obj)          # orig_obj is None ⇒ None（身份不可证，不因此拒写）
+
+    bad_new = []
+    bad_old = []
+    unprovable = []
+    _keys = list(cand)
+    _verdicts = _js_verdicts(node_exe, [cand[k] for k in _keys])
+    for key, verdict in zip(_keys, _verdicts):
+        code = cand[key]
+        if verdict == "ok":
+            continue
+        label = labels.get(key, str(key))
+        head = verdict.split(":", 1)[-1].splitlines()[0] if ":" in verdict else verdict
+        if verdict.startswith("error:"):
+            notes.append(
+                "[FAIL] ⑥ 未能执行（node 调用失败：%s）；要跳过请显式 --no-js" % (head or label))
+            return "reject2", notes
+        # bad
+        old = None if orig is None else orig.get(key, _MISSING)
+        if orig is None or old is _MISSING:
+            unprovable.append("%s %s" % (label, head))
+        elif old == code:
+            bad_old.append("%s %s" % (label, head))
+        else:
+            bad_new.append("%s %s" % (label, head))
+
+    if unprovable:
+        notes.append("[FAIL] ⑥ 无法证明是既有失败：" + "；".join(unprovable))
+        return "reject1", notes
+    if bad_new:
+        notes.append("[FAIL] ⑥ 新增或改过的事件语法失败：" + "；".join(bad_new))
+        return "reject1", notes
+    if bad_old:
+        notes.append("[FAIL] 已写入；该失败为既有：" + "；".join(bad_old))
+    return "write", notes
+
+
+_MISSING = object()
+
+
+def _bak_stamp() -> str:
+    """备份轮换用的时间戳前缀（`%Y%m%d-%H%M%S`）。
+
+    单独成函数只为**可注入**：测试 monkeypatch 它就能把两次轮换压进同一秒。
+    """
+    import datetime
+    return datetime.datetime.now().strftime("%Y%m%d-%H%M%S")
+
+
+def _rotate_bak(target: str, bak: str) -> list[str]:
+    """`.bak` 已存在则先改名保全（同目录、不删、不覆盖），再由调用方写新 `.bak`。
+
+    名字 `<file>.bak.<YYYYmmdd-HHMMSS>`，时间戳只作可读前缀；撞名试 `-2`…上限 20。
+    返回要打印的行。失败抛 `XwlWriteError`（⑦：备份失败，调用方不得再写目标）。
+    """
+    notes = []
+    if not os.path.exists(bak):
+        return notes
+    stamp = _bak_stamp()
+    base = bak + "." + stamp
+    last = None
+    for n in range(1, 21):
+        dest = base if n == 1 else "%s-%d" % (base, n)
+        try:
+            os.rename(bak, dest)
+        except FileExistsError:
+            last = "目标名已存在"
+            continue
+        except OSError as exc:
+            if getattr(exc, "winerror", None) == 183 or exc.errno == errno.EEXIST:
+                last = str(exc)
+                continue
+            raise XwlWriteError("备份失败：%s" % exc) from None
+        notes.append("旧备份已保全：%s → %s" % (os.path.basename(bak), os.path.basename(dest)))
+        return notes
+    raise XwlWriteError("备份失败：同秒轮换 20 次仍冲突（%s）" % (last or base))
+
+
+def _emit_post_detail(detail) -> None:
+    """写后 ⑥ 的汇报。只认 `detail` 里的结构化事实，不靠 rc 反推、不再跑 node。"""
+    if not isinstance(detail, dict):
+        return
+    js = detail.get("js") or {}
+    state = js.get("state")
+    if state == "error":
+        ev = "；".join(js.get("events") or []) or "（未点名事件）"
+        print("[FAIL] 已写入；写后校验未完成（node 调用失败：%s）" % ev)
+    elif state == "syntax":
+        ev = "；".join(js.get("events") or []) or "（未点名事件）"
+        print("[FAIL] 已写入；写后校验失败：%s" % ev)
+
+
+def _post_check(file: str, args, obj=None, detail=None) -> int:
     """写盘后的**格式**自检 —— 只回答「这次改动有没有破坏格式」。
 
     **判定面 = ①–⑥**（BOM / 换行 / 续行空白 / 解析 / 末行 / 事件 JS）—— 越过 ①–⑥ 的都不进这里：
@@ -1774,7 +2127,11 @@ def _post_check(file: str, args, obj=None) -> int:
     ns = argparse.Namespace(files=[file], node=getattr(args, "node", None),
                             no_js=_no_js, no_itemid=True,
                             checks={1, 2, 3, 4, 5} | ({6} if not _no_js else set()))
+    if detail is not None:
+        ns.js_detail = detail
     rc = cmd_check(ns)
+    if detail is not None and "rc" not in detail:
+        detail["rc"] = rc
     _w_obj = obj if obj is not None else _load_obj_quiet(file)
     _w_line = _cfg_nonstr_warn_line(_w_obj)
     if _w_line:
@@ -1975,22 +2332,63 @@ def cmd_edit(args) -> int:
               f"换行会丢失（语义已变，`check` 查不出来）")
         print("       若本意是改内容、同时保留换行，请改用结构级 `patch`（不碰文本层）")
 
+    cand_text = text.replace(old, new)
+    try:
+        cand_obj = loader_parse(cand_text)
+    except Exception as exc:  # noqa: BLE001
+        print("[FAIL] 候选不可解析: %s" % exc)
+        return 2
+    try:
+        orig_obj = loader_parse(text)
+    except Exception:  # noqa: BLE001
+        orig_obj = None
+    node_exe = None if getattr(args, "no_js", False) else find_node(getattr(args, "node", None))
+    verdict, notes = _prewrite_gate(orig_obj, cand_obj, node_exe, getattr(args, "no_js", False))
     if args.dry_run:
-        print("[dry-run] 未写入。变更后长度:", len(text) - count * len(old) + count * len(new))
+        for line in notes:
+            shown = line
+            if verdict == "write" and "已写入；该失败为既有" in line:
+                shown = line.replace("已写入；该失败为既有", "预计保留该既有失败；未写入", 1)
+            print(shown)
+        if verdict == "reject2":
+            return 2
+        if verdict == "reject1":
+            return 1
+        print("[dry-run] 未写入。变更后长度:", len(cand_text))
         return 0
+    for line in notes:
+        if verdict != "write":
+            print(line)
+    if verdict == "reject2":
+        return 2
+    if verdict == "reject1":
+        return 1
 
     if args.backup:
         bak = args.target + ".bak"
+        for line in _rotate_bak(args.target, bak):
+            print(line)
         write_bytes(bak, read_bytes(args.target))
         print(f"备份 -> {bak}")
 
-    write_text(args.target, text.replace(old, new))
+    try:
+        write_text(args.target, cand_text)
+    except XwlWriteError as exc:
+        print("[FAIL] 写盘失败：%s" % exc)
+        return 2
     print(f"已写入: {args.target}")
+    for line in notes:
+        if ("已写入；该失败为既有" in line or line.startswith("[note] ⑥")
+                or line.startswith("[note] 两处同名同渲染")):
+            print(line)
 
     # 立即自检（只判格式；注册键重名见 _post_check 注释）
     # ⚠️ `edit` 只改文本层、手上没有对象 ⇒ **不传** `obj`，由 `_post_check` 读回刚写完的文件
     #    做那条「本次写入含 configs 非字符串值」的提示（读不回来也不影响 rc）。
-    return _post_check(args.target, args)
+    detail: dict = {}
+    rc = _post_check(args.target, args, detail=detail)
+    _emit_post_detail(detail)
+    return rc
 
 
 # --------------------------------------------------------------------------- #
@@ -2583,8 +2981,44 @@ def _is_container(v) -> bool:
     return isinstance(v, (dict, list))
 
 
+_OP_FIELDS = {
+    "set": frozenset({"op", "path", "value", "create"}),
+    "insert": frozenset({"op", "path", "index", "value"}),
+    "append": frozenset({"op", "path", "value"}),
+    "delete": frozenset({"op", "path", "index"}),
+    "insertKey": frozenset({"op", "path", "value", "before", "after", "index"}),
+}
+
+
+def _check_op_types(ops, unknown=None):
+    """`apply_ops` 执行前的入参类型门禁。类型错抛 `ValueError`；未知字段只记 `unknown`。"""
+    for i, op in enumerate(ops, 1):
+        if not isinstance(op, dict):
+            continue
+        if "create" in op and not isinstance(op["create"], bool):
+            raise ValueError("第 %d 个 op：`create` 必须是 true/false，收到 %s"
+                             % (i, type(op["create"]).__name__))
+        if "index" in op and (isinstance(op["index"], bool) or not isinstance(op["index"], int)):
+            raise ValueError("第 %d 个 op：`index` 必须是整数下标，收到 %s"
+                             % (i, type(op["index"]).__name__))
+        path = op.get("path")
+        if path is not None and path != []:
+            if not isinstance(path, list):
+                raise ValueError("第 %d 个 op：`path` 必须是数组，收到 %s"
+                                 % (i, type(path).__name__))
+            for seg in path:
+                if isinstance(seg, bool) or not isinstance(seg, (str, int)):
+                    raise ValueError("第 %d 个 op：`path` 必须是数组，元素只许字符串或整数下标，"
+                                     "收到 %s" % (i, type(seg).__name__))
+        kind = op.get("op")
+        allowed = _OP_FIELDS.get(kind)
+        if allowed is not None and unknown is not None:
+            for extra in op.keys() - allowed:
+                unknown.append("第 %d 个 op：字段 `%s` 不生效（未识别）" % (i, extra))
+
+
 def apply_ops(obj, ops, created=None, warned=None, allow_new_key=False, inserted=None,
-              overwrites=None):
+              overwrites=None, unknown=None):
     """按 ops 就地修改对象。
 
     path 是「键 / 数组下标」列表；**以 `@` 开头的段按 `configs.itemId` 寻址**
@@ -2635,6 +3069,7 @@ def apply_ops(obj, ops, created=None, warned=None, allow_new_key=False, inserted
     （`第 K 个 op（<kind>）：<现象> —— <可能原因>；用 paths / dump 核对 path`），**不冒裸异常类型名**；
     `insertKey` 的锚点越界 / 兄弟键不存在也走此模板。
     """
+    _check_op_types(ops, unknown)
     for i, op in enumerate(ops, 1):
         if not isinstance(op, dict):
             raise ValueError("第 %d 个 op 不是对象" % i)
@@ -2698,7 +3133,7 @@ def apply_ops(obj, ops, created=None, warned=None, allow_new_key=False, inserted
             if kind == "append":
                 arr.append(op["value"])
             else:
-                idx = int(op.get("index", len(arr)))
+                idx = op["index"] if "index" in op else len(arr)
                 if not 0 <= idx <= len(arr):
                     raise ValueError(
                         "第 %d 个 op（insert）：下标 %d 越界 —— 数组长度 %d，合法区间 [0, %d]"
@@ -2709,7 +3144,7 @@ def apply_ops(obj, ops, created=None, warned=None, allow_new_key=False, inserted
                 arr = resolve_path(obj, path)
                 if not isinstance(arr, list):
                     raise ValueError("第 %d 个 op：path 指向的不是数组" % i)
-                idx = int(op["index"])
+                idx = op["index"]
                 if not 0 <= idx <= len(arr) - 1:
                     raise ValueError(
                         "第 %d 个 op（delete）：下标 %d 越界 —— 数组长度 %d，合法区间 [0, %d]"
@@ -2763,7 +3198,7 @@ def apply_ops(obj, ops, created=None, warned=None, allow_new_key=False, inserted
                         "；用 paths / dump 核对" % (i, sib))
                 pos = order.index(sib) + 1
             elif "index" in op:
-                pos = int(op["index"])
+                pos = op["index"]
                 if not 0 <= pos <= len(order):
                     raise ValueError(
                         "第 %d 个 op（insertKey）：下标 %d 越界 —— 该对象去掉自身后共 %d 个键"
@@ -2986,7 +3421,7 @@ def cmd_itemids(args) -> int:
 
     # `#74`（`itemids` 侧）：给了 `--controls` 但**读不动 / 不是注册表** ⇒ ⛔ 不再**静默**回退、
     #   且来源行**不再打印用户给的坏路径**（形态与 `params` 侧同一口径）。
-    #   ⚠️ 只改调用方 —— `controls_source_line`（`:2173`）三处复用，⛔ 不动它（否则连带 `check ⑦`）。
+    #   ⚠️ 只改调用方 —— `controls_source_line` 三处复用，⛔ 不动它（否则连带 `check ⑦`）。
     _i_ctl = getattr(args, "controls", None)
     ctl = _i_ctl or discover_controls(args.file)
     _ctl_bad = bool(_i_ctl) and _registry_configs(_i_ctl) is None
@@ -3151,10 +3586,10 @@ def cmd_patch(args) -> int:
     if isinstance(ops, dict):
         ops = [ops]
 
-    created, warned, inserted, overwrites = [], [], [], []
+    created, warned, inserted, overwrites, unknown = [], [], [], [], []
     try:
         apply_ops(obj, ops, created=created, warned=warned, inserted=inserted,
-                  overwrites=overwrites,
+                  overwrites=overwrites, unknown=unknown,
                   allow_new_key=getattr(args, "allow_new_key", False))
     except Exception as exc:  # noqa: BLE001
         msg = str(exc)
@@ -3178,6 +3613,8 @@ def cmd_patch(args) -> int:
         #   （`rc` 不变、也不改默认拒绝语义 —— 这不是"新建键"）。`--dry-run` 同样会打（在下面 return 之前）。
         print("[warn] 有 %d 个 op 把**已存在的容器键**（对象/数组）覆盖成了标量 —— 这是结构损坏级改动，"
               "请确认是本意：%s" % (len(overwrites), ", ".join(overwrites)))
+    for _unk in unknown:
+        print("[warn] " + _unk)
 
     out = dumps_designer(obj, args.indent, eol)
     try:
@@ -3189,6 +3626,17 @@ def cmd_patch(args) -> int:
         return 2
     print(f"[ok]   语义等价比对通过（规范化文本：含键序与值类型） | 变更后 {_byte_len(out)} B "
           f"({_byte_len(out) - _byte_len(text):+d})")
+
+    try:
+        orig_obj = loader_parse(text)
+    except Exception:  # noqa: BLE001
+        orig_obj = None
+    node_exe = None if getattr(args, "no_js", False) else find_node(getattr(args, "node", None))
+    verdict, notes = _prewrite_gate(orig_obj, obj, node_exe, getattr(args, "no_js", False))
+    if verdict != "write":
+        for line in notes:
+            print(line)
+        return 2 if verdict == "reject2" else 1
 
     if args.dry_run:
         import difflib
@@ -3214,20 +3662,42 @@ def cmd_patch(args) -> int:
             # 只列**带 create** 的新建键；不带 create 的那类走上面的 `[warn]` 预告（两条不混）。
             print('[new-key] 本次将新建 %d 个键（带 "create": true）：%s'
                   % (len(created), ", ".join(created)))
+        for line in notes:
+            shown = line
+            if "已写入；该失败为既有" in line:
+                shown = line.replace("已写入；该失败为既有", "预计保留该既有失败；未写入", 1)
+            print(shown)
         print("[dry-run] 未写入")
         return 0
 
     if args.backup:
         bak = args.file + ".bak"
+        for line in _rotate_bak(args.file, bak):
+            print(line)
         write_bytes(bak, read_bytes(args.file))
         print(f"备份 -> {bak}")
     else:
         # 真跑到写盘却没让工具备份 ⇒ 只提醒一句（**只加输出，不改 rc、不改用法**）。
-        print("[warn] 未使用 --backup：本次已直接写盘，出错请用 git checkout -- 回退（建议先 --dry-run 看 diff）")
-    write_text(args.file, out)
-    print(f"已写入: {args.file}")
+        # 完成态「已直接写盘」在 write_text 成功之后才报；这里只说将要写。
+        print("[warn] 未使用 --backup：本次将直接写盘，出错请用 git checkout -- 回退（建议先 --dry-run 看 diff）；回退请优先用操作前副本（`git checkout --` 会丢未提交编辑）")
+    try:
+        write_text(args.file, out)
+    except XwlWriteError as exc:
+        _bak_note = ""
+        if args.backup:
+            _bak_note = "（.bak 已生成）" if os.path.exists(args.file + ".bak") else "（.bak 未生成）"
+        print("[FAIL] 写盘失败：%s%s" % (exc, _bak_note))
+        return 2
+    print(f"已写入: {args.file}（本次已直接写盘）")
+    for line in notes:
+        if ("已写入；该失败为既有" in line or line.startswith("[note] ⑥")
+                or line.startswith("[note] 两处同名同渲染")):
+            print(line)
 
-    return _post_check(args.file, args, obj)   # 传已解析对象：省一次读盘（那条 ⑩ 预告 warn）
+    detail: dict = {}
+    rc = _post_check(args.file, args, obj, detail=detail)   # 传已解析对象：省一次读盘（那条 ⑩ 预告 warn）
+    _emit_post_detail(detail)
+    return rc
 
 
 # --------------------------------------------------------------------------- #

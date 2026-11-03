@@ -2,25 +2,21 @@
 name: webbuilder-xwl-patch
 slug: skill-webbuilder-xwl-patch
 displayName: webbuilder-xwl-patch
-version: 1.7.10
+version: 1.7.11
 license: MIT
 metadata:
   category: development-tools
   tags: [xwl, webbuilder, low-code, sql]
 summary: WebBuilder（wb）低代码平台的 .xwl 页面与 SQL 定义文件处理：结构级安全编辑、格式校验与重名分级、页面传参链路核对、相对 git 基线的压平检测。仅适用于 WebBuilder 平台的 .xwl 文件。
 description: >-
-  WebBuilder（wb）平台 .xwl 定义文件的处理与安全编辑：结构级 patch —— 只给值和子树，
-  工具按设计器算法重建整份文件（缩进、转义、换行全自动产出），
-  格式错误在构造上不会发生，diff 只含真正改的内容。
-  触发场景：改 wb/modules 下的页面 .xwl（加删控件、挂改事件、改配置、改网格列）、
-  改被引用的 SQL 片段（用 @itemId 寻址 patch）、
-  查改「参数控件到 store 再到 SQL」的传参链路（两条通路 out / params）、
-  处理 itemId 重名（给候选清单）、从零新建页面或 SQL 文件、
-  新建后设计器导航树里看不到它（folder.json 未登记）、
-  判断 .xwl 格式是否合法、加载报解析错误或页面白屏、要不要压成一行、
-  确认一次改动有没有把多行内容悄悄压平（diffguard）、
-  抽取或校验 SQL 与事件 JS（sql / events / sqlrefs / params）。
-  只对 WebBuilder（wb）平台的 .xwl 有效；其他低代码平台页面、Vue、普通 json 不适用。
+  WebBuilder（wb）平台 .xwl 页面与 SQL 定义文件的结构级安全编辑。
+  触发场景：加删控件、挂改事件、改网格列、改 SQL 片段（@itemId 寻址）、
+  查传参链路、处理 itemId 重名、从零新建页面或 SQL、
+  新建后 folder.json 未登记在导航树看不到、加载报解析错误或白屏、
+  要不要压成一行、确认改动有没有把多行压平、抽取或校验事件 JS、
+  判断 .xwl 格式是否合法。
+  仅适用于 WebBuilder（wb）平台的 .xwl 与 SQL 片段；
+  不是通用 JSON 编辑器，非 wb 工程、Vue、普通 json 不适用。
 agent_created: true
 ---
 
@@ -31,9 +27,9 @@ WebBuilder 的页面与查询定义都写在 `.xwl` 里。它**看起来像 JSON
 **本 skill 的核心是「不碰文本层」**：用 `xwl.py patch` 做**结构级编辑** —— 你只给出「值 / 子树」，
 序列化器按**设计器自己的算法**重建整份文件（续行、转义、缩进、换行全部自动产出）。于是：
 
-- **格式错误在构造上不会发生**（不接触文本层，就没有"改坏格式"这条路）；
+- **格式错误在构造上不会发生**（不接触文本层，就没有"改坏格式"这条路）。**前提：候选通过等价比对／可解析校验**；`edit` 走文本层，候选解析不通过即拒写（`rc=2`）。
 - 重建算法做过**回放校验**（把算法跑在既有文件上逐字节比对）⇒ 排版复刻正确，重排**不会顺带改动无关内容**，
-  **diff 只含这次真正改的内容**；
+  **diff 只含这次真正改的内容**（**`--indent`／`--eol` 能主动触发的重排**会扩大 diff；非规范源即使不带参数也会被规整，见 `references/measured-data-designer.md`）；
 - 写盘前强制「重新解析后，**规范化文本**与改后对象一致」的等价比对（**含键序与值类型**：`1` 与 `1.0`、
   `true` 与 `1`、`-0.0` 与 `0`、键序不同都算不一致），对不上就中止。
 
@@ -333,14 +329,14 @@ python <skill根>/scripts/xwl.py patch <file.xwl> --ops ops.json --dry-run
 python <skill根>/scripts/xwl.py patch <file.xwl> --ops ops.json --backup
 ```
 
-**报错怎么办** —— `patch` 的失败都是**拒绝写盘**，不会留下坏文件：
+**报错怎么办** —— `patch` 的**失败**默认不写盘（⚠️ 正常成功当然写盘 —— ⛔ 别把默认执行模式说成 dry-run）；但"是否写入"与"本次是否检查完"是两件事，输出里必须分别说清 —— ①**正常成功**：已写入、`rc=0`（⑤）；②**已写入且内容失败**：④ 旧错保留（`rc=1`）；③**已写入且检查未完成**：⑥-a Node 缺失／`--no-js`（`rc=0`）；④**未写入**：①②③⑥-b⑦（`rc=1`／`2`）；「写后 ⑥ 失败」另报『已写入；写后校验失败』：
 
 | 现象 | 原因 | 处理 |
 |---|---|---|
 | `找不到 …` / 下标越界 | `path` 写错，或那一层没这个元素 | 用 `paths` / `dump` 核对后改 `path`，**别猜** |
 | `… itemId == 'x' 有 N 个节点` | `@itemId` 重名，工具不替你猜 | 用 `paths` 给出的**原路径**（带下标），或先把该节点 `itemId` 改成唯一值 |
 | 等价比对失败 → 中止 | `value` 里有内容重建后，**规范化文本**（含键序与值类型）与原对象不一致 | 检查 `value` 是否混入异常控制字符、数字是否写成 `1.0` 这类会变形的形态；文件**没被动过** |
-| 改完 `check` 不通过 | 极少数：`value` 内含异常字符 | 恢复：`cp <file>.bak <file>`（`--backup` 写的备份），或 `git checkout -- <file>` |
+| 改完 `check` 不通过 | 极少数：`value` 内含异常字符 | 恢复：先用手里的操作前副本。`cp <file>.bak <file>` 仅在本次用了 `--backup` 时成立；`git checkout -- <file>` 会丢掉你尚未提交的其它编辑，只在确认工作区只有本次改动时用 |
 
 三点须知：
 
@@ -418,7 +414,7 @@ python <skill根>/scripts/xwl.py diffguard <改过的文件或目录> --strict  
 |---|---|
 | `0` | 成功 |
 | `1` | **被检查对象或查询结果有问题**（`check` 有 `[FAIL]`；`paths` / `sqlrefs` / `sql` / `events` 没找到目标字段 —— 即无可抽取内容、空结果判 `1`） |
-| `2` | **用法或前置条件不满足**（缺必填参数、`edit` 锚点次数不符、`new` 拒绝覆盖、读不到目标文件；**`check` 的 `--controls` 取不到控件注册表** —— 此时 ①–⑧⑩ 已照常判定，只有 ⑨ 与 configs 内联 `[js]` 未校） |
+| `2` | **用法或前置条件不满足**（缺必填参数、`edit` 锚点次数不符、`new` 拒绝覆盖、读不到目标文件；**`check` 的 `--controls` 取不到控件注册表** —— 此时 ①–⑧⑩ 已照常判定，只有 ⑨ 与 configs 内联 `[js]` 未校；**`patch`／`edit` 的写前门禁：node 调用失败（超时/崩溃）也判 `2`**） |
 
 两类**判定会随命令线宽严变化**的命令，各自三档（默认 / 收紧 / 放松）：`diffguard`（疑似压平默认只告警，
 `--strict` 判失败 rc=1、一个文件都没比成才 rc=2，非 git 仓库 / 新文件以 `[note]` 跳过）；`params`（缺来源默认只告警，`--strict` 判失败，

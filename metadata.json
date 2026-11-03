@@ -3,7 +3,7 @@
   "name_en": "webbuilder-xwl-patch",
   "displayName": "webbuilder-xwl-patch",
   "author": "yfwang0731",
-  "version": "1.7.10",
+  "version": "1.7.11",
   "schema_version": "1.0",
   "description": "WebBuilder（wb）平台 .xwl 定义文件的处理与安全编辑：结构级 patch（只给值 / 子树，工具按设计器自己的算法重建整份文件）+ 格式校验 + 相对 git 基线的压平检测。",
   "core_capabilities": [
@@ -161,6 +161,11 @@
     "references/workflow-notes-guards-maintenance.md": "evidence"
   },
   "update_history": [
+    {
+      "version": "1.7.11",
+      "date": "2026-11-03",
+      "summary": "写盘前门禁与值域门禁（patch／edit）：**无新子命令、无新参数**。写盘前用真 node 校验全部事件 JS——新增或改坏的语法错拒写、目标文件一个字节不动（rc=1）；改前就坏的既有失败标「既有」照常写入。⚠️ 行为变更：以前语法坏的 JS 会照常写盘。其余：非有限值两侧拒绝（`1e999` 这类溢出读不进；`inf`／`nan` 写不出，不再产出非法 JSON）；`patch --ops` 类型门禁（create 只收布尔、index 只收整数且排除布尔、path 必须数组且元素排除布尔，不满足 rc=2 拒写；未知字段打警告、退出码不变）；备份轮换无覆盖（.bak 已存在自动落时间戳名、撞名再 -2…-20，旧备份不再被覆盖）；edit 候选不可解析拒写；写盘失败给可读错误、rc=2，不再冒 traceback；SKILL.md 的 description 按路由字段重写为「身份／触发场景／边界」三段式（899→661 字符），触发场景锚点不变。新增输出 4 处，逐条见 CHANGELOG。"
+    },
     {
       "version": "1.7.10",
       "date": "2026-11-02",
