@@ -2075,6 +2075,13 @@ def _rotate_bak(target: str, bak: str) -> list[str]:
     last = None
     for n in range(1, 21):
         dest = base if n == 1 else "%s-%d" % (base, n)
+        # 「不覆盖」在两个平台上都成立：POSIX 的 os.rename 对已存在目标是**静默替换**
+        # （Windows 才抛 FileExistsError），只靠异常分支会把已保全的历史备份悄悄换掉
+        # （CI 实证：ubuntu 四格全红「同秒两次轮换历史不对」）。先显式判存在，
+        # Windows 的 FileExistsError 分支保留作竞态兜底。
+        if os.path.exists(dest):
+            last = "目标名已存在"
+            continue
         try:
             os.rename(bak, dest)
         except FileExistsError:
