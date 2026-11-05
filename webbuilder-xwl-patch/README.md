@@ -5,7 +5,7 @@
 处理 **WebBuilder（wb）平台 `.xwl` 定义文件**的 Agent Skill ——
 **用结构级 `patch` 改 xwl，不碰文本层。**
 面向**支持 Agent Skills 规范**的客户端（Codex / Cline / CodeBuddy 等）；WorkBuddy 同样可用 ——
-把目录放进它读取的 skill 目录即可，装法见 [`references/distribution.md`](references/distribution.md)。
+把 **`webbuilder-xwl-patch/` 运行目录**放进它读取的 skill 目录即可，装法见 [`references/distribution.md`](references/distribution.md)。
 
 `.xwl` 看起来像 JSON，但**不是严格 JSON** —— 磁盘上是「字面反斜杠 + 真实换行」的多行字符串。
 直接拿编辑器改，**第一刀就会把文件改坏**（运行时解析失败、页面白屏）。
@@ -23,6 +23,9 @@
 ```bash
 npx skills add yfwang0731/skill-webbuilder-xwl-patch --skill webbuilder-xwl-patch -g -a codex
 ```
+
+> 仓库根是**开发资产**；安装器会自动发现 `webbuilder-xwl-patch/` 子目录、只复制这一层，无需 `--full-depth`。
+> 单技能时 `--skill webbuilder-xwl-patch` 可省略。
 
 装到哪个目录取决于 `-a`，而 **CLI 的 agent 表里没有 `workbuddy`** ⇒ WorkBuddy 请**手工装**：
 把目录放到 `~/.workbuddy/skills/<name>`。另两条命令（`update`／`remove`）、「`check` 与 `update`
@@ -126,12 +129,11 @@ webbuilder-xwl-patch/
 ├── examples/                 # 可直接跑的最小示例（示例 .xwl 由 new 现场生成）
 ├── references/               # 参考材料（每份的条数与作用见 SKILL.md 首页那张索引表）
 └── scripts/
-    ├── xwl.py                # 全部子命令（纯标准库，零依赖）
-    ├── selftest.py           # 内置样本自检：python <skill根>/scripts/selftest.py
-    ├── privacy_scan.py       # 维护者发布前扫描器（本仓自身；结构面 / --patterns 外置清单面）
-    └── privacy_patterns.example.json  # **占位示例**：外置清单模板，不能当有效清单用
+    └── xwl.py                # 全部子命令（纯标准库，零依赖）
 ```
 
+> `scripts/selftest.py`、`scripts/privacy_scan.py`、`scripts/privacy_patterns.example.json`、`tests/` 只存在于
+> **源码仓根/开发树**，不属于安装副本；维护者自检见 [`references/distribution.md`](references/distribution.md)。
 > 各文件的**条数/数字不在这里重复**（两处维护必然漂移）—— 每份文件自己的开头写着它的条数，
 > `SKILL.md` 首页那张表是它们的索引。
 

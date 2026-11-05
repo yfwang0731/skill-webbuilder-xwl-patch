@@ -42,8 +42,8 @@ jobs:
 
       - name: Smoke test CLI
         run: |
-          python scripts/xwl.py --help
-          python scripts/xwl.py folders --help
+          python webbuilder-xwl-patch/scripts/xwl.py --help
+          python webbuilder-xwl-patch/scripts/xwl.py folders --help
 
       - name: Privacy scan selftest（扫描器自身行为断言）
         run: python scripts/privacy_scan.py --selftest
@@ -213,7 +213,7 @@ jobs:
           import hashlib, os, sys
 
           HOME = os.environ["HOME"]
-          SRC = os.path.join(os.environ["GITHUB_WORKSPACE"], "src")
+          SRC = os.path.join(os.environ["GITHUB_WORKSPACE"], "src", "webbuilder-xwl-patch")
           TARGETS = {"codex": os.path.join(HOME, ".agents", "skills", "webbuilder-xwl-patch"),
                      "codebuddy": os.path.join(HOME, ".codebuddy", "skills", "webbuilder-xwl-patch")}
           # 安装器按设计**不拷** metadata.json（copyDirectory 的排除清单）⇒ 比对必须排除它，

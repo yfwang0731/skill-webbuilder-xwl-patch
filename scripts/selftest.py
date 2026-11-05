@@ -90,7 +90,65 @@ import tokenize
 import traceback
 
 HERE = os.path.dirname(os.path.abspath(__file__))
-_spec = importlib.util.spec_from_file_location("xwl", os.path.join(HERE, "xwl.py"))
+# 运行面（skill）根：分发目录重排后，SKILL.md/metadata/CHANGELOG/references/examples/scripts/xwl.py
+# 都在 `<repo>/webbuilder-xwl-patch/`；`HERE` 仍是开发树 `scripts/`（自扫描与 tests 基线仍用它）。
+# 可用 XWL_SKILL_ROOT 覆盖（如隔离安装/测试用）。
+SKILL_ROOT = os.environ.get(
+    "XWL_SKILL_ROOT",
+    os.path.join(os.path.dirname(HERE), "webbuilder-xwl-patch"),
+)
+
+_BASELINE_PATH = os.path.join(os.path.dirname(HERE), "tests", "baseline.json")
+
+
+def _load_baseline():
+    try:
+        with io.open(_BASELINE_PATH, encoding="utf-8") as _f:
+            _d = json.load(_f)
+        return _d if isinstance(_d, dict) else {}
+    except Exception:
+        return {}
+
+
+def _baseline_read():
+    """读独立基线，返回 `(data_or_None, err)`；`err` ∈ `None` / `"missing"` / `"badjson"` / `"notdict"`。
+
+    与 `_load_baseline()` 分开：`_load_baseline()` 是**宽容读**（老用法兜底 `{}`）；
+    基线守卫（块清单/文档守卫多重集）**必须用本函数** —— 基线缺失 / 坏 JSON / 非对象时**显式失败**，
+    ⛔ 不回退当前源码自举当通过（序5／ITEM-1210）。
+    """
+    if not os.path.isfile(_BASELINE_PATH):
+        return None, "missing"
+    try:
+        with io.open(_BASELINE_PATH, encoding="utf-8") as _f:
+            _d = json.load(_f)
+    except Exception:
+        return None, "badjson"
+    if not isinstance(_d, dict):
+        return None, "notdict"
+    return _d, None
+
+
+def _baseline_err_text(err):
+    return {
+        "missing": "独立基线缺失（%s 不存在）" % _BASELINE_PATH,
+        "badjson": "独立基线不是合法 JSON（%s）" % _BASELINE_PATH,
+        "notdict": "独立基线顶层不是对象（%s）" % _BASELINE_PATH,
+    }.get(err, "独立基线不可用（%s）" % _BASELINE_PATH)
+
+
+
+_CAP_FN_NAMES = set()
+
+
+def _cap(fn):
+    _CAP_FN_NAMES.add(fn.__name__)
+    return fn
+
+
+def _cap_fns():
+    return tuple(sorted(_CAP_FN_NAMES))
+_spec = importlib.util.spec_from_file_location("xwl", os.path.join(SKILL_ROOT, "scripts", "xwl.py"))
 xwl = importlib.util.module_from_spec(_spec)
 _spec.loader.exec_module(xwl)  # type: ignore[union-attr]
 
@@ -212,7 +270,7 @@ def _run_cli(argv: list) -> tuple:
     """
     try:
         _pr = _cap_run(
-            [sys.executable, "-B", os.path.join(HERE, "xwl.py"), *argv], timeout=120)
+            [sys.executable, "-B", os.path.join(SKILL_ROOT, "scripts", "xwl.py"), *argv], timeout=120)
         return _pr.returncode, (_pr.stdout or ""), (_pr.stderr or "")
     except Exception as exc:      # noqa: BLE001 —— 连 CLI 都起不来也要落成断言，不许炸块
         return None, "", "（CLI 起不来）%s: %s" % (type(exc).__name__, exc)
@@ -227,7 +285,7 @@ def _run_cli_env(argv: list, env_extra: dict) -> tuple:
     _env.update({k: str(v) for k, v in env_extra.items()})
     try:
         _pr = _cap_run(
-            [sys.executable, "-B", os.path.join(HERE, "xwl.py"), *argv],
+            [sys.executable, "-B", os.path.join(SKILL_ROOT, "scripts", "xwl.py"), *argv],
             timeout=120, env=_env)
         return _pr.returncode, (_pr.stdout or ""), (_pr.stderr or "")
     except Exception as exc:      # noqa: BLE001 —— 连 CLI 都起不来也要落成断言，不许炸块
@@ -270,6 +328,7 @@ def _win_path(p: str, api: str):
     return buf.value or None
 
 
+@_cap
 def _check_basics(tmp, node, failures, write) -> None:
     """前置样本 + check 破坏用例 + edit + expand + patch（第 0~7 组）"""
 
@@ -585,6 +644,7 @@ def _check_basics(tmp, node, failures, write) -> None:
     _check_basics_tail(tmp, failures)
 
 
+@_cap
 def _check_basics_tail(tmp, failures) -> None:
     """`_check_basics` 的尾部（有界下沉，判据文本逐字未改）。
 
@@ -600,7 +660,7 @@ def _check_basics_tail(tmp, failures) -> None:
     #    那样"另外两个入口仍在甩 Python codec 原文"会被放过（实测过）。
     _k14: dict = {}
     for _sub in ("check", "dump", "params", "itemids"):
-        _r = _cap_run([sys.executable, os.path.join(HERE, "xwl.py"), _sub, _gbk], timeout=120)
+        _r = _cap_run([sys.executable, os.path.join(SKILL_ROOT, "scripts", "xwl.py"), _sub, _gbk], timeout=120)
         _k14[_sub] = (_r.stdout or "") + (_r.stderr or "")
     _k14_bad = [k for k, v in _k14.items()
                 if "不是 UTF-8 文本" not in v or "工具不猜编码" not in v]
@@ -666,7 +726,7 @@ def _check_basics_tail(tmp, failures) -> None:
     _b2 = os.path.join(tmp, "k15nul.xwl")
     with open(_b2, "wb") as _f:
         _f.write(b'{"x":"a\x00b"}')
-    _r2 = _cap_run([sys.executable, os.path.join(HERE, "xwl.py"), "check",
+    _r2 = _cap_run([sys.executable, os.path.join(SKILL_ROOT, "scripts", "xwl.py"), "check",
                     _b2, "--no-js"], timeout=120)
     _o2 = (_r2.stdout or "") + (_r2.stderr or "")
     if _r2.returncode != 0 or "裸 NUL" not in _o2:
@@ -686,7 +746,7 @@ def _check_basics_tail(tmp, failures) -> None:
                  '"children":[],"type":"button"},{"configs":{"itemId":"dup","text":"b"},'
                  '"expanded":false,"children":[],"type":"button"}],"type":"panel"}],'
                  '"roles":{},"title":"t","iconCls":"","inframe":false,"pageLink":""}')
-    _r3 = _cap_run([sys.executable, os.path.join(HERE, "xwl.py"), "itemids",
+    _r3 = _cap_run([sys.executable, os.path.join(SKILL_ROOT, "scripts", "xwl.py"), "itemids",
                     _a1, "--name", "dup"], timeout=120)
     _ops = [l.strip() for l in (_r3.stdout or "").splitlines() if '{"op":"set"' in l]
     try:
@@ -705,7 +765,7 @@ def _check_basics_tail(tmp, failures) -> None:
     _a2 = os.path.join(tmp, "a2nan.xwl")
     with open(_a2, "w", encoding="utf-8", newline="") as _f:
         _f.write('{"n": NaN}')
-    _r4 = _cap_run([sys.executable, os.path.join(HERE, "xwl.py"), "check",
+    _r4 = _cap_run([sys.executable, os.path.join(SKILL_ROOT, "scripts", "xwl.py"), "check",
                     _a2, "--no-js"], timeout=120)
     _o4 = (_r4.stdout or "") + (_r4.stderr or "")
     if _r4.returncode != 1 or "④" not in _o4:
@@ -722,7 +782,7 @@ def _check_basics_tail(tmp, failures) -> None:
     _a3 = os.path.join(tmp, "a3negzero.xwl")
     with open(_a3, "w", encoding="utf-8", newline="") as _f:
         _f.write('{"n": -0.0}')
-    _r5 = _cap_run([sys.executable, os.path.join(HERE, "xwl.py"), "expand", _a3], timeout=120)
+    _r5 = _cap_run([sys.executable, os.path.join(SKILL_ROOT, "scripts", "xwl.py"), "expand", _a3], timeout=120)
     with open(_a3, "rb") as _f:
         _a3_got = _f.read()
     _a3_want = _GOLDEN_NEGZERO.encode("utf-8")
@@ -855,7 +915,7 @@ def _check_params_paths(tmp, node, failures, write) -> None:
     # ---- 判据依据续：`sys.` 前缀的来源与两个入口的寻址同源 ----
     # 起因：`sys.` 曾硬编码（工程自定义命名空间不认）；`paths` 曾按"能嵌套的整棵树"遍历，
     #   会给出 `patch` 的 `@itemId` 解不开的路径 —— 两个入口必须用**同一套**寻址语义。
-    _xwlsrc = open(os.path.join(HERE, "xwl.py"), encoding="utf-8").read()
+    _xwlsrc = open(os.path.join(SKILL_ROOT, "scripts", "xwl.py"), encoding="utf-8").read()
     _cp_body = _xwlsrc.split("def cmd_paths(")[1].split("\ndef ")[0]
     _fa_body = _xwlsrc.split("def _find_all_by_itemid(")[1].split("\ndef ")[0]
     _k3wb = os.path.join(tmp, "k3proj", "src", "main", "webapp", "wb")
@@ -1142,6 +1202,120 @@ def _check_itemids(tmp, node, failures, write) -> None:
         failures.append("itemids --name --json 的输出不是 JSON: %s | %r" % (exc, out[:80]))
 
 
+@_cap
+def _s1s3_named_cases(tmp) -> list:
+    """序1-3 具名正反例（定向矩阵）：返回失败条目列表（空=全绿）。
+
+    覆盖：序1 请求级 params 归属（A的load/自身params不为B背书、B自身params/out直调ok、动态仅未知、
+    缺参与未知并存、占位与builtin豁免）；序2 sqlrefs 真实供给识别（注释/字符串/其他接收者不算、
+    真实与空白调用算、动态=可能提供）；序3 判空与逐项诊断（无适用内容rc1、select 1 rc0、
+    serverScript含禁止{#..#}逐项打印、加载失败rc2）。
+    """
+    fail: list[str] = []
+    d = os.path.join(tmp, "s1s3")
+    os.makedirs(d, exist_ok=True)
+
+    def _w(path, obj):
+        with open(path, "w", encoding="utf-8", newline="") as fh:
+            fh.write(xwl.dumps_designer(obj, 1, CRLF))
+
+    def _carrier(name, sql="select 1", ss="var x='';\nrequest.setAttribute('sql', x);"):
+        dp = {"configs": {"itemId": "dp"}, "type": "dataprovider", "expanded": False, "children": []}
+        if sql is not None:
+            dp["configs"]["sql"] = sql
+        p = os.path.join(d, name + ".xwl")
+        _w(p, {"title": "c", "children": [{"configs": {"itemId": "mod", "serverScript": ss},
+                                           "type": "module", "expanded": False, "children": [dp]}]})
+        return p
+
+    def _page(name, stores, events=None):
+        tbar = [{"configs": {"itemId": "kw"}, "type": "text", "expanded": False, "children": []}]
+        gc = []
+        for st in stores:
+            cfg = {"itemId": st["itemId"]}
+            for k in ("url", "params"):
+                if st.get(k) is not None:
+                    cfg[k] = st[k]
+            gc.append({"configs": cfg, "type": "store", "expanded": False, "children": []})
+        btns = [{"configs": {"itemId": iid}, "type": "button", "expanded": False, "children": [],
+                 "events": {"click": js}} for iid, js in (events or {}).items()]
+        p = os.path.join(d, name + ".xwl")
+        _w(p, {"title": "page", "children": [
+            {"configs": {"itemId": "viewport"}, "type": "viewport", "expanded": False, "children": [
+                {"configs": {"itemId": "tbar"}, "type": "toolbar", "expanded": False, "children": tbar},
+                {"configs": {"itemId": "grid1"}, "type": "grid", "expanded": False, "children": gc},
+            ] + btns}]})
+        return p
+
+    _carrier("bSql", sql="select * from tb where id={?NEED?}")
+    _carrier("aSql", sql="select 1")
+
+    # 序1-1：A显式load供给不为B背书；默认rc0；strict rc1
+    p = _page("p1", [{"itemId": "storeA", "url": "m?xwl=aSql"}, {"itemId": "storeB", "url": "m?xwl=bSql"}],
+              {"bA": "app.storeA.load({ params: { NEED: app.kw.getValue() } });"})
+    rc, o = _run(xwl.cmd_params, file=p, module_root=d, controls=None, list_fields=False)
+    if rc != 0 or "缺参" not in o or "NEED" not in o:
+        fail.append("序1-1 A显式load不为B背书 默认(rc=%r)" % rc)
+    rc, o = _run(xwl.cmd_params, file=p, module_root=d, controls=None, list_fields=False, strict=True)
+    if rc != 1 or "确缺参" not in o:
+        fail.append("序1-1 A显式load不为B背书 strict(rc=%r)" % rc)
+
+    # 序1-2：B自身params供给 ⇒ strict rc0
+    p = _page("p2", [{"itemId": "storeB", "url": "m?xwl=bSql", "params": "{NEED: app.kw.getValue()}"}])
+    rc, o = _run(xwl.cmd_params, file=p, module_root=d, controls=None, list_fields=False, strict=True)
+    if rc != 0:
+        fail.append("序1-2 B自身params供NEED strict(rc=%r)" % rc)
+
+    # 序1-3：动态目标 ⇒ 仅未知 strict rc2
+    p = _page("p3", [{"itemId": "storeB", "url": "m?xwl=bSql"}],
+              {"b1": "Wb.request({ url: dynUrl, params: { NEED: 1 } });"})
+    rc, o = _run(xwl.cmd_params, file=p, module_root=d, controls=None, list_fields=False, strict=True)
+    if rc != 2 or "未核对" not in o:
+        fail.append("序1-3 动态目标仅未知 strict(rc=%r)" % rc)
+
+    # 序2：注释唯一供给 ⇒ rc1；其他接收者 ⇒ rc1；真实 ⇒ rc0；空白 ⇒ rc0；动态 ⇒ 可能提供
+    for nm, ss, want in (
+        ("c", "// request.setAttribute('x', 1);\nvar a='';", 1),
+        ("o", "foo.setAttribute('x', 1);", 1),
+        ("r", "request.setAttribute('x', 1);", 0),
+        ("w", "request.setAttribute ('x', 1);", 0),
+    ):
+        p = _carrier("sr_" + nm, sql="select {#x#} from t", ss=ss)
+        rc, o = _run(xwl.cmd_sqlrefs, file=p)
+        if rc != want:
+            fail.append("序2-供给[%s] rc=%r(应%r)" % (nm, rc, want))
+    p = _carrier("sr_dyn", sql="select {#x#} from t", ss="request.setAttribute(name, 1);")
+    rc, o = _run(xwl.cmd_sqlrefs, file=p)
+    if rc != 1 or "可能提供" not in o:
+        fail.append("序2-动态可能提供 rc=%r" % rc)
+
+    # 序3：无适用内容 rc1；空dataprovider rc1；select 1 rc0；serverScript含禁止逐项 rc1；加载失败 rc2
+    p = os.path.join(d, "e0.xwl"); _w(p, {"title": "e", "children": []})
+    rc, o = _run(xwl.cmd_sqlrefs, file=p)
+    if rc != 1 or "无适用检查内容" not in o:
+        fail.append("序3-无适用内容 rc=%r" % rc)
+    p = os.path.join(d, "e1.xwl"); _w(p, {"title": "e", "children": [
+        {"configs": {"itemId": "d", "sql": "select 1"}, "type": "dataprovider",
+         "expanded": False, "children": []}]})
+    rc, o = _run(xwl.cmd_sqlrefs, file=p)
+    if rc != 0:
+        fail.append("序3-select1 rc=%r(应0)" % rc)
+    p = os.path.join(d, "e2.xwl"); _w(p, {"title": "e", "children": [
+        {"configs": {"itemId": "m", "serverScript": "var a='{#bad#}';"}, "type": "module",
+         "expanded": False, "children": []}]})
+    rc, o = _run(xwl.cmd_sqlrefs, file=p)
+    if rc != 1 or "{#…#}" not in o:
+        fail.append("序3-serverScript禁止引用逐项 rc=%r" % rc)
+    p = os.path.join(d, "e3.xwl")
+    with open(p, "w", encoding="utf-8", newline="") as fh:
+        fh.write("{not json")
+    rc, o = _run(xwl.cmd_sqlrefs, file=p)
+    if rc != 2:
+        fail.append("序3-加载失败 rc=%r(应2)" % rc)
+    return fail
+
+
+@_cap
 def _check_subcommands(tmp, node, failures, write) -> None:
     """子命令冒烟 paths/sqlrefs/params + new + folders + paths 原路径 + schema 骨架（第 12~16 组）"""
 
@@ -1166,16 +1340,18 @@ def _check_subcommands(tmp, node, failures, write) -> None:
         f.write(xwl.dumps_designer(page_obj, 1, CRLF))
 
     smoke_fail = []
-    for label, fn, kw, want in (
-        ("paths",   xwl.cmd_paths,   {"file": page_path}, "原路径"),
-        ("sqlrefs", xwl.cmd_sqlrefs, {"file": page_path}, ""),
+    for label, fn, kw, want, want_rc in (
+        ("paths",   xwl.cmd_paths,   {"file": page_path}, "原路径", 0),
+        # 序3／ITEM-1192：本夹具只有 store url、无 module/dataprovider ⇒ **无适用检查内容** ⇒ rc=1
+        #   （公开退出码表「空结果判 1」真实落在此断言；want="" 且不断言 rc 时契约无人守）。
+        ("sqlrefs", xwl.cmd_sqlrefs, {"file": page_path}, "无适用检查内容", 1),
         ("params",  xwl.cmd_params,  {"file": page_path, "module_root": tmp,
-                                      "controls": None, "list_fields": False}, "kw"),
+                                      "controls": None, "list_fields": False}, "kw", 0),
         ("itemids", xwl.cmd_itemids, {"file": page_path, "name": None, "dups_only": True,
                                       "suggest": False, "fix": "auto", "controls": None,
-                                      "json": False}, "重名组"),
+                                      "json": False}, "重名组", 0),
         # dump 曾是 14 个子命令里唯一没被冒烟覆盖的（评审发现）
-        ("dump",    xwl.cmd_dump,    {"file": page_path}, "itemId"),
+        ("dump",    xwl.cmd_dump,    {"file": page_path}, "itemId", 0),
     ):
         try:
             _code, out = _run(fn, **kw)
@@ -1184,10 +1360,20 @@ def _check_subcommands(tmp, node, failures, write) -> None:
             continue
         if want and want not in out:
             smoke_fail.append("%s 输出里没有 %r" % (label, want))
+        if want_rc is not None and _code != want_rc:
+            smoke_fail.append("%s rc=%r（应 %r）" % (label, _code, want_rc))
     if smoke_fail:
         failures.extend(smoke_fail)
     else:
-        print("[ok]  子命令冒烟：paths / sqlrefs / params / itemids 均可直接调用")
+        print("[ok]  子命令冒烟：paths / sqlrefs / params / itemids 均可直接调用（含真实 rc 断言）")
+
+    # ---- 12c. 序1-3 具名正反例（请求级归属 / 真实供给识别 / 判空与逐项诊断）----
+    #   定向负例：改坏判据即可被这些断言检出（旧全局 provided、裸 setAttribute 正则、空结果 rc）。
+    _s13_fail = _s1s3_named_cases(tmp)
+    if _s13_fail:
+        failures.extend(_s13_fail)
+    else:
+        print("[ok]  序1-3 具名正反例：请求级归属 / 真实供给识别 / 判空与逐项诊断（定向矩阵）")
 
     # ---- 12b. sql / events / dump 的**命令级**断言（原来 sql/events 无任何断言、dump 仅冒烟）----
     # 起因（仪表审计实测三例"全绿但行为已坏"）：判据收紧 ⇒ `sql` 漏抽 `totalSql`（`[1/2]`→`[1/1]`）；
@@ -1280,6 +1466,7 @@ def _block_chain_fails() -> list[str]:
     return _out
 
 
+@_cap
 def _check_events_and_expand(tmp, failures) -> None:
     """`events` 落点/命名 ＋ `expand --backup` ＋ `--outdir` 前置错误（12c/12d/12e）。
 
@@ -1476,7 +1663,7 @@ def _check_events_and_expand(tmp, failures) -> None:
         except Exception as _exc:      # noqa: BLE001
             ev_fail.append("跨盘校验抛了非 XwlWriteError 的异常：%s: %s" % (type(_exc).__name__, _exc))
     # 调用点必须**在**：清洗已挡住所有可达输入 ⇒ 行为面造不出红，只能守形状（与 `_fn_cap_check` 同族）。
-    _ce_src = io.open(os.path.join(HERE, "xwl.py"), encoding="utf-8").read()
+    _ce_src = io.open(os.path.join(SKILL_ROOT, "scripts", "xwl.py"), encoding="utf-8").read()
     _ce_fn = [n for n in _ast.parse(_ce_src).body
               if isinstance(n, _ast.FunctionDef) and n.name == "cmd_events"]
     _ce_has = any(
@@ -1625,6 +1812,7 @@ def _check_events_and_expand(tmp, failures) -> None:
     _check_subcommands_tail(tmp, failures)
 
 
+@_cap
 def _check_subcommands_tail(tmp, failures) -> None:
     """`_check_subcommands` 的尾段（有界下沉，判据文本逐字未改）。
 
@@ -1830,7 +2018,7 @@ def _check_subcommands_tail(tmp, failures) -> None:
     #     文档一致性职责不同类；混在一个函数里会让两边职责互相渗透、行数也一路涨。
     #   ⛔ 块名一个都没改（块基线照旧咬得住它们）；⛔ 判据一条都没动（文本逐字搬过来）。
     #   `doc_fail` 在这里是**局部同名清单**（搬过来的文本一字未改）⇒ 末端并进 `failures`。
-    _root_sub = os.path.dirname(HERE)
+    _root_sub = SKILL_ROOT
     doc_fail: list[str] = []
     # `17j-10` 用的「误导版措辞」字面量：原来定义在 `_check_docs` 里，搬过来要**自带一份**。
     # ⛔ 保持这种**拼接**写法（本文件也在扫描面内，整词直写会自命中）。
@@ -1948,6 +2136,7 @@ def _check_new_guards(tmp, node, failures, write) -> None:
     _ng_platform(tmp, node, failures, write)
 
 
+@_cap
 def _ng_cli_readonly(tmp, node, failures, write) -> None:
     """① `--strict`／② `--upstream`／③ `folders` 结论行 —— **只读命令的行为面**。
 
@@ -2130,6 +2319,7 @@ def _ng_cli_readonly(tmp, node, failures, write) -> None:
               "不含「未登记」（未登记只在明细）")
 
 
+@_cap
 def _ng_check_controls(tmp, node, failures, write) -> None:
     """④ `check --controls`（⑨／⑥-ext／⑩／拒写归因）／⑤ ⑥-ext 行序确定 —— **`check` 的开关面**。
 
@@ -2513,6 +2703,7 @@ def _ng_check_controls(tmp, node, failures, write) -> None:
             print("[ok]  ⑤ `#71` ⑥-ext：同节点 ≥2 个坏 `[js]` 键时，换 5 个 `PYTHONHASHSEED` 输出规范化后逐字节一致")
 
 
+@_cap
 def _ng_contract_and_unit(tmp, node, failures, write) -> None:
     """⑬ `_OPS_AUTH` 五处清单一致／⑭ `_js_err_head` 单元级 —— **契约与单元面**。
 
@@ -2525,7 +2716,7 @@ def _ng_contract_and_unit(tmp, node, failures, write) -> None:
     #     ① `--ops` help 的清单；② epilog 的「<N> 种 op」计数；③ 3 份文档（`SKILL.md` 有 2 处）。
     _c5_fail: list[str] = []
     _CN = {"一": 1, "二": 2, "三": 3, "四": 4, "五": 5, "六": 6, "七": 7, "八": 8, "九": 9, "十": 10}
-    _repo = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))   # `scripts/` 的上一级 = 仓根
+    _repo = SKILL_ROOT   # 运行面文档（README/SKILL/references）在 SKILL_ROOT 下
 
     def _ops_lists(text):
         """抽「反引号包裹的 op 名、以 ` / ` 相连」的序列，只留含 `insertKey` 的（＝ op 清单）。"""
@@ -2598,6 +2789,7 @@ def _ng_contract_and_unit(tmp, node, failures, write) -> None:
 
 
 
+@_cap
 def _ng_write_overwrite(tmp, node, failures, write) -> None:
     """⑥ `#72`：`patch` 覆盖**已存在的容器键**且新值是标量 ⇒ 必须打 `[warn]`（rc 不变）。
 
@@ -2668,6 +2860,7 @@ def _ng_write_overwrite(tmp, node, failures, write) -> None:
               "标量→标量 与 容器→容器改键均静默")
 
 
+@_cap
 def _ng_params_defaults(tmp, node, failures, write) -> None:
     """⑦–⑫ —— `params` 的剥注释／文案分句／`--upstream` 目标参数化／`--strict` 悬空（默认面 ＋ 开关面）。
 
@@ -3007,6 +3200,7 @@ def _ng_params_defaults(tmp, node, failures, write) -> None:
               "`__MODULE__` 三态 ⇒ 段内占位按占位 `[note]`（rc 0）／真悬空仍 `[warn]`（rc 1）／真存在 `resolved`")
 
 
+@_cap
 def _ng_platform(tmp, node, failures, write) -> None:
     """⑮ `#75` 模块根／⑯ `#74` 坏 `--controls`／⑰ `#80` 分组名 —— **平台面**（⑮ 的夹具被⑯⑰ 复用）。
 
@@ -3534,7 +3728,7 @@ def _doc_names(root):
     return list(_ROOTS_MD) + [_rel for _rel, _fp in _refs_md(root)]
 
 
-doc_names = _doc_names(os.path.dirname(HERE))
+doc_names = _doc_names(SKILL_ROOT)
 
 
 # ---- 本轮仪表审计整改（本版段内）所需的模块级常量与助手 ----
@@ -3555,13 +3749,10 @@ doc_names = _doc_names(os.path.dirname(HERE))
 #   📌 **有意增删守卫块时如何更新基线**：改完块后跑下面这条量一次（只量不改），把结果抄回本清单：
 #      python -B -c "import re;print([re.match(r'^\s*# (17[^\s：:（(]*)',l).group(1) for l in open('scripts/selftest.py',encoding='utf-8') if re.match(r'^\s*# 17[a-z]',l)])"
 #      —— **仅在"块名确因有意增删而变"时改**；改完跑 `python -B scripts/selftest.py` 复核绿。
-_DOC_GUARD_BLOCK_BASELINE = (
-    "17a", "17b", "17c", "17c-2", "17d", "17e", "17f", "17g", "17h", "17i",
-    "17w", "17x", "17t", "17k", "17j", "17j-3", "17j-4", "17j-7", "17j-8",
-    "17j-9", "17j-10", "17j-11", "17j-6", "17j-12", "17j-13", "17j-14", "17l", "17m",
-    "17n", "17o", "17p", "17q", "17q-自洽", "17u", "17r", "17v",
-)
-_DOC_GUARD_BLOCK_BASE = collections.Counter(_DOC_GUARD_BLOCK_BASELINE)
+_DOC_GUARD_BLOCK_BASE = collections.Counter()
+# 基线读取失败原因（None = 正常）。非 None 时 `_doc_guard_block_mismatch()` **显式判红**，
+# ⛔ 不回退到 `_doc_guard_block_ids()`（当前源码自举）—— 否则基线坏掉时删块也判绿（序5）。
+_DOC_GUARD_BASE_ERR = None
 
 
 def _doc_guard_block_ids():
@@ -3577,6 +3768,25 @@ def _doc_guard_block_ids():
         if _m:
             _c[_m.group(1)] += 1
     return _c
+
+
+def _doc_guard_block_base():
+    global _DOC_GUARD_BASE_ERR
+    _data, _err = _baseline_read()
+    if _err is not None:
+        _DOC_GUARD_BASE_ERR = _err
+        return collections.Counter()
+    _b = _data.get("doc_guard_blocks")
+    if not isinstance(_b, dict) or not _b:
+        _DOC_GUARD_BASE_ERR = "empty:doc_guard_blocks"
+        return collections.Counter()
+    if not all(isinstance(k, str) and isinstance(v, int) for k, v in _b.items()):
+        _DOC_GUARD_BASE_ERR = "badshape:doc_guard_blocks"
+        return collections.Counter()
+    return collections.Counter(_b)
+
+
+_DOC_GUARD_BLOCK_BASE = _doc_guard_block_base()
 
 
 def _blk_declared(_k, _txt) -> bool:
@@ -3595,6 +3805,10 @@ def _doc_guard_block_mismatch():
     放在函数体外（写法同上）：这段若留在 `_check_docs` 函数体里会把它推近 1300 行阈值。
     """
     _ids = _doc_guard_block_ids()
+    if _DOC_GUARD_BASE_ERR is not None:
+        return ("文档守卫块基线**不可用**（%s）⇒ 无法比对，判红（⛔ 不回退当前源码自举当通过）。"
+                "请修复/重建 `%s`（维护者用 `--write-baselines` 显式生成）。"
+                % (_DOC_GUARD_BASE_ERR, _BASELINE_PATH))
     if _ids is None:
         return "文档守卫块清单跑不起来（读不出 selftest.py）—— 本项无法判定，判红"
     _miss = sorted(k for k in _DOC_GUARD_BLOCK_BASE if _ids.get(k, 0) < _DOC_GUARD_BLOCK_BASE[k])
@@ -3610,7 +3824,7 @@ def _doc_guard_block_mismatch():
     _new = sorted(k for k in _ids if k not in _DOC_GUARD_BLOCK_BASE)
     if _new:
         try:
-            with open(os.path.join(os.path.dirname(HERE), "CHANGELOG.md"),
+            with open(os.path.join(SKILL_ROOT, "CHANGELOG.md"),
                       encoding="utf-8", newline="") as _cf:
                 _cl_txt = _cf.read()
         except OSError as _exc:
@@ -4030,6 +4244,7 @@ _TOC_REQUIRED = frozenset({
 #     自成一段（跨文件节号指针 ＋ 目录顺序 ＋ 围栏输出文案），且只依赖 `docs`／`doc_fail`／
 #     `real_out` 三个入参 ＋ 模块级常量与助手 ⇒ 是"漂移为零"的切法（函数体内只留一行调用）。
 #   ⛔ 不许在函数体内再内联回去（那条路会让余量立刻回到危险区）。
+@_cap
 def _doc_guard_xfile_pt(docs, doc_fail, real_out):
     """17j-12 跨文件节号指针可解析 ＋ 17j-13 目录顺序一致 ＋ 17j-14 围栏输出文案符实。"""
     # 17j-12 跨文件节号指针必须指向**真实存在**的小节（③ 引用漂移）。
@@ -4564,14 +4779,25 @@ def _doc_prompt_cmd_probe(root):
 _SRC_REF_FILES = ("scripts/xwl.py", "scripts/selftest.py")
 
 
+def _src_ref_abspath(rel: str) -> str:
+    """源码行号引用守卫的**按文件分别定根**：`xwl.py` 在运行面 `SKILL_ROOT/scripts/`，
+    `selftest.py` 仍在开发树 `HERE`（分发目录重排后两者不同根，⛔ 不能共用一个 root）。"""
+    if rel == "scripts/xwl.py":
+        return os.path.join(SKILL_ROOT, "scripts", "xwl.py")
+    return os.path.join(HERE, "selftest.py")
+
+
 def _src_line_ref_fails(root: str) -> list[str]:
-    """校验 `scripts/` 下两个文件的源码行号引用是否仍指得准（读不出 ⇒ 判红，不算「没命中」）。"""
+    """校验 `scripts/` 下两个文件的源码行号引用是否仍指得准（读不出 ⇒ 判红，不算「没命中」）。
+
+    `root` 保留为签名参数（既有调用方传技能根），实际路径由 `_src_ref_abspath` **按文件**定根。
+    """
     _f1 = re.compile(r"`([^`\n]{1,80})`\s*[（(]\s*`:(\d+)`")
     _f2 = re.compile(r"([A-Za-z0-9_./\\-]+\.py):(\d+)")
     _src: dict = {}
     for _r in _SRC_REF_FILES:
         try:
-            with open(os.path.join(root, _r.replace("/", os.sep)),
+            with open(_src_ref_abspath(_r),
                       encoding="utf-8", newline="") as _fh:
                 _src[_r] = _fh.read().splitlines()
         except OSError as _exc:
@@ -4673,7 +4899,7 @@ def _entry_form_problems(root: str) -> list:
     _bad = []
     # ① 静态面：源码里任何 `python [-B] <前缀>scripts/xwl.py` 都必须带前缀（裸形态即旧文案回潮）
     try:
-        with io.open(os.path.join(HERE, "xwl.py"), encoding="utf-8") as _fh:
+        with io.open(os.path.join(SKILL_ROOT, "scripts", "xwl.py"), encoding="utf-8") as _fh:
             _src = _fh.read()
     except OSError as _exc:
         _bad.append("入口形态：读不出 scripts/xwl.py（%s）—— 报错，不算「没命中」" % _exc)
@@ -4766,6 +4992,7 @@ def _desc_block(fm_text: str) -> str:
     return ""
 
 
+@_cap
 def _docs_contract(_S) -> None:
     """文档契约：该有的句子在，不该有的一句都不能有（命中按**子串出现次数**算）。
 
@@ -4820,7 +5047,7 @@ def _docs_contract(_S) -> None:
     # ⚠️ 这个针**拼接**出来：整词直写会把自己算进 selftest.py 的命中里（自命中）。
     _sole = "唯一能" + "主动"
     _zero("SKILL.md", _sole, "独占式表述已被裁定不用")
-    _st_path = os.path.join(root, "scripts", "selftest.py")
+    _st_path = os.path.join(HERE, "selftest.py")   # 开发树自扫描（运行面无 selftest.py）
     try:
         with open(_st_path, encoding="utf-8", newline="") as _fh:
             _st_src = _fh.read()
@@ -4871,6 +5098,7 @@ def _docs_contract(_S) -> None:
               "（含 frontmatter 余量、description 的触发段与边界句）")
 
 
+@_cap
 def _check_docs(tmp, node, failures, write) -> None:
     """文档一致性守卫（跨文件）：重复表格 / 引用可解析 / 格式 / 自称数字 / 索引与节号（第 17~18 组）"""
     # 薄编排器：只建共享状态并依次调四段（⛔ 别往这里加判据 —— 加了就没有行数上限保护了）。
@@ -4897,6 +5125,7 @@ def _check_docs(tmp, node, failures, write) -> None:
     _docs_tail_scaffold(_S)
 
 
+@_cap
 def _docs_xfile_consistency(_S) -> None:
     """`_check_docs` 的第 1 段（机械切分，判据文本逐字未改）。
 
@@ -4907,7 +5136,7 @@ def _docs_xfile_consistency(_S) -> None:
     # ---- 17. 文档一致性守卫（跨文件）----
     # 这几类缺陷人眼复核必漏（实测：一轮评审发现的 4 个缺陷里 3 个是"改了这处忘了那处"），所以机械扫。
     doc_fail: list[str] = []
-    root = os.path.dirname(HERE)
+    root = SKILL_ROOT
     # 扫描面清单已**移出函数体**（#15 有界下沉）⇒ 见模块级常量 `doc_names`（本文件 `_check_docs` 之前）。
     docs: dict = {}
     for nm in doc_names:
@@ -5021,7 +5250,7 @@ def _docs_xfile_consistency(_S) -> None:
                                         % (nm, i, s))
                 elif not generic.match(s):
                     doc_fail.append("%s:%d 出现单段 `.xwl` 名 `%s`（不是通用示例名）" % (nm, i, s))
-    with open(os.path.join(HERE, "xwl.py"), "r", encoding="utf-8") as fh:
+    with open(os.path.join(SKILL_ROOT, "scripts", "xwl.py"), "r", encoding="utf-8") as fh:
         for i, l in enumerate(fh.read().splitlines(), 1):
             for m in mref.finditer(l):
                 g = m.group(1)
@@ -5182,7 +5411,7 @@ def _docs_xfile_consistency(_S) -> None:
     #   ⛔ **逐句式登记**，不是"整个文件只要有这个词就算"：下面每条形态都写清要匹配的句子，
     #     且**逐处 occurrence 必须被某条形态覆盖**（未被覆盖的 occurrence ⇒ 判红，逼登记）。
     #   数值侧**从代码取**（`checks = {…}` 的集合长度），⛔ 不在这里写死 9。
-    with open(os.path.join(HERE, "xwl.py"), "r", encoding="utf-8") as _fh:
+    with open(os.path.join(SKILL_ROOT, "scripts", "xwl.py"), "r", encoding="utf-8") as _fh:
         _chk_m = re.search(r"checks = \{([0-9,\s]+)\}", _fh.read())
     # 入口形态（工具两处提示 ＋ 三份文档的调用形态）：见模块级 `_entry_form_problems` 的注释。
     doc_fail.extend(_entry_form_problems(root))
@@ -5190,6 +5419,7 @@ def _docs_xfile_consistency(_S) -> None:
                    if _n in ('_base', '_body', '_chk_m', '_fence', '_fh', '_got', '_i', '_j', '_l', '_lab', '_m', '_miss', '_rm_txt', '_sk_txt', '_txt', 'doc_fail', 'docs', 'i', 'l', 'ls', 'nm', 'root')})
 
 
+@_cap
 def _docs_numbers_and_tables(_S) -> None:
     """`_check_docs` 的第 2 段（机械切分，判据文本逐字未改）。
 
@@ -5294,7 +5524,7 @@ def _docs_numbers_and_tables(_S) -> None:
             _tps = json.load(_fh)
         _tp_text = " ".join((str(t.get("prompt", "")) + " " + str(t.get("expected", "")))
                             for t in _tps)
-        with open(os.path.join(HERE, "xwl.py"), "r", encoding="utf-8") as _fh:
+        with open(os.path.join(SKILL_ROOT, "scripts", "xwl.py"), "r", encoding="utf-8") as _fh:
             _allsubs = sorted(set(re.findall(r'sub\.add_parser\(\s*"([a-z]+)"', _fh.read())))
         _uncovered = [_s for _s in _allsubs if _s not in _tp_text]
         if _uncovered:
@@ -5435,7 +5665,7 @@ def _docs_numbers_and_tables(_S) -> None:
                     doc_fail.append("%s:%d 把「续行符净减少 / 最长行」当成判据陈述，"
                                     "却没标明它只是**粗筛**（主判据是定义级的）：%s"
                                     % (_nm, _i + 1, _l.strip()[:60]))
-    with open(os.path.join(HERE, "xwl.py"), "r", encoding="utf-8") as _fh:
+    with open(os.path.join(SKILL_ROOT, "scripts", "xwl.py"), "r", encoding="utf-8") as _fh:
         _subs = set(re.findall(r'sub\.add_parser\(\s*"([a-z]+)"', _fh.read()))
     # 取**第一列**里出现的全部反引号命令名 —— 一行里可以合并几个命令
     # （如 ``| `sql` / `events` | …``），所以不能只认行首那一个。
@@ -5540,6 +5770,7 @@ def _docs_numbers_and_tables(_S) -> None:
                    if _n in ('_body', '_fh', '_fm', '_i', '_j', '_l', '_listed', '_ln', '_m', '_md', '_nm', '_on_disk', '_on_disk_ok', '_rel')})
 
 
+@_cap
 def _docs_layers_and_distribution(_S) -> None:
     """`_check_docs` 的第 3 段（机械切分，判据文本逐字未改）。
 
@@ -5888,7 +6119,7 @@ def _docs_layers_and_distribution(_S) -> None:
     _refdir = os.path.join(root, "references")
     for _rel in ("scripts/xwl.py", "scripts/selftest.py"):
         try:
-            _bl = open(os.path.join(root, _rel.replace("/", os.sep)),
+            _bl = open(_src_ref_abspath(_rel),
                        encoding="utf-8", newline="").read().splitlines()
         except OSError:
             continue
@@ -5928,25 +6159,39 @@ def _docs_layers_and_distribution(_S) -> None:
 #     拆分只治"单函数过长"，治不了"子函数各长一截、无人拦"：`_ng_check_controls` 381 行、
 #     `_ng_params_defaults` 337 行，都在 400 之下却没人管 ⇒ 纳管当场仍是**绿**，价值是防反弹。
 _FN_CAP = 400
-_CAP_FNS = ("_check_docs", "_docs_xfile_consistency", "_docs_numbers_and_tables", "_docs_layers_and_distribution", "_docs_tail_scaffold", "_check_subcommands",
-            # 尾段下沉出来的助手一并纳管：⛔ 只拆不纳管＝缺口从大函数搬到了助手身上。
-            "_check_subcommands_tail",
-            # `12c/12d/12e` 三段合起来约 300 行 ⇒ 再拆一层（主函数已顶到 399/400）。同样纳管。
-            "_check_events_and_expand",
-            "_ng_cli_readonly", "_ng_check_controls", "_ng_contract_and_unit", "_ng_write_overwrite", "_ng_params_defaults", "_ng_platform",
-            # ⚠️ `_doc_guard_xfile_pt` 是 17j-12／13／14 ＋「该有目录却没有」四臂的宿主，一直在长
-            #   （216 → 242 行）却**不在本表** ⇒ "防止反弹"在这条臂上是空的。纳管当场仍是绿，价值就是防反弹。
-            "_doc_guard_xfile_pt",
-            # ITEM-1170：先拆后纳管。两个原函数拆到 ≤400，拆出的助手一并入表，
-            #   否则缺口只是从大函数搬到了助手里。
-            "_check_basics", "_check_basics_tail",
-            "_check_bc_contract", "_check_bc_contract_tail",
-            "_check_write_gate", "_check_write_gate_rest", "_docs_contract")
+# _CAP_FNS 由 @_cap 自注册派生（_cap_fns()），不再手填常量
+
+# ⭐ 独立纳管集合（序6／ITEM-1211）：**不能只拿装饰器派生集合自证** —— `@_cap` 一旦从某函数上
+#   被摘掉，`_cap_fns()` 就少一个名字、而"集合与自身一致"照样绿 ⇒ 超限函数静默逃逸。
+#   故这里冻结一份**独立清单**作 oracle：`_cap_fns()` 必须与它**逐名相等**（缺 / 多都判红）。
+#   ⚠️ 有意增删纳管对象时：先改本清单 **并** 在 `CHANGELOG.md` 写明，再改函数装饰器；
+#      ⛔ 不许为"让自检变绿"而单方面改它（本批不增删、不调 `_FN_CAP`）。
+_CAP_FNS_BASELINE = (
+    "_check_basics", "_check_basics_tail", "_check_bc_contract", "_check_bc_contract_tail",
+    "_check_docs", "_check_events_and_expand", "_check_subcommands", "_check_subcommands_tail",
+    "_check_write_gate", "_check_write_gate_rest", "_doc_guard_xfile_pt", "_docs_contract",
+    "_docs_layers_and_distribution", "_docs_numbers_and_tables", "_docs_tail_scaffold",
+    "_docs_xfile_consistency", "_ng_check_controls", "_ng_cli_readonly", "_ng_contract_and_unit",
+    "_ng_params_defaults", "_ng_platform", "_ng_write_overwrite", "_s1s3_named_cases",
+)
 
 
 def _fn_cap_check(doc_fail) -> None:
-    """量 `_CAP_FNS` 里每个模块级函数的行数，超 `_FN_CAP` 就把名字与行数写进 `doc_fail`。"""
+    """量 `_CAP_FNS` 里每个模块级函数的行数，超 `_FN_CAP` 就把名字与行数写进 `doc_fail`。
+
+    另核**装饰器派生集合 == 独立纳管清单 `_CAP_FNS_BASELINE`**（缺/多 → 红）：挡住「摘掉 `@_cap`
+    即逃逸」；`_cap_seen`（AST 在模块顶层量到的）也须与派生集合一致（挡住「函数移出模块顶层」）。
+    """
+    _CAP_FNS = _cap_fns()
     import ast as _ast          # 本判据专用：量函数体行数（模块头没有 import ast，就近引入）
+    # ① 装饰器派生集合 vs **独立清单**（不靠集合自证）：缺装饰器 ⇒ 派生少名 ⇒ 红。
+    if sorted(_CAP_FNS) != sorted(_CAP_FNS_BASELINE):
+        _cap_miss = sorted(set(_CAP_FNS_BASELINE) - set(_CAP_FNS))
+        _cap_extra = sorted(set(_CAP_FNS) - set(_CAP_FNS_BASELINE))
+        doc_fail.append("函数行数上限：@_cap 派生集合与独立纳管清单不一致 —— 缺 %s / 多 %s"
+                        "（缺 = 有函数**被摘掉 @_cap** 或将纳管对象删了却未同步 `_CAP_FNS_BASELINE`；"
+                        "多 = 新加 @_cap 却未登记清单）。⛔ 别为变绿单方面改清单。"
+                        % (_cap_miss, _cap_extra))
     try:
         _cap_tree = _ast.parse(io.open(os.path.join(HERE, "selftest.py"), encoding="utf-8").read())
         _cap_hit, _cap_seen = [], set()
@@ -5971,6 +6216,7 @@ def _fn_cap_check(doc_fail) -> None:
         doc_fail.append("函数行数上限：读不了或解析不了 selftest.py（%s）—— 报错，不算通过" % _cap_exc)
 
 
+@_cap
 def _docs_tail_scaffold(_S) -> None:
     """`_check_docs` 的第 4 段（机械切分，判据文本逐字未改）。
 
@@ -6375,7 +6621,7 @@ def _check_docs_section_order(failures) -> None:
            "十", "九", "八", "七", "六", "五", "四", "三", "二", "一"]
     _seq = ["一", "二", "三", "四", "五", "六", "七", "八", "九", "十",
             "十一", "十二", "十三", "十四", "十五", "十六", "十七", "十八", "十九", "二十"]
-    skill_md = os.path.join(os.path.dirname(HERE), "SKILL.md")
+    skill_md = os.path.join(SKILL_ROOT, "SKILL.md")
     if os.path.exists(skill_md):
         with open(skill_md, "r", encoding="utf-8", newline="") as f:
             raw = f.read().splitlines()
@@ -6491,7 +6737,7 @@ def _check_platform(tmp, node, failures, write) -> None:
     e_fail: list[str] = []
     env_cp = dict(os.environ)
     env_cp["PYTHONIOENCODING"] = "cp1252"
-    xwl_py = os.path.join(HERE, "xwl.py")
+    xwl_py = os.path.join(SKILL_ROOT, "scripts", "xwl.py")
     for args in (["--help"], ["check", "--help"], ["folders", "--help"]):
         try:
             pr = _cap_run([sys.executable, xwl_py] + args, env=env_cp, timeout=90,
@@ -6560,7 +6806,7 @@ def _check_write_failures(tmp, node, failures, write) -> None:
     所以这里用子进程跑真实 CLI，逐一确认「不冒 traceback + rc=2 + 有 [FAIL]」。
     """
     print("[23] 写失败路径不得冒 traceback")
-    xwl_py = os.path.join(os.path.dirname(os.path.abspath(__file__)), "xwl.py")
+    xwl_py = os.path.join(SKILL_ROOT, "scripts", "xwl.py")
     ro = write("wf_ro.xwl", VALID)
     ops_p = os.path.join(tmp, "wf_ops.json")
     with open(ops_p, "w", encoding="utf-8", newline="") as fh:
@@ -6630,13 +6876,14 @@ def _count_node_gates(fn_name: str) -> int:
     return -1
 
 
+@_cap
 def _check_write_gate(tmp, node, failures, write) -> None:
     """写盘前门禁：坏事件不先落盘、既有失败可证明、ops 类型错拒、非有限值进出都拒。"""
     import math as _math
     import subprocess as _sp
     print("[23b] 写前门禁 / 非有限值 / ops 类型")
     node = node or xwl.find_node()
-    xwl_py = os.path.join(os.path.dirname(os.path.abspath(__file__)), "xwl.py")
+    xwl_py = os.path.join(SKILL_ROOT, "scripts", "xwl.py")
     bad: list[str] = []
 
     def _cli(argv):
@@ -7012,6 +7259,7 @@ def _check_write_gate(tmp, node, failures, write) -> None:
     _check_write_gate_rest(tmp, node, failures, write, _cli, _ops, _bytes, _page, xwl_py)
 
 
+@_cap
 def _check_write_gate_rest(tmp, node, failures, write, _cli, _ops, _bytes, _page, xwl_py) -> None:
     """写前门禁后半：正例 ops、非有限值往返、写后采集、以及改前未覆盖的两条尽力项。"""
     import math as _math
@@ -7265,7 +7513,7 @@ def _check_edit_eol(tmp, node, failures, write) -> None:
     两条路径都要覆盖，因为 `expand` 会把无换行的单行源产出成 LF）。
     """
     print("[24] edit 的换行归一与拍平警示")
-    xwl_py = os.path.join(os.path.dirname(os.path.abspath(__file__)), "xwl.py")
+    xwl_py = os.path.join(SKILL_ROOT, "scripts", "xwl.py")
 
     def _cli(argv):
         pr = _cap_run([sys.executable, xwl_py] + argv, timeout=180)
@@ -7362,7 +7610,7 @@ def _check_eol_and_guards(tmp, node, failures, write) -> None:
        就冒 traceback（rc=1）。`_quote` 按 org.json 的 `\\uXXXX` 转义后语义仍等价。
     """
     print("[25] 换行形态 × 校验收尾 × 静默回退")
-    xwl_py = os.path.join(os.path.dirname(os.path.abspath(__file__)), "xwl.py")
+    xwl_py = os.path.join(SKILL_ROOT, "scripts", "xwl.py")
 
     def _cli(argv):
         pr = _cap_run([sys.executable, xwl_py] + argv, timeout=180)
@@ -7491,7 +7739,7 @@ def _check_diffguard(tmp, node, failures, write) -> None:
     所以「压平必须报」与「合法删减必须不报」两条同等重要，缺一条这个能力就没法用。
     """
     print("[26] diffguard（相对 git 基线的压平检测）")
-    xwl_py = os.path.join(os.path.dirname(os.path.abspath(__file__)), "xwl.py")
+    xwl_py = os.path.join(SKILL_ROOT, "scripts", "xwl.py")
     repo = os.path.join(tmp, "dg_repo")
     os.makedirs(repo, exist_ok=True)
     BS = chr(92)
@@ -8412,6 +8660,7 @@ _GOLDEN_PATCHED = '''{
 # 来源：`{"a": 1.0, "title": "t", "children": []}` 经 `patch` 把 title 改成 t2；形态：设计器多行稳态形；46 B；md5 649f8b5cc7dfe307587a721b8167227e
 
 
+@_cap
 def _check_bc_contract(tmp, node, failures, write) -> None:
     """B/C 组「注册键口径 + 换行判据 + 整数值浮点保真 + 排版提示具体化 + 注册表来源同句」的**行为断言**（第 27 组）。
     逐条行为断言见各节注释；改写相关的已落在 `_check_itemids`；
@@ -8780,6 +9029,7 @@ def _check_bc_contract(tmp, node, failures, write) -> None:
         failures.extend(bc)
 
 
+@_cap
 def _check_bc_contract_tail(write, node, bc, _page, _ok) -> None:
     """`_check_bc_contract` 的尾部两组（有界下沉，判据文本逐字未改）。"""
     # ---- 回归：只以 `app._X` 形式被引用的重名组也必须判 error（欠报修复）----
@@ -8862,15 +9112,20 @@ def _blocks() -> list[tuple[str, object]]:
 #     ③ 只换块内实现、块名不动 ⇒ 绿（⛔ 别把正常重构判红）。
 #   ⛔ **块序也是基线的一部分**：块序 ＝ 输出序，重排会让"拆分前后逐行 diff 为空"的对照失效。
 #   📌 有意增删块时：先改 `_blocks()`，再按 `--list-blocks` 的输出**重抄**本清单（⛔ 别手抄）。
-_BLOCKS_BASELINE = (
-    "basics", "params_paths", "itemids", "patch_contract", "subcommands", "new_guards",
-    "docs", "platform", "write_failures", "edit_eol", "eol_and_guards", "diffguard",
-    "bc_contract", "rules_lint",
-)
+_BASELINE_BLOCKS_DATA, _BASELINE_BLOCKS_ERR = _baseline_read()
+if _BASELINE_BLOCKS_ERR is None and not (
+        isinstance(_BASELINE_BLOCKS_DATA.get("blocks"), list) and _BASELINE_BLOCKS_DATA.get("blocks")):
+    _BASELINE_BLOCKS_ERR = "empty:blocks"
+# ⚠️ 基线不可用 ⇒ **空清单 + 错误标记**（不再 `or _blocks()` 自举）：由 `_blocks_baseline_problem` 显式判红。
+_BLOCKS_BASELINE = list((_BASELINE_BLOCKS_DATA or {}).get("blocks") or [])
 
 
 def _blocks_baseline_problem():
     """把 `_blocks()` 的块名集合/顺序与基线比对；通过 ⇒ `None`，否则返回一句可打印的原因。"""
+    if _BASELINE_BLOCKS_ERR is not None:
+        return ("自检块基线**不可用**（%s）⇒ 无法比对，判红（⛔ 不回退当前 `_blocks()` 自举当通过）。"
+                "请修复/重建 `%s`（维护者用 `--write-baselines` 显式生成）。"
+                % (_BASELINE_BLOCKS_ERR, _BASELINE_PATH))
     _cur = [n for n, _f in _blocks()]
     _base = list(_BLOCKS_BASELINE)
     _miss = [n for n in _base if n not in _cur]
@@ -8881,7 +9136,7 @@ def _blocks_baseline_problem():
     _extra = [n for n in _cur if n not in _base]
     if _extra:
         try:
-            with open(os.path.join(os.path.dirname(HERE), "CHANGELOG.md"),
+            with open(os.path.join(SKILL_ROOT, "CHANGELOG.md"),
                       encoding="utf-8", newline="") as _cf:
                 _cl = _cf.read()
         except OSError as _exc:
@@ -9151,6 +9406,8 @@ def main(argv: list[str] | None = None) -> int:
     ap.add_argument("--only", default=None, metavar="<块名>",
                     help="只跑指定自检块（最小子集回归）；块名用 --list-blocks 查。"
                          "未给 --result 时只跑并打印、不落 JSON")
+    ap.add_argument("--write-baselines", action="store_true",
+                    help="把当前自检块名与文档守卫块计数写入 tests/baseline.json（有意增删才用）")
     ap.add_argument("--list-blocks", action="store_true",
                     help="按定义序逐行打印全部自检块名后退出 —— 它们是自检块（供 --only 选），"
                          "不是 _check_docs 内部的 17b–17v 守卫编号")
@@ -9175,6 +9432,15 @@ def main(argv: list[str] | None = None) -> int:
               "worker 若卡死将**无界挂住**（退回旧行为）。" % _JOB_TIMEOUT, flush=True)
 
     # ---- `--list-blocks`：按定义序逐行打印自检块名（供 `--only` 选块）后退出 ----
+    if args.write_baselines:
+        _blks = [n for n, _f in _blocks()]
+        _dg = dict(_doc_guard_block_ids() or {})
+        os.makedirs(os.path.dirname(_BASELINE_PATH), exist_ok=True)
+        with io.open(_BASELINE_PATH, "w", encoding="utf-8", newline="") as _bf:
+            json.dump({"blocks": _blks, "doc_guard_blocks": _dg}, _bf, ensure_ascii=False, indent=2)
+            _bf.write("\n")
+        print("baseline written: %s（blocks=%d, doc_guard=%d）" % (_BASELINE_PATH, len(_blks), len(_dg)))
+        return 0
     if args.list_blocks:
         _blk_named = _blocks()
         for _bn, _bf in _blk_named:

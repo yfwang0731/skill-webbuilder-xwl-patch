@@ -5091,7 +5091,11 @@ def cmd_diffguard(args) -> int:
 # --------------------------------------------------------------------------- #
 _HASH_RE = re.compile(r"\{#([^}]{1,64})#\}")
 _PARAM_RE = re.compile(r"\{\?([^}]{1,64})\?\}")
-_SETATTR_RE = re.compile(r"""setAttribute\(\s*(['"])(.*?)\1""")
+# `request.setAttribute('名', …)` 的**真实供给**识别（序2／ITEM-1191）。
+# 判据（四条，均由 `_scan_setattr_supply` 词法级落实）：①只认代码层调用（注释与字符串内容里的
+# 伪调用不算）；②接收者须为 `request`（`foo.setAttribute`、裸 `setAttribute` 不算）；
+# ③首参为字符串字面量才算**已证明供给**，其余只算「可能提供」；④方法与括号之间允许空白。
+_SETATTR_METHOD = "setAttribute"
 # 框架内置变量前缀的**内置兜底**。有文件来源的那部分由 `builtin_prefixes()` 从
 # `wb/system/var.json` 顶层键推导后并进来 —— **必须取并集**：
 #   · 只认内置 ⇒ 工程若在 `var.json` 加自定义命名空间（如 `myapp.`），`{?myapp.x?}` 会被判成 miss（假阳）；
@@ -5169,6 +5173,77 @@ def iter_nodes(obj):
     yield from walk(obj, [])
 
 
+def _scan_setattr_supply(js: str) -> tuple:
+    """从一段 serverScript 里识别 `request.setAttribute('名', …)` 的**真实供给**。
+
+    返回 `(proven, possible)` —— 两个 `set[str]` 形态的集合：
+      · `proven`   —— 首参是**字符串字面量**的调用 ⇒ 已证明提供该名字；
+      · `possible` —— 首参**不是字面量**（运行时才定，如 `request.setAttribute(name, …)`）⇒ 只算
+                     「可能提供」，**不加入已提供集合**、不抵消外部引用（序2 用户裁定口径）。
+
+    识别规则（四条，见 `_SETATTR_METHOD` 上方注释）：
+      ① **剥注释**：先 `strip_js_comments`，注释里的调用不算供给；
+      ② **只在代码层**：字符串字面量**内容**里的 `request.setAttribute(...)` 是伪调用，不算
+         （词法扫描时处于引号内的文本直接跳过，不做匹配）；
+      ③ **限定接收者**：只认 `request` 这一个对象的 `.setAttribute(...)`（`foo.setAttribute`、
+         裸 `setAttribute(...)` 都不算）；
+      ④ **允许方法与括号间空白**：`request.setAttribute ('名',…)` 也算真实调用。
+
+    ⚠️ 只做**本文件内**集合近似识别；跨 module 的 `request`／module 生命周期语义未验证
+    （docstring 与实现同口径，见 `cmd_sqlrefs`）。
+    """
+    s = strip_js_comments(js)
+    proven: set = set()
+    possible: set = set()
+    i, n = 0, len(s)
+    # 接收者前缀的匹配串：`request` ＋ 可选空白 ＋ `.` ＋ 可选空白 ＋ `setAttribute` ＋ 可选空白 ＋ `(`
+    _recv_re = re.compile(r"request\s*\.\s*" + _SETATTR_METHOD + r"\s*\(")
+    while i < n:
+        ch = s[i]
+        # 跳过字符串字面量（单／双／反引号），其中的伪调用不识别；引号内转义按 `\\x` 两字符前进。
+        if ch in ("'", '"', "`"):
+            quote = ch
+            i += 1
+            while i < n:
+                if s[i] == "\\":
+                    i += 2
+                    continue
+                if s[i] == quote:
+                    i += 1
+                    break
+                i += 1
+            continue
+        m = _recv_re.match(s, i)
+        if m:
+            j = m.end()               # 指向 `(` 之后
+            while j < n and s[j] in " \t\r\n":
+                j += 1
+            if j < n and s[j] in ("'", '"'):
+                # 首参是字面量 ⇒ proven（读到配对的收引号为止）
+                q = s[j]
+                k = j + 1
+                buf = []
+                while k < n:
+                    if s[k] == "\\" and k + 1 < n:
+                        buf.append(s[k + 1])
+                        k += 2
+                        continue
+                    if s[k] == q:
+                        break
+                    buf.append(s[k])
+                    k += 1
+                if k < n:              # 收引号存在 ⇒ 是完整字面量
+                    proven.add("".join(buf))
+                    i = k + 1
+                    continue
+            # 首参不是字面量（变量／表达式）或字面量不完整 ⇒ 可能提供（名字未知）
+            possible.add(True)
+            i = m.end()
+            continue
+        i += 1
+    return proven, possible
+
+
 def cmd_sqlrefs(args) -> int:
     """检查 SQL 文件里 serverScript 与 dataprovider 的引用是否自洽。
 
@@ -5194,23 +5269,34 @@ def cmd_sqlrefs(args) -> int:
     warnings: list[str] = []
 
     # serverScript 侧
+    #   序2／ITEM-1191：只认**代码层**、接收者为 `request`、首参为**字面量**的
+    #   `request.setAttribute('名', …)` 为**已证明供给**（`provided`）；首参非字面量的调用只算
+    #   **可能提供**（`possible`），不进 `provided`、不抵消外部引用。注释／纯字符串里的伪调用、
+    #   其他接收者的调用都**不算**供给。
     provided: set[str] = set()
+    possible_supply = False
     for cfg, path in modules:
         ss = cfg["serverScript"]
-        names = [m[1] for m in _SETATTR_RE.findall(ss)]
-        provided.update(names)
-        if "{" + "#" in ss:
+        proven, possible = _scan_setattr_supply(ss)
+        provided.update(proven)
+        if possible:
+            possible_supply = True
+        # serverScript 里禁止 `{#…#}`：在**剥注释后的同一口径**上判，避免注释里写示例而误报。
+        if "{" + "#" in strip_js_comments(ss):
             problems.append(
                 "serverScript 里出现了 `{#…#}`（ServerScript 不支持该写法，"
                 "应用 `app.get(param)`；见 controls.ServerScript 的报错原文）"
             )
-        print(f"  serverScript @ {'/'.join(str(x) for x in path)}: setAttribute {sorted(set(names)) or '（无）'}")
+        _shown = sorted(proven)
+        if possible:
+            _shown.append("（另有首参非字面量的 setAttribute 调用 ⇒ 仅「可能提供」）")
+        print(f"  serverScript @ {'/'.join(str(x) for x in path)}: setAttribute {_shown or '（无）'}")
 
     # dataprovider 侧
     used: dict[str, int] = {}
     params: dict[str, int] = {}
     for cfg, path in dprovs:
-        sqls = {k: cfg[k] for k in ("sql", "totalSql") if isinstance(cfg.get(k), str)}
+        sqls = {k: cfg[k] for k in ("sql", "totalSql") if isinstance(cfg.get(k), str) and cfg.get(k).strip()}
         if not sqls:
             continue
         print(f"  dataprovider @ {'/'.join(str(x) for x in path)} (itemId={cfg.get('itemId')!r}):")
@@ -5234,9 +5320,16 @@ def cmd_sqlrefs(args) -> int:
         elif name.startswith(prefixes):
             print(f"  [ok]   {{#{name}#}} × {cnt}  ← 框架内置变量")
         elif "." in name:
+            # 带点疑似内置：保持原告警分支，**不升级为 missing**（序2 用户裁定：只修供给证据，
+            # 不扩展原应要求供给的名称集合）。
             warnings.append(f"{{#{name}#}} × {cnt} 未在 serverScript 里设置，名字带点（疑似内置变量，请确认）")
         else:
             missing.append(f"{{#{name}#}} × {cnt} 在 dataprovider.sql 里使用，但 serverScript 没有 setAttribute(\"{name}\", …)")
+
+    # 序2：可能供给只列提示、不抵消缺供给（本身不改 rc）。
+    if possible_supply:
+        warnings.append("serverScript 存在首参非字面量的 `request.setAttribute(…)` 调用 ⇒ 仅「可能提供」，"
+                        "不计入已证明供给（不抵消任何引用）")
 
     for w in warnings:
         print(f"  [warn] {w}")
@@ -5247,7 +5340,25 @@ def cmd_sqlrefs(args) -> int:
         top = ", ".join(f"{k}({v})" for k, v in sorted(params.items(), key=lambda kv: -kv[1])[:10])
         print(f"  [info] {{?param?}} 共 {len(params)} 个名字，Top: {top}")
 
-    if problems or missing:
+    # 序3／ITEM-1192：按**适用内容**判空（不是按引用数、也不是按数据库查询零行）。
+    #   适用对象 = 非空的 dataprovider.sql / totalSql，或非空的 module.serverScript。
+    has_target = bool(used) or bool(params) or any(
+        isinstance(c.get("serverScript"), str) and c.get("serverScript").strip() for c, _p in modules
+    ) or any(
+        isinstance(c.get(k), str) and c.get(k).strip() for c, _p in dprovs for k in ("sql", "totalSql")
+    )
+    if not has_target:
+        print("  [FAIL] 无适用检查内容（无 module.serverScript、也无非空 sql/totalSql）⇒ 无从检查")
+        print("=== 结果: FAIL（无适用检查内容）")
+        return 1
+
+    if problems:
+        # 序3：problems 必须**逐条**具体打印（不只汇总 FAIL）。
+        for p in problems:
+            print(f"  [FAIL] {p}")
+        print("=== 结果: FAIL")
+        return 1
+    if missing:
         print("=== 结果: FAIL")
         return 1
     print("=== 结果: OK" + ("（有警告）" if warnings else ""))
@@ -5500,6 +5611,93 @@ def find_transfers(js: str, field_set) -> list[tuple]:
 
     返回 [(通路, 容器 itemId 列表, 显式参数名列表, 原文片段)]，
     通路 ∈ {"out", "params=Wb.getValue", "params=对象"}。
+    （无目标的兼容包装：丢弃 `find_transfers_with_target` 的第 5 元「请求目标」。）
+    """
+    return [(k, c, ks, raw) for (k, c, ks, raw, _tgt, _own) in find_transfers_with_target(js, field_set)]
+
+
+def _enclosing_object_span(js: str, pos: int):
+    """定位 `js` 中 `pos` 处所处分属的**最内层对象字面量** `{ … }` 的 `(start, end)`。
+
+    `start` 指向开 `{`，`end` 指向配对的收 `}`（不含）。`pos` 必须在该对象体内部（depth≥1）。
+    跳过字符串字面量里的花括号。找不到（不在任何对象内 / 括号不配平）返回 `None`。
+    """
+    stack: list[int] = []
+    i, n = 0, len(js)
+    while i < n:
+        ch = js[i]
+        if ch in ("'", '"', "`"):
+            q = ch
+            i += 1
+            while i < n:
+                if js[i] == "\\":
+                    i += 2
+                    continue
+                if js[i] == q:
+                    i += 1
+                    break
+                i += 1
+            continue
+        if ch == "{":
+            stack.append(i)
+        elif ch == "}":
+            if stack:
+                start = stack.pop()
+                if start < pos <= i:
+                    # 先遇到的、覆盖 pos 的收括号所配对的 `{` 即**最内层**对象（更深的嵌套对象
+                    # 必在本层之前先闭合）。
+                    return (start, i)
+        i += 1
+    return None
+
+
+def _object_target(js: str, span) -> str | None:
+    """从一个对象字面量 `span` 内的 `url:` 取 `m?xwl=` 目标（去首尾空白；空目标返回 `None`）。"""
+    if not span:
+        return None
+    start, end = span
+    body = js[start:end + 1]
+    m = _REQ_URL_RE.search(body)
+    if not m:
+        return None
+    tgt = m.group(1).split("m?xwl=")[-1].split("&")[0].strip()
+    return tgt or None
+
+
+def _call_receiver(js: str, obj_start: int) -> str | None:
+    """从对象字面量开 `{`（`obj_start`）**向前**回溯调用形态，取 `app.<名>` 的 `<名>`。
+
+    例：`app.storeA.load({ … })` → `storeA`；`Wb.request({ … })` / `Wb.upload({ … })` → `None`
+    （调用主体非 `app.<store>`，无法据以定位 store 的配置 url）。
+    回溯跳过 `(` 与空白，读到标识符链 `app.<名>.<方法>`。
+    """
+    i = obj_start - 1
+    while i >= 0 and js[i] in " \t\r\n":
+        i -= 1
+    if i >= 0 and js[i] == "(":
+        i -= 1
+        while i >= 0 and js[i] in " \t\r\n":
+            i -= 1
+    # 读方法名（如 load / reload）
+    j = i
+    while j >= 0 and (js[j].isalnum() or js[j] in "_.$"):
+        j -= 1
+    chain = js[j + 1:i + 1]
+    parts = chain.split(".")
+    # 期望形态 app.<名>.<方法>
+    if len(parts) >= 3 and parts[-3] == "app":
+        return parts[-2]
+    return None
+
+
+def find_transfers_with_target(js: str, field_set) -> list[tuple]:
+    """同 `find_transfers`，但第 5 元附**请求目标**、第 6 元附**调用接收者 store 名**。
+
+    返回 [(通路, 容器 itemId 列表, 显式参数名列表, 原文片段, 目标键或 None, 接收者名或 None)]。
+    · 第 5 元「目标键」＝该 `out:`/`params:` 所在对象字面量里 `url:` 的 `m?xwl=` 目标（可静态关联时）；
+    · 第 6 元「接收者名」＝形如 `app.<名>.load(...)` 的 `<名>`，用于对象无 `url:` 时回退到该 store
+      自身配置的 `url` 作为请求目标（`Wb.request`/`Wb.upload` 等不为 `app.<store>` 时为 `None`）。
+    二者共同支撑**请求级归属**：一笔供给只给它自己那次请求背书（序1／ITEM-1187）。
     """
     js = strip_js_comments(js)
     found: list[tuple] = []
@@ -5507,17 +5705,23 @@ def find_transfers(js: str, field_set) -> list[tuple]:
         expr = read_expr(js, m.end()).strip()
         conts = _app_refs_in(expr)
         if conts:
-            found.append(("out", conts, [], expr))
+            span = _enclosing_object_span(js, m.start())
+            found.append(("out", conts, [], expr, _object_target(js, span),
+                          _call_receiver(js, span[0]) if span else None))
     for m in _PARAMS_KEY_RE.finditer(js):
         expr = read_expr(js, m.end()).strip()
         if _GETVALUE_RE.match(expr):
             conts = _app_refs_in(expr)
             if conts:
-                found.append(("params=Wb.getValue", conts, [], expr))
+                span = _enclosing_object_span(js, m.start())
+                found.append(("params=Wb.getValue", conts, [], expr, _object_target(js, span),
+                              _call_receiver(js, span[0]) if span else None))
         elif expr.startswith("{"):
             keys = obj_keys(expr[1:-1])
             if keys:
-                found.append(("params=对象", [], keys, expr))
+                span = _enclosing_object_span(js, m.start())
+                found.append(("params=对象", [], keys, expr, _object_target(js, span),
+                              _call_receiver(js, span[0]) if span else None))
     return found
 
 
@@ -6009,7 +6213,8 @@ def cmd_params(args) -> int:
     print(controls_source_line(_p_ctl))
 
     stores: list[dict] = []
-    transfers: list[tuple] = []   # (通路, 容器列表, 键列表, 原文, 来源文件相对路径)
+    # (通路, 容器列表, 键列表, 原文, 来源文件相对路径, 目标键或None, 调用接收者store名或None)
+    transfers: list[tuple] = []
     direct: list[str] = []        # Wb.request({url:'m?xwl=…'}) 直接调用的 SQL 文件
 
     def scan(node, path=()):
@@ -6018,8 +6223,8 @@ def cmd_params(args) -> int:
             if isinstance(c, dict) and node.get("type") == "store":
                 stores.append(c)
             for js in _js_of(node):
-                for kind, conts, keys, raw in find_transfers(js, field_set):
-                    transfers.append((kind, conts, keys, raw, "/".join(str(x) for x in path)))
+                for kind, conts, keys, raw, tgt, owner in find_transfers_with_target(js, field_set):
+                    transfers.append((kind, conts, keys, raw, "/".join(str(x) for x in path), tgt, owner))
                 for m in _REQ_URL_RE.finditer(js):
                     tgt = m.group(1).split("m?xwl=")[-1].split("&")[0].strip()   # `#36`：去首尾空白（空目标视为无引用）
                     if tgt and tgt not in direct:
@@ -6164,14 +6369,51 @@ def cmd_params(args) -> int:
                 elif _k36 == "dangling":
                     dangling36.append(tgt)
 
+    def _phys(fp: str) -> str:
+        return os.path.normcase(os.path.abspath(fp))
+
+    # ---- 请求级归属基础：把每个 store 的**注册键**映射到它自身配置的 url 目标物理键 ----
+    # 供 `app.<store>.load({…})`（对象内无 `url:`）回退到「该 store 自身 url」作请求目标。
+    store_url_by_name: dict[str, str] = {}
+    for cfg in stores:
+        _u = cfg.get("url")
+        if isinstance(_u, str) and "m?xwl=" in _u:
+            _t = _u.split("m?xwl=")[-1].split("&")[0].strip()
+            if not _t or not root:
+                continue
+            _fp = os.path.join(root, _t.replace("/", os.sep) + ".xwl")
+            if os.path.exists(_fp):
+                _rk = registry_key(cfg)
+                if _rk:
+                    store_url_by_name[_rk] = _phys(_fp)
+
+    def _resolve_transfer_target(tgt, owner) -> str | None:
+        """把一笔传参点的**请求目标**解析成载体物理键；解析不到返回 `None`（⇒ 该供给「未核对」）。"""
+        if tgt is not None and root:
+            _fp = os.path.join(root, tgt.replace("/", os.sep) + ".xwl")
+            if os.path.exists(_fp):
+                return _phys(_fp)
+            return None
+        if owner is not None and owner in store_url_by_name:
+            return store_url_by_name[owner]
+        return None
+
     n_out = sum(1 for t in transfers if t[0] == "out")
     n_pm = len(transfers) - n_out
     print(f"\n=== 传参点（{len(transfers)} 处）: out {n_out} 处 / params {n_pm} 处 ===")
-    provided: set[str] = set()
-    for kind, conts, keys, raw, where in transfers:
+
+    # 请求级供给分桶：
+    #   · `req_supplies`：phys 载体键 → 该载体**自己那次请求**已证明送出的名字集合；
+    #   · `unattrib`：无法静态关联到具体请求目标的供给名字（⇒ 对任何载体只算「未核对」）。
+    req_supplies: dict[str, set] = {}
+    unattrib: set = set()
+    provided: set[str] = set()        # 全页**已证明**送出名字的并集（仅用于展示「页面送出」）
+    for kind, conts, keys, raw, where, tgt, owner in transfers:
         tag = {"out": "[out 推荐]", "params=Wb.getValue": "[params·等价out]",
                "params=对象": "[params·显式键]"}
         head = f"  {tag.get(kind, kind):18s}"
+        _req_key = _resolve_transfer_target(tgt, owner)
+        _names: set = set()
         if conts:
             detail = []
             for a in conts:
@@ -6186,17 +6428,24 @@ def cmd_params(args) -> int:
                     continue
                 dup = f"（同注册键 ×{len(locs)}，取第一个）" if len(locs) > 1 else ""
                 ids = _collect_name_islands(obj, locs[0][0][locs[0][1]], field_set)
-                provided |= set(ids)
+                _names |= set(ids)
                 detail.append(f"app.{a}{dup} → 容器内取值控件 {ids or '（无）'}")
             print(head + "; ".join(detail))
         else:
-            provided |= set(keys)
+            _names |= set(keys)
             print(head + f"显式参数名 {keys}")
-        print(f"      {'':16s} 原始: {raw[:150]}")
+        # 归属：能解析到具体请求目标 ⇒ 只给该载体背书；否则进「未核对」。
+        _tgt_show = ""
+        if _req_key is not None:
+            req_supplies.setdefault(_req_key, set()).update(_names)
+            _tgt_show = f"  → 归属请求: {_phys_display.get(_req_key, _req_key)}"
+        else:
+            unattrib |= _names
+            _tgt_show = "  → [未核对] 无法静态关联到具体请求目标（不并入任何载体）"
+        provided |= _names
+        print(f"      {'':16s} 原始: {raw[:150]}{_tgt_show}")
 
-    # ---- 把 **store 自身 `configs.params`** 的键并入 `provided` ----
-    # 嵌入点必须在传参点循环**之后**、`miss` **之前**：否则输出自相矛盾 ——
-    # 上面那行写着"自身params配置(优先级最高)"，下面却说"未发现来源"。
+    # ---- 把 **store 自身 `configs.params`** 的键归属到**该 store 自己那次请求** ----
     # 形态实测（全量 32519 个 store）：缺失 22755 / **对象字面量字符串** 9752 /
     # 其它字符串 12（全是 `'20'`）/ dict 0 / list 0 ⇒ **只按字符串形态解析**，
     # 只认 `{…}`、其余忽略并 note（`'20'` 这类天然被 `obj_keys` 挡掉）。
@@ -6208,19 +6457,33 @@ def cmd_params(args) -> int:
             continue
         s = raw_p.strip()
         if s.startswith("{") and s.endswith("}"):
-            store_keys |= set(obj_keys(s[1:-1]))
+            _ks = set(obj_keys(s[1:-1]))
+            store_keys |= _ks
+            provided |= _ks
+            _u = cfg.get("url")
+            _req_key = None
+            if isinstance(_u, str) and "m?xwl=" in _u and root:
+                _t = _u.split("m?xwl=")[-1].split("&")[0].strip()
+                if _t:
+                    _fp = os.path.join(root, _t.replace("/", os.sep) + ".xwl")
+                    if os.path.exists(_fp):
+                        _req_key = _phys(_fp)
+            if _req_key is not None:
+                req_supplies.setdefault(_req_key, set()).update(_ks)
+            else:
+                unattrib |= _ks
         else:
             ignored_store_params.append((cfg.get("itemId"), s))
-    provided |= store_keys
 
-    # ---- `needed` **按来源分桶** ----
-    # 两个来源若合并成一个 set，来源信息在合并那一刻就丢了，"单列展示"做不出来。
-    # `need_req` = **请求级参数**：`serverScript` 的 `{?名?}` 与 `app.get(名)` ——
-    # 框架 `Query.java` 一律 `WebUtil.fetchObject(request, paraName)`，值都从 request 取，
-    # 与写在哪个字段无关 ⇒ 保留在 `needed` 里（剔除会把真实风险静默掉）。
-    need_sql: set[str] = set()      # dataprovider 的 sql / totalSql 里的 `{?名?}`
-    need_req: set[str] = set()      # serverScript 的 `{?名?}` / `app.get(名)`
+    # ---- `needed` **按载体**收集（请求级归属需要逐载体判定）----
+    # `need_sql` = dataprovider 的 sql / totalSql 里的 `{?名?}`；`need_req` = serverScript 的
+    # `{?名?}` / `app.get(名)`（框架 `Query.java` 一律从 request 取值，与写在哪个字段无关）。
+    need_sql: set[str] = set()
+    need_req: set[str] = set()
+    carrier_needs: dict[str, set] = {}     # phys 载体键 → 该载体需要的名字集合
     for tgt, fp in sql_files:
+        _ck = _phys(fp)
+        carrier_needs.setdefault(_ck, set())
         try:
             so = parse_xwl(open(fp, "rb").read().decode("utf-8"))
         except Exception as exc:  # noqa: BLE001
@@ -6231,20 +6494,20 @@ def cmd_params(args) -> int:
         print(f"\n=== SQL 侧: {tgt}.xwl{_ref56} ===")
         for t, cfg, _p in iter_nodes(so):
             if t == "module" and isinstance(cfg.get("serverScript"), str):
-                # `#50`：需求侧提取前**先剥 JS 注释**（`//`）—— 与来源侧同口径，注释里的 `{?名?}`／
-                #   `app.get(名)` 不再计入（不剥时注释里的也计入 ⇒ 假阳性）。
+                # `#50`：需求侧提取前**先剥 JS 注释**（`//`）—— 与来源侧同口径。
                 ss = strip_js_comments(cfg["serverScript"])
                 g, hs = _APP_REF_GET.findall(ss), _PARAM_RE.findall(ss)
                 print(f"  serverScript: app.get(名)={g or []}  {{?名?}}={hs or []}")
                 need_req |= set(g) | set(hs)
+                carrier_needs[_ck] |= set(g) | set(hs)
             if t == "dataprovider":
                 for k in ("sql", "totalSql"):
                     if isinstance(cfg.get(k), str):
-                        # `#50`：SQL 侧提取前**先剥 SQL 注释**（`--` ＋ `/* */`）—— `strip_sql_comments`
-                        #   专门补 `strip_js_comments` 不认 `--` 的缺口；引号内不动（`'http://…'` 不误切）。
+                        # `#50`：SQL 侧提取前**先剥 SQL 注释**（`--` ＋ `/* */`）。
                         ps = _PARAM_RE.findall(strip_sql_comments(cfg[k]))
                         print(f"  {k}: {{?名?}} = {ps or []}")
                         need_sql |= set(ps)
+                        carrier_needs[_ck] |= set(ps)
 
     needed = need_sql | need_req
     if not needed:
@@ -6273,12 +6536,31 @@ def cmd_params(args) -> int:
     # 真白名单：`sys.*` / `Str.*`（以及工程在 `wb/system/var.json` 里自定义的命名空间）
     # **不计 miss** —— 它们由框架往 request 里塞，不需要页面提供。
     prefixes = builtin_prefixes(args.file)
-    # 类型前缀只在**确属类型名**（36 个 JDBC 名）时才剥，且**精确匹配优先**
-    # （原名已在 provided 里就不剥）。两侧用**同一套剥完的名字**比对 ——
-    # 否则会出现「SQL 需要 `timestamp.x`」与「页面送了 `x`、SQL 未用到」同时出现在屏幕上。
+
+    # ---- 逐载体、逐名字判定：已提供 / 内置 / 带点疑似内置 / 未核对 / 确缺参 ----
+    miss_by_carrier: dict[str, list] = {}     # 载体显示名 → 确缺参名字列表
+    unknown_by_carrier: dict[str, list] = {}  # 载体显示名 → 未核对名字列表
+    for _ck, _needset in carrier_needs.items():
+        _disp = _phys_display.get(_ck, _ck)
+        _own = req_supplies.get(_ck, set())
+        for n in sorted(_needset):
+            if n in _own:
+                continue                       # 该载体自己那次请求已证明送出 ⇒ ok
+            if n.startswith(prefixes):
+                continue                       # 框架内置 ⇒ ok
+            if "." in n:
+                continue                       # 带点疑似内置 ⇒ 走独立告警（不计 miss/unknown）
+            if n in unattrib:
+                unknown_by_carrier.setdefault(_disp, []).append(n)
+            else:
+                miss_by_carrier.setdefault(_disp, []).append(n)
+
+    # 展示口径：`provided`（全页已证明送出并集）与 `needed`（全页需求并集）
+    miss = sorted({n for ns in miss_by_carrier.values() for n in ns})
+    unknown = sorted({n for ns in unknown_by_carrier.values() for n in ns})
+    # 兼容既有「页面送了但 SQL 未用到」：用剥离类型前缀后的比较集
     need_cmp = {strip_sql_type_prefix(n, provided) for n in needed
                 if not n.startswith(prefixes)}
-    miss = sorted(n for n in need_cmp if n not in provided)
     extra = sorted(n for n in provided if n not in need_cmp)
     print("\n=== 交叉核对 ===")
     print(f"  页面送出 {len(provided)} 个: {sorted(provided)}")
@@ -6290,31 +6572,42 @@ def cmd_params(args) -> int:
     print(f"  SQL 侧需要 {len(needed)} 个 —— 按来源分桶：")
     print(f"    · dataprovider sql/totalSql 的 `{{?名?}}`: {sorted(need_sql)}")
     print(f"    · serverScript 的 `{{?名?}}` / `app.get(名)`（**请求级参数**）: {sorted(need_req)}")
+    print("  （归属口径：一笔供给只给**它自己那次请求**背书；跨请求不互相顶替）")
     if miss:
-        print(f"  [warn] SQL 需要但页面未发现来源: {miss}")
+        print(f"  [warn] SQL 需要但页面未发现来源（确缺参）: {miss}")
+        for _d, _ns in sorted(miss_by_carrier.items()):
+            print(f"         · {_d} 需要但无本请求供给: {sorted(_ns)}")
         print("         可能来自：上级容器 / 其它请求（Wb.request）/ sys.* 等框架内置变量；"
               "**由调用方页面传入**的那一类本工具不核对")
         print("         能力边界：只看**这一个页面**静态可见的来源。`Wb.open({params})` 传进本页的键"
               "写在调用方页面里，要核对请到调用方页面去跑")
         # 缺来源留痕（**终态口径**）：`params` 缺来源**默认只告警（rc=0）**；要阻塞须显式加 `--strict`（rc=1）。
-        # 下面两条 `[note]` 即终态文案，**不再有「预告式」说明**（旧的「今后会变松」那半句已作废）。
         if getattr(args, "strict", False):
             print("         [note] 已按 `--strict` 判失败（rc=1）—— 要不阻塞就不加它。")
         else:
             print("         [note] 默认只告警（rc=0）；要让它阻塞请加 `--strict`。")
     else:
-        print("  [ok]   SQL 需要的参数在页面侧都能找到来源")
+        if not unknown:
+            print("  [ok]   SQL 需要的参数在页面侧都能找到来源")
+    if unknown:
+        print(f"  [note] 无法静态核对的参数（未核对）: {unknown}")
+        for _d, _ns in sorted(unknown_by_carrier.items()):
+            print(f"         · {_d} 需要、仅存在无法归属的供给: {sorted(_ns)}")
+        print("         ⚠️ 这些名字存在供给，但供给无法静态关联到具体请求目标 ⇒ 既不能判绿也不能判缺。")
     if extra:
         print(f"  [info] 页面送了但 SQL 未用到: {extra}")
     print("\n  提示：参数名 = 控件 `itemId`；改了 itemId 或把控件移出容器都会**静默失效**（取到空值）。")
-    # `#36` 判失败（`--strict` 下；真·悬空单列为失败项）。⭐ **下方判定行已按本段"翻脸"改写** ——
-    #   段 2 曾在此留「下方判定行**原样不动**」的注释（那是**预告期**的约定），本段正是要动它
-    #   ⇒ 该旧注释**已同步作废**（⛔ 不要再按"原样不动"理解本行）。
     _emit_36(args, dangling36, placeholder36, mod36_notes)
     _print_params_tail(args, root, text, stores, field_set, target_is_carrier=_target_is_carrier)
-    # `#36` 判失败（⭐ **末行出口**）：原有「SQL 缺来源（`miss`）」＋ 本段新增「真·悬空取数 url」；
-    #   ⛔ **显式占位不计入 `dangling36`**（分类见 `_ref_kind36`）⇒ 占位豁免继续生效。
-    return 1 if ((miss or dangling36) and getattr(args, "strict", False)) else 0
+    # `#36` 判失败（⭐ **末行出口**）：已确认缺参（`miss`）／真·悬空 url ⇒ `--strict` 下 rc=1；
+    #   仅「未核对」⇒ `--strict` 下 rc=2（输入不可静态判定，非内容判据失败）；否则 rc=0。
+    #   ⛔ 显式占位不计入 `dangling36`（分类见 `_ref_kind36`）⇒ 占位豁免继续生效。
+    if getattr(args, "strict", False):
+        if miss or dangling36:
+            return 1
+        if unknown:
+            return 2
+    return 0
 
 
 # --------------------------------------------------------------------------- #

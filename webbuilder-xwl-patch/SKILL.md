@@ -2,7 +2,7 @@
 name: webbuilder-xwl-patch
 slug: skill-webbuilder-xwl-patch
 displayName: webbuilder-xwl-patch
-version: 1.7.11
+version: 1.7.12
 license: MIT
 metadata:
   category: development-tools
@@ -398,8 +398,8 @@ python <skill根>/scripts/xwl.py diffguard <改过的文件或目录> --strict  
 | `diffguard` | **相对 git 基线**检测「多行内容被压平」 |
 | `itemids` | 注册键重名报告 + 建议改名（只读） |
 | `paths` | 列出 `sql` / `totalSql` / `serverScript` / `url` 四类字段的位置 |
-| `params` | 核对「页面 → store → SQL」传参链路（缺来源**默认只告警**、`--strict` 才判失败；`--upstream` 追加「谁在调用本页 / 谁引用本载体」的上游扫描） |
-| `sqlrefs` | 校验 `{#名字#}` ↔ `serverScript` 是否自洽 |
+| `params` | 核对「页面 → store → SQL」传参链路（**请求级归属**：一笔供给只给它自己那次请求背书，跨请求不互相顶替；缺来源**默认只告警**、`--strict` 才判失败；`--strict` 下**仅「未核对」**判 `rc=2`、**确缺参/悬空**判 `rc=1`；`--upstream` 追加「谁在调用本页 / 谁引用本载体」的上游扫描） |
+| `sqlrefs` | 校验 `{#名字#}` ↔ `serverScript` 是否自洽（`serverScript` 供给只认代码层、接收者为 `request`、首参为字面量的 `request.setAttribute(…)`；首参非字面量只算「可能提供」、不计已提供。**无适用检查内容**——无 `module.serverScript` 且无非空 `sql/totalSql`——判 `rc=1`） |
 | `folders` | `folder.json`（设计器导航树索引）一致性检查 / 登记 |
 | `schema` | 查设计器控件注册表（合法 `configs` / `events` / 骨架） |
 | `dump` | 按加载器规则解析后美化输出 |
@@ -413,12 +413,12 @@ python <skill根>/scripts/xwl.py diffguard <改过的文件或目录> --strict  
 | 退出码 | 含义 |
 |---|---|
 | `0` | 成功 |
-| `1` | **被检查对象或查询结果有问题**（`check` 有 `[FAIL]`；`paths` / `sqlrefs` / `sql` / `events` 没找到目标字段 —— 即无可抽取内容、空结果判 `1`） |
-| `2` | **用法或前置条件不满足**（缺必填参数、`edit` 锚点次数不符、`new` 拒绝覆盖、读不到目标文件；**`check` 的 `--controls` 取不到控件注册表** —— 此时 ①–⑧⑩ 已照常判定，只有 ⑨ 与 configs 内联 `[js]` 未校；**`patch`／`edit` 的写前门禁：node 调用失败（超时/崩溃）也判 `2`**） |
+| `1` | **被检查对象或查询结果有问题**（`check` 有 `[FAIL]`；`paths` / `sqlrefs` / `sql` / `events` 没找到目标字段 —— 即无可抽取内容、**无适用检查内容**判 `1`） |
+| `2` | **用法或前置条件不满足**（缺必填参数、`edit` 锚点次数不符、`new` 拒绝覆盖、读不到目标文件；**`check` 的 `--controls` 取不到控件注册表** —— 此时 ①–⑧⑩ 已照常判定，只有 ⑨ 与 configs 内联 `[js]` 未校；**`patch`／`edit` 的写前门禁：node 调用失败（超时/崩溃）也判 `2`**；**`params --strict` 下「仅未核对」判 `2`**） |
 
 两类**判定会随命令线宽严变化**的命令，各自三档（默认 / 收紧 / 放松）：`diffguard`（疑似压平默认只告警，
 `--strict` 判失败 rc=1、一个文件都没比成才 rc=2，非 git 仓库 / 新文件以 `[note]` 跳过）；`params`（缺来源默认只告警，`--strict` 判失败，
-缺来源时打一行 `[note]` 告知怎么改成阻塞）。
+缺来源时打一行 `[note]` 告知怎么改成阻塞；`--strict` 下**确缺参/悬空 rc=1、仅「未核对」rc=2**，两者并存按 rc=1 并同时列出未核对项）。
 
 > **原则：判定变严要喧哗、放松要留痕** —— 收紧必须让调用方**当场**看得见（`[FAIL]` / rc≠0）；
 > 放松必须留一条**可查的预告行**（`[note]`），不能悄悄改掉默认行为。

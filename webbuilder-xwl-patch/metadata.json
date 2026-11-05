@@ -3,7 +3,7 @@
   "name_en": "webbuilder-xwl-patch",
   "displayName": "webbuilder-xwl-patch",
   "author": "yfwang0731",
-  "version": "1.7.11",
+  "version": "1.7.12",
   "schema_version": "1.0",
   "description": "WebBuilder（wb）平台 .xwl 定义文件的处理与安全编辑：结构级 patch（只给值 / 子树，工具按设计器自己的算法重建整份文件）+ 格式校验 + 相对 git 基线的压平检测。",
   "core_capabilities": [
@@ -161,6 +161,11 @@
     "references/workflow-notes-guards-maintenance.md": "evidence"
   },
   "update_history": [
+    {
+      "version": "1.7.12",
+      "date": "2026-11-05",
+      "summary": "params 请求级来源归属与 sqlrefs 供给识别、判空：**无新子命令、无新参数**。①`params` 由页面级全局 provided 改为**请求级归属**——一笔供给只给它自己那次请求（含 `app.<store>.load` 按 store 自身 url 归属）背书，跨请求不互相顶替；静态无法关联的供给逐项标「未核对」，不扩大扫描面。`--strict` 下**确缺参/悬空 rc=1、仅「未核对」rc=2**，并存按 rc=1 并同列未核对；默认面仍 rc=0 逐项报告。②`sqlrefs` 的 `serverScript` 供给只认代码层、接收者为 `request`、首参为字面量的 `request.setAttribute(…)`——注释/纯字符串/其他接收者的伪调用不算；首参非字面量只算「可能提供」、不计已提供、不抵消缺供给（带点疑似内置仍按原告警、不升级 missing）。③`sqlrefs` 按**适用内容**判空：无 `module.serverScript` 且无非空 `sql/totalSql` ⇒「无适用检查内容」rc=1（与公开退出码表「无适用检查内容判 1」一致）；`select 1`／`new --kind sql` 正例仍 rc=0；problems 逐项具体打印。同步 SKILL.md 命令表与 §4.2 退出码、CHANGELOG、selftest 具名正反例。"
+    },
     {
       "version": "1.7.11",
       "date": "2026-11-03",
