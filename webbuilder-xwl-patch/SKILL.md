@@ -2,7 +2,7 @@
 name: webbuilder-xwl-patch
 slug: skill-webbuilder-xwl-patch
 displayName: webbuilder-xwl-patch
-version: 1.7.12
+version: 1.7.13
 license: MIT
 metadata:
   category: development-tools
@@ -204,7 +204,8 @@ hidden, children, roles, title, iconCls, inframe, pageLink
 
 ### 2.6 压平检测：`diffguard`（相对 git 基线）
 
-> `diffguard` 的**判据**（定义级 / **粗筛**）、漏报面、前置必要条件、跳过与退出码、成本与 `--rev` 用法见
+> `diffguard` 的**判据**（定义级 / **粗筛**）、漏报面、只认新发生合并的两道闸（基线变更行对齐 ＋
+> 出现次数）、跳过与退出码、成本与 `--rev` 用法见
 > [`references/faq.md`](references/faq.md) §三 与 [`references/workflow-notes-guards.md`](references/workflow-notes-guards.md) §二③；
 > **它只在 git 仓库里有意义**，且**只扫改动过的文件**，别对整个 `wb/` 跑。提交前该跑一次，见**第三章第 5 步**。
 
@@ -414,10 +415,11 @@ python <skill根>/scripts/xwl.py diffguard <改过的文件或目录> --strict  
 |---|---|
 | `0` | 成功 |
 | `1` | **被检查对象或查询结果有问题**（`check` 有 `[FAIL]`；`paths` / `sqlrefs` / `sql` / `events` 没找到目标字段 —— 即无可抽取内容、**无适用检查内容**判 `1`） |
-| `2` | **用法或前置条件不满足**（缺必填参数、`edit` 锚点次数不符、`new` 拒绝覆盖、读不到目标文件；**`check` 的 `--controls` 取不到控件注册表** —— 此时 ①–⑧⑩ 已照常判定，只有 ⑨ 与 configs 内联 `[js]` 未校；**`patch`／`edit` 的写前门禁：node 调用失败（超时/崩溃）也判 `2`**；**`params --strict` 下「仅未核对」判 `2`**） |
+| `2` | **用法或前置条件不满足**（缺必填参数、`edit` 锚点次数不符、`new` 拒绝覆盖、读不到目标文件；**`check` 的 `--controls` 取不到控件注册表** —— 此时 ①–⑧⑩ 已照常判定，只有 ⑨ 与 configs 内联 `[js]` 未校；**`patch`／`edit` 的写前门禁：node 调用失败（超时/崩溃）也判 `2`**；**`params --strict` 下「仅未核对」判 `2`**；**`diffguard --strict` 下「检查未完成」（相似度档预算触顶）判 `2`** —— 含义是"没查完"，不是"有问题"） |
 
 两类**判定会随命令线宽严变化**的命令，各自三档（默认 / 收紧 / 放松）：`diffguard`（疑似压平默认只告警，
-`--strict` 判失败 rc=1、一个文件都没比成才 rc=2，非 git 仓库 / 新文件以 `[note]` 跳过）；`params`（缺来源默认只告警，`--strict` 判失败，
+`--strict` 判失败 rc=1；**相似度档预算触顶＝检查未完成**：默认档 rc=0 但末行标 `=== 结果: 未完成`、不算完整通过，
+`--strict` 下 rc=2；一个文件都没比成才 rc=2，非 git 仓库 / 新文件以 `[note]` 跳过；**完整且无未完成/跳过时末行带「完整通过」**）；`params`（缺来源默认只告警，`--strict` 判失败，
 缺来源时打一行 `[note]` 告知怎么改成阻塞；`--strict` 下**确缺参/悬空 rc=1、仅「未核对」rc=2**，两者并存按 rc=1 并同时列出未核对项）。
 
 > **原则：判定变严要喧哗、放松要留痕** —— 收紧必须让调用方**当场**看得见（`[FAIL]` / rc≠0）；

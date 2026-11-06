@@ -54,9 +54,10 @@
     `_write_file` 与字节数展示一并兜住（只兜 `OSError` 不够：`UnicodeError` 不是它的子类）。
   · **`diffguard`：相对 git 基线检测「多行被压平」** —— 补的是 §2.3 承认的洞
     （压平后文件**仍合法**，`check` 与 `node --check` 都放行，只靠人工读 `git diff` 很容易漏）。
-    判据是**双条件**（续行符净减少 **且** 最长行显著变长），所以这里**正反两侧都要钉**：
-    "压平必须报"与"合法删减一段多行 JS / 单行变长必须不报"同等重要 ——
-    只留前半条，这个守卫会被日常改动淹没（负向测试：去掉最长行那条 → 立刻报误报）。
+    主判据是**定义级**的（工作区某行 == 基线连续多行去掉续行符后的拼接），且只认**新发生的合并**
+    （续行组须涉及基线变更行 ＋ 工作区出现次数多于基线）；「续行符净减少 且 最长行显著变长」
+    只是**粗筛**。正反两侧都要钉：压平必须报（含净计数被别处新增续行抵消的补偿式压平）、
+    合法删减 / 单行变长 / 内容移动 / 极短行拼接连巧必须不报。
     另钉住降级路径：新文件、非 git 目录 → `[note]` 跳过 + rc=0；`--strict` 下跳过即 rc=2；
     `--rev` 写错是用法错、恒 rc=2（且不得被说成"新增文件"）。
   · **SKILL.md 的 frontmatter 有 1024 上限** —— description 是路由真正读的字段，
@@ -115,7 +116,7 @@ def _baseline_read():
 
     与 `_load_baseline()` 分开：`_load_baseline()` 是**宽容读**（老用法兜底 `{}`）；
     基线守卫（块清单/文档守卫多重集）**必须用本函数** —— 基线缺失 / 坏 JSON / 非对象时**显式失败**，
-    ⛔ 不回退当前源码自举当通过（序5／ITEM-1210）。
+    ⛔ 不回退当前源码自举当通过。
     """
     if not os.path.isfile(_BASELINE_PATH):
         return None, "missing"
@@ -639,7 +640,7 @@ def _check_basics(tmp, node, failures, write) -> None:
             failures.append(f"{name} 失败（产出前 200 字符={after[:200]!r}）")
 
     # 尾部（非 UTF-8 文案 / 调用点探针 / 裸 NUL / ops 草稿 / NaN / 负零金标 / 写盘原子性）
-    #   已下沉为模块级 `_check_basics_tail`（ITEM-1170：本函数 482 行，要进 400 的上限）。
+    #   已下沉为模块级 `_check_basics_tail`（本函数 482 行，要进 400 的上限）。
     #   判据文本逐字未改，只换了宿主。
     _check_basics_tail(tmp, failures)
 
@@ -1342,7 +1343,7 @@ def _check_subcommands(tmp, node, failures, write) -> None:
     smoke_fail = []
     for label, fn, kw, want, want_rc in (
         ("paths",   xwl.cmd_paths,   {"file": page_path}, "原路径", 0),
-        # 序3／ITEM-1192：本夹具只有 store url、无 module/dataprovider ⇒ **无适用检查内容** ⇒ rc=1
+        # 本夹具只有 store url、无 module/dataprovider ⇒ **无适用检查内容** ⇒ rc=1
         #   （公开退出码表「空结果判 1」真实落在此断言；want="" 且不断言 rc 时契约无人守）。
         ("sqlrefs", xwl.cmd_sqlrefs, {"file": page_path}, "无适用检查内容", 1),
         ("params",  xwl.cmd_params,  {"file": page_path, "module_root": tmp,
@@ -2107,7 +2108,7 @@ def _check_subcommands_tail(tmp, failures) -> None:
         failures.extend(doc_fail)
 
 
-# ---- `_check_new_guards` 的原局部助手（`ITEM-1077` 拆函数时上提为模块级；四个族共用）----
+# ---- `_check_new_guards` 的原局部助手（拆函数时上提为模块级；四个族共用）----
 def _dump(obj, path):
     """按设计器格式（缩进 1、CRLF）写一份 `.xwl` 夹具；父目录自动建。"""
     os.makedirs(os.path.dirname(path), exist_ok=True)
@@ -2122,7 +2123,7 @@ def _store(iid, url):
 
 
 def _check_new_guards(tmp, node, failures, write) -> None:
-    """新近落地、**尚无守卫**的行为点 —— **薄壳**（`ITEM-1077` 按判据族拆分，行为逐字未变）。
+    """新近落地、**尚无守卫**的行为点 —— **薄壳**（按判据族拆分，行为逐字未变）。
 
     ⭐ 子函数按**文件内的连续区间**切：块内输出顺序也是行为（`--jobs` 并行档按块定义序
     回放各块的 stdout）⇒ ⛔ 不许重排调用顺序、⛔ 不许把同一段判据拆到两个族里。
@@ -2140,7 +2141,7 @@ def _check_new_guards(tmp, node, failures, write) -> None:
 def _ng_cli_readonly(tmp, node, failures, write) -> None:
     """① `--strict`／② `--upstream`／③ `folders` 结论行 —— **只读命令的行为面**。
 
-    （`ITEM-1077` 从 `_check_new_guards` 原样搬出，判据一行未改。）
+    （从 `_check_new_guards` 原样搬出，判据一行未改。）
     """
     # ---- ① `--strict` 选项存在，缺源时默认只告警、`--strict` 才阻塞 ----
     # 起因：`--strict` 是 params 缺源判定的逃生开关（默认 rc=0 只告警、给了才 rc=1），但**没有回归保护** ——
@@ -2323,7 +2324,7 @@ def _ng_cli_readonly(tmp, node, failures, write) -> None:
 def _ng_check_controls(tmp, node, failures, write) -> None:
     """④ `check --controls`（⑨／⑥-ext／⑩／拒写归因）／⑤ ⑥-ext 行序确定 —— **`check` 的开关面**。
 
-    （`ITEM-1077` 从 `_check_new_guards` 原样搬出，判据一行未改。）
+    （从 `_check_new_guards` 原样搬出，判据一行未改。）
     """
     # ---- ④ `check --controls`：⑨ 校 configs 键合法性（`[warn]`）＋ ⑥ 扩到 configs 内联 `[js]`（`[FAIL]`）----
     # 起因（`#48`/`#49` 落地后**整条无覆盖**）：`check` 的 ⑨/⑥-ext **只在显式给 `--controls` 时才跑**，
@@ -2707,7 +2708,7 @@ def _ng_check_controls(tmp, node, failures, write) -> None:
 def _ng_contract_and_unit(tmp, node, failures, write) -> None:
     """⑬ `_OPS_AUTH` 五处清单一致／⑭ `_js_err_head` 单元级 —— **契约与单元面**。
 
-    （`ITEM-1077` 从 `_check_new_guards` 原样搬出，判据一行未改。）
+    （从 `_check_new_guards` 原样搬出，判据一行未改。）
     """
     # ---- ⑬ `#77`：op 清单**逐处**都须对齐写死的权威清单 `_OPS_AUTH`（不只是「两侧互恰」）----
     #   起因（按守卫维护纪律，不这么做会漏什么）：`insertKey` 落地后 5 处 op 清单各自漂移；首版判据只比
@@ -2793,7 +2794,7 @@ def _ng_contract_and_unit(tmp, node, failures, write) -> None:
 def _ng_write_overwrite(tmp, node, failures, write) -> None:
     """⑥ `#72`：`patch` 覆盖**已存在的容器键**且新值是标量 ⇒ 必须打 `[warn]`（rc 不变）。
 
-    （`ITEM-1077` 从 `_check_new_guards` 原样搬出，判据一行未改。）
+    （从 `_check_new_guards` 原样搬出，判据一行未改。）
     """
     # ---- ⑥ `#72`（插队）：`patch` 覆盖**已存在的容器键**（dict/list）且新值是标量 ⇒ 必须可见 ----
     #   起因（按守卫维护纪律）：`set`/`insertKey` 的 path 末段命中一个**已存在的容器键**（`configs`／`children`）
@@ -2864,7 +2865,7 @@ def _ng_write_overwrite(tmp, node, failures, write) -> None:
 def _ng_params_defaults(tmp, node, failures, write) -> None:
     """⑦–⑫ —— `params` 的剥注释／文案分句／`--upstream` 目标参数化／`--strict` 悬空（默认面 ＋ 开关面）。
 
-    （`ITEM-1077` 从 `_check_new_guards` 原样搬出，判据一行未改。）
+    （从 `_check_new_guards` 原样搬出，判据一行未改。）
     """
     # ---- ⑦ `#50`（本段序 1）：`params` 需求侧提取 `{?名?}` **前剥注释**（与来源侧同口径）----
     #   起因（按守卫维护纪律）：需求侧（`module.serverScript` ＋ `dataprovider.sql/totalSql`）提取 `{?名?}` 时**不剥注释**
@@ -3204,7 +3205,7 @@ def _ng_params_defaults(tmp, node, failures, write) -> None:
 def _ng_platform(tmp, node, failures, write) -> None:
     """⑮ `#75` 模块根／⑯ `#74` 坏 `--controls`／⑰ `#80` 分组名 —— **平台面**（⑮ 的夹具被⑯⑰ 复用）。
 
-    （`ITEM-1077` 从 `_check_new_guards` 原样搬出，判据一行未改。）
+    （从 `_check_new_guards` 原样搬出，判据一行未改。）
     """
     # ---- ⑮ `#75`（本段序）：模块根「**存在但不像模块根**」⇒ store 支 / direct 支**两站点**都改「未核对」----
     #   起因（按守卫维护纪律）：`--module-root` 误指向（如 webapp 根而非 `…/wb/modules`）时，`#75` 判据随**目录规模**
@@ -3312,7 +3313,7 @@ def _ng_platform(tmp, node, failures, write) -> None:
               "「`url:'m?xwl=…'` 引用的 m?xwl（1 个；**不区分调用方**）」（⛔ 不加任何开关）")
 
 
-# ---- 序 2（`ITEM-1040`）：`rules_lint` —— **仓外**规则文件的「候选待办」机检 ----
+# ---- `rules_lint` —— **仓外**规则文件的「候选待办」机检 ----
 #   制度正本 ＝ 开发者规则 `rules/webbuilder-xwl-patch.md` 的 `11.4`（行首自标位 `todo:y` ＋ 登记 id 表）。
 #   ⚠️ 要校的标记在**仓外**（`rules/README.md` 首行逐字「不随任何 skill 包发布」），而本文件在
 #     `git ls-files` 内 ＝ **分发面** ⇒ 发布包／CI 里没有 `rules/` ⇒ 扫描根**只能**由环境变量给。
@@ -6161,7 +6162,7 @@ def _docs_layers_and_distribution(_S) -> None:
 _FN_CAP = 400
 # _CAP_FNS 由 @_cap 自注册派生（_cap_fns()），不再手填常量
 
-# ⭐ 独立纳管集合（序6／ITEM-1211）：**不能只拿装饰器派生集合自证** —— `@_cap` 一旦从某函数上
+# ⭐ 独立纳管集合：**不能只拿装饰器派生集合自证** —— `@_cap` 一旦从某函数上
 #   被摘掉，`_cap_fns()` 就少一个名字、而"集合与自身一致"照样绿 ⇒ 超限函数静默逃逸。
 #   故这里冻结一份**独立清单**作 oracle：`_cap_fns()` 必须与它**逐名相等**（缺 / 多都判红）。
 #   ⚠️ 有意增删纳管对象时：先改本清单 **并** 在 `CHANGELOG.md` 写明，再改函数装饰器；
@@ -7733,10 +7734,12 @@ def _check_diffguard(tmp, node, failures, write) -> None:
     文件**依然是合法 JSON**，`check` 全绿、`node --check` 还可能返回 0 ——
     靠人工读 `git diff` 去找这种损坏，规模一大就找不过来。
 
-    判据为什么必须是**两条**（这里正反两侧都钉住）：
+    判据为什么不能只看计数（这里正反两侧都钉住）：
       · 只看"续行符变少" ⇒ 合法地删掉一段多行 JS / 删一个控件也会净减少 ⇒ **必然误报**；
-      · 压平的真正指纹是「原来好几行的内容挤进同一行」⇒ **最长行暴增**。
-    所以「压平必须报」与「合法删减必须不报」两条同等重要，缺一条这个能力就没法用。
+      · 主判据是**定义级**的：工作区某行 == 基线连续多行去掉续行符后的拼接，且**只认新发生的合并**
+        （续行组涉及基线变更行 ＋ 工作区出现次数多于基线）；「续行符净减少 且 最长行显著变长」只是**粗筛**。
+      · 但净计数也不能当**否决**：别处新增续行会把净计数抵消，真压平反而不报（"补偿式压平"）。
+    所以「压平必须报」与「合法删减 / 内容移动 / 极短行巧合必须不报」同等重要，缺一条这个能力就没法用。
     """
     print("[26] diffguard（相对 git 基线的压平检测）")
     xwl_py = os.path.join(SKILL_ROOT, "scripts", "xwl.py")
@@ -7933,13 +7936,19 @@ def _check_diffguard(tmp, node, failures, write) -> None:
         print("[ok]  合并行号：续行被并成一行（带尾随空白）时，报出的工作区行号为真实物理行 1（非哨兵 0）")
 
     # ⑤ 正常走一遍 patch 之后不得报（否则这个守卫会被日常改动淹没）
-    _mk("dg.xwl", BASE)
+    #    ⚠️ 夹具必须是**可 patch 的合法 xwl**：④c 留下的裸文本夹具会让 patch 直接失败，
+    #       那样"patch 后不误报"就成了空断言（patch 根本没成功也能绿）⇒ 先恢复 SRC 并入库再 patch。
+    _mk("dg.xwl", SRC)
+    _git(*GIT_ID, "commit", "-q", "-am", "patch-base")
+    BASE = SRC
     ops = os.path.join(repo, "dg_ops.json")
     with open(ops, "w", encoding="utf-8") as fh:
         fh.write('[{"op":"append","path":["children",0,"children"],"value":'
                  '{"configs":{"itemId":"dgNew","text":"新"},"expanded":false,'
                  '"children":[],"type":"button","events":{"click":"Wb.info(1);"}}}]')
-    _cli("patch", "dg.xwl", "--ops", "dg_ops.json", "--backup")
+    _prc, _pout = _cli("patch", "dg.xwl", "--ops", "dg_ops.json", "--backup")
+    if _prc != 0:
+        dg.append("夹具：正常 patch 没有成功（rc=%s）—— 「patch 后不误报」会退化成空断言" % _prc)
     rc, out = _cli("diffguard", "dg.xwl")
     if "[warn]" in out:
         dg.append("diffguard 把正常的 patch 改动误报成压平")
@@ -8000,22 +8009,207 @@ def _check_diffguard(tmp, node, failures, write) -> None:
                       "自报（用 os.path.relpath 反推会在短名/盘符不同源时静默跳过）"
                       % (_label, _alt))
 
-    # ⑦ **「判据依据」断言（拆行守卫的必配自检）**：造一个「内容与基线相邻两行的拼接相同，
-    #    但**续行符与行数都没减少**」的样本 ⇒ 必须**不报压平**，只给一句 [note] 说明判为"内容移动"。
-    #    守的是判据本身：缺了前置必要条件，`}` / `');'` 这类**极短行**的"内容恰好等于相邻两行拼接"
-    #    会在**真实历史版本**上误报，而三个计数一个都没变（`行数 4470 → 4470` 在数学上就排除了压平）。
+    # ---- 判据一「只认新发生的合并」：旧「内容移动」夹具重写为正例 ＋ 三种反误报 ----
+    # 旧夹具（内容与基线相邻两行拼接相同、但续行符与行数都没减少 ⇒ 判"内容移动"不报）
+    #   **正是本序要改的缺陷样本**：那两条基线行确实被并成了一行，只是工作区别处新增了续行符
+    #   把净计数抵消掉了 ⇒ 「净计数否决」会漏报。现在它必须是**正例**（见 ④d）。
+
+    # ④d **补偿式压平必报**：第 1–2 行确实被合并，但工作区别处**新增了续行符**
+    #     ⇒ 续行符 1→1、行数 4→4，净计数完全抵消。净计数只作说明、**不是否决条件**。
     _mk("dg.xwl", BASE)
-    _move0 = "MOvE_A" + BS + '\n"x"\nP\nQ'                # 行数 4 / 续行符 1
-    _mk("dg.xwl", _move0)
-    _git(*GIT_ID, "commit", "-q", "-am", "move-fixture")
-    BASE = _move0
+    _comp0 = 'MOvE_A' + BS + '\n"x"\nP\nQ'                 # 行数 4 / 续行符 1
+    _mk("dg.xwl", _comp0)
+    _git(*GIT_ID, "commit", "-q", "-am", "comp-flatten")
+    BASE = _comp0
     _mk("dg.xwl", 'MOvE_A"x"' + "\nR" + BS + "\nS\nT")    # 行数 4 / 续行符 1（都没减少）
-    _rc, _out = _cli("diffguard", "dg.xwl", "--rev", "HEAD")
-    if "[warn]" in _out and "压平" in _out:
-        dg.append("「内容拼接相同、但续行符与行数都没减少」被判成了**压平** —— "
-                  "精确命中缺前置必要条件（压平必然让行数或续行符减少）")
-    if "内容移动" not in _out:
-        dg.append("判为内容移动时没给 [note] 说明 —— 用户无从知道它为什么不计入告警")
+    _rc, _out = _cli("diffguard", "dg.xwl")
+    if "[warn]" not in _out or "精确命中" not in _out:
+        dg.append("补偿式压平（别处新增续行把净计数抵消）漏报 —— 净计数不得再当否决条件")
+    _rc, _out = _cli("diffguard", "dg.xwl", "--strict")
+    if _rc != 1:
+        dg.append("补偿式压平 --strict 下应 rc=1，实得 %s" % _rc)
+    if "工作区第 1 行" not in _out:
+        dg.append("补偿式压平应报出合并后的真实工作区行号 1")
+    _mk("dg.xwl", BASE)
+
+    # ④e **极短行拼接连巧**（反误报）：基线第 1–2 行本次未改，工作区另起一行恰好等于两者拼接
+    #     ⇒ 不得报压平（`}` / `');'` 这类极短行在真语料上是天然误报源）。
+    _coin0 = "AA" + BS + "\nBB\nP\nQ\nS" + BS + "\nT"
+    _mk("dg.xwl", _coin0)
+    _git(*GIT_ID, "commit", "-q", "-am", "short-coincidence")
+    BASE = _coin0
+    _mk("dg.xwl", "AA" + BS + "\nBB\nAABB\nP\nQ\nT")
+    _rc, _out = _cli("diffguard", "dg.xwl", "--strict")
+    if "[warn]" in _out:
+        dg.append("极短行拼接连巧（基线行本次未改）被误报成压平 —— 这类在真语料上会恒亮")
+    if _rc != 0:
+        dg.append("极短行拼接连巧 --strict 下应 rc=0，实得 %s" % _rc)
+    if "本次未改" not in _out:
+        dg.append("极短行拼接连巧应给 [note] 说明「基线行本次未改」，用户才知道为什么不告警")
+    _mk("dg.xwl", BASE)
+
+    # ④f **真实结构移动**（反误报）：多行块整体搬到别处，没有被压平 ⇒ 不得报。
+    _mv0 = "H1" + BS + "\nH2\nP\nQ"
+    _mk("dg.xwl", _mv0)
+    _git(*GIT_ID, "commit", "-q", "-am", "real-move")
+    BASE = _mv0
+    _mk("dg.xwl", "P\nQ\nH1" + BS + "\nH2")
+    _rc, _out = _cli("diffguard", "dg.xwl", "--strict")
+    if "[warn]" in _out:
+        dg.append("真实结构移动（多行块整体搬家）被误报成压平")
+    if _rc != 0:
+        dg.append("真实结构移动 --strict 下应 rc=0，实得 %s" % _rc)
+    _mk("dg.xwl", BASE)
+
+    # ④g **多位置 ＋ 有界展示**：同一拼接文本在工作区出现 4 处 ⇒ 展开前 3 处 ＋「另有 1 处」；
+    #     去重按 (起始, 结束, 工作区行)，⛔ 同一位置不重复刷屏。
+    _ml0 = "MM" + BS + "\nNN\nZ"
+    _mk("dg.xwl", _ml0)
+    _git(*GIT_ID, "commit", "-q", "-am", "multi-position")
+    BASE = _ml0
+    _mk("dg.xwl", "MMNN\nMMNN\nMMNN\nMMNN\nZ")
+    _rc, _out = _cli("diffguard", "dg.xwl", "--strict")
+    if "[warn]" not in _out:
+        dg.append("多位置压平没有告警")
+    if _out.count("被合并成") != 3 or "另有 1 处精确命中" not in _out:
+        dg.append("多位置展示应有界：展开 3 处 ＋「另有 1 处精确命中」（实得 %d 处展开）"
+                  % _out.count("被合并成"))
+    if _rc != 1:
+        dg.append("多位置压平 --strict 下应 rc=1，实得 %s" % _rc)
+    _mk("dg.xwl", BASE)
+
+    # ④h/④i **既有同文本行**（例如这段在更早的提交里已压平入库，基线里已有该拼接文本）：
+    #     正例 —— 真压平 ＋ 基线已有同文本行 ⇒ 工作区**多出现**一处，仍必报；
+    #     反例 —— 只改了组内一行、基线已有同文本行 ⇒ 工作区未多出现，不报（⛔ 不误报既有内容）。
+    _ex0 = "AA" + BS + "\nBB\nZ\nAABB"
+    _mk("dg.xwl", _ex0)
+    _git(*GIT_ID, "commit", "-q", "-am", "existing-text")
+    BASE = _ex0
+    _mk("dg.xwl", "AABB\nZ\nAABB")                      # 第 1–2 行真被合并 ⇒ 新出现一处
+    _rc, _out = _cli("diffguard", "dg.xwl", "--strict")
+    if "[warn]" not in _out or "精确命中" not in _out:
+        dg.append("真压平且基线已有同文本行时漏报 —— 出现次数闸只应排除「没有多出来」的命中")
+    if _rc != 1:
+        dg.append("真压平 ＋ 基线已有同文本行 --strict 下应 rc=1，实得 %s" % _rc)
+    _mk("dg.xwl", "AA2" + BS + "\nBB\nZ\nAABB")         # 只改组内一行，命中既有同文本行
+    _rc, _out = _cli("diffguard", "dg.xwl", "--strict")
+    if "[warn]" in _out:
+        dg.append("只改组内一行却命中了基线里的既有同文本行 ⇒ 被误报成压平")
+    if _rc != 0:
+        dg.append("既有同文本行、工作区未多出现时应 rc=0，实得 %s" % _rc)
+    if "多出现" not in _out:
+        dg.append("既有同文本行被排除时应给 [note] 说明「工作区没有多出现」")
+    _mk("dg.xwl", BASE)
+
+    # ④j **相似度档同受基线变更行约束**：新行与拼接高度相似（ratio 过阈值），但基线那组续行
+    #     本次未改 ⇒ 不得报（否则"在别处加一行像拼接的内容"也会被当成压平）。
+    _sm0 = "SIM_ARG_1" + BS + "\nSIM_ARG_2\nZ"
+    _mk("dg.xwl", _sm0)
+    _git(*GIT_ID, "commit", "-q", "-am", "sim-changed")
+    BASE = _sm0
+    _mk("dg.xwl", "SIM_ARG_1" + BS + "\nSIM_ARG_2\nSIM_ARG_1SIM_ARG_2Q\nZ")
+    _rc, _out = _cli("diffguard", "dg.xwl", "--strict")
+    if "[warn]" in _out:
+        dg.append("相似度档没受基线变更行约束：基线组未改动也被判成压平")
+    if _rc != 0:
+        dg.append("相似度档 ＋ 基线行未改 --strict 下应 rc=0，实得 %s" % _rc)
+    _mk("dg.xwl", BASE)
+
+    # ④k/④l **变更行闸含组尾行（R2 已登记边界的对称两态）**：基线里**已有**一处与拼接相同的行，
+    #     组内**任一行**被改（组尾 / 组首）＋ 工作区又多出一处同文本行 ⇒ 变更行闸放行、
+    #     出现次数闸放行（2 > 1）⇒ **报**。这不是真压平，属 R2 已登记误报面；
+    #     ⛔ 不得把「只改组尾行」说成「基线行本次未改」（闸①区间含组尾行 `j + 1`）。
+    _r2a = "AABB" + "\n" + "AA" + BS + "\nBB\nZ"
+    _mk("dg.xwl", _r2a)
+    _git(*GIT_ID, "commit", "-q", "-am", "r2-group")
+    BASE = _r2a
+    for _lbl, _work, _bad in (
+        ("组尾行", "AABB\nAA" + BS + "\nBBX\nAABB", "尾行"),
+        ("组首行", "AABB\nAA2" + BS + "\nBB\nAABB", "首行"),
+    ):
+        _mk("dg.xwl", _work)
+        _rc, _out = _cli("diffguard", "dg.xwl", "--strict")
+        if "[warn]" not in _out or "精确命中" not in _out:
+            dg.append("只改%s＋既有同文本行多出一处：变更行闸漏了组内该行（按 R2 边界应报精确命中）"
+                      % _lbl)
+        if _rc != 1:
+            dg.append("只改%s＋既有同文本行多出一处 --strict 下按 R2 边界应 rc=1，实得 %s"
+                      % (_lbl, _rc))
+        if "本次未改" in _out:
+            dg.append("只改%s被误称「基线行本次未改」—— 组内任一行被改都应进变更行闸区间"
+                      % _bad)
+    _mk("dg.xwl", BASE)
+
+    # ④m/④n/④o **预算触顶三态**（测试进程内 monkeypatch 上限，⛔ 不改产品默认）：
+    #     默认档 rc=0 但末行**不得** `ALL OK`；strict 下「仅未完成」rc=2、「疑似＋未完成」rc=1、
+    #     「完整且无问题」rc=0 且末行含「完整通过」。`sim_capped` 必须独立于命中是否为空报告。
+    def _dg_inproc(strict, cap=None):
+        """进程内跑 `cmd_diffguard`（cwd=夹具仓库）；`cap` 给数字时把两档预算上限临时压到该值。"""
+        ns = argparse.Namespace(targets=["dg.xwl"], rev="HEAD", strict=strict)
+        _old_caps = (xwl._SIM_MAX_CMP, xwl._SIM_MAX_GATE)
+        _cwd = os.getcwd()
+        _buf = io.StringIO()
+        try:
+            if cap is not None:
+                xwl._SIM_MAX_CMP = xwl._SIM_MAX_GATE = cap
+            os.chdir(repo)
+            with contextlib.redirect_stdout(_buf):
+                _r = xwl.cmd_diffguard(ns)
+        finally:
+            xwl._SIM_MAX_CMP, xwl._SIM_MAX_GATE = _old_caps
+            os.chdir(_cwd)
+        return _r, _buf.getvalue()
+
+    # ④m 仅「未完成」：精确不命中 ＋ 相似度触顶（上限 0）⇒ strict rc=2 / 默认 rc=0，末行均非 ALL OK
+    _cap_only = "QQQQQQQQ" + BS + "\nRRRRRRRR\nP\nQ"
+    _mk("dg.xwl", _cap_only)
+    _git(*GIT_ID, "commit", "-q", "-am", "capped-only")
+    BASE = _cap_only
+    _mk("dg.xwl", "QQQQQQQQRRRRRRRX\nP\nQ")
+    _rc, _out = _dg_inproc(False, cap=0)
+    if _rc != 0:
+        dg.append("预算触顶（默认档）应 rc=0，实得 %s" % _rc)
+    if "ALL OK" in _out or "未完成" not in _out:
+        dg.append("预算触顶（默认档）末行不得标 ALL OK，且必须报「未完成」")
+    if "-> OK（未完成" not in _out:
+        dg.append("预算触顶的单文件结论应是「-> OK（未完成：…）」")
+    _rc, _out = _dg_inproc(True, cap=0)
+    if _rc != 2:
+        dg.append("预算触顶（strict）应 rc=2（没查完），实得 %s" % _rc)
+    if "ALL OK" in _out or "未完成" not in _out:
+        dg.append("预算触顶（strict）末行应为「未完成」而非 ALL OK")
+    _mk("dg.xwl", BASE)
+
+    # ④n 「疑似 ＋ 未完成」：疑似优先 rc=1（并列未完成仍 1），且未完成要被计入并报告
+    _cap_sus = "KKKKKKKK" + BS + "\nLLLLLLLL\nP\n" + "QQQQQQQQ" + BS + "\nRRRRRRRR\nZ"
+    _mk("dg.xwl", _cap_sus)
+    _git(*GIT_ID, "commit", "-q", "-am", "suspect-capped")
+    BASE = _cap_sus
+    _mk("dg.xwl", "KKKKKKKKLLLLLLLL\nP\nQQQQQQQQRRRRRRRX\nZ")
+    _rc, _out = _dg_inproc(True, cap=0)
+    if _rc != 1:
+        dg.append("疑似＋未完成（strict）应 rc=1（疑似优先），实得 %s" % _rc)
+    if "FAIL" not in _out or "未完成 1" not in _out:
+        dg.append("疑似＋未完成（strict）应给 FAIL 并在计数里报「未完成 1」")
+    _rc, _out = _dg_inproc(False, cap=0)
+    if _rc != 0:
+        dg.append("疑似＋未完成（默认档）应 rc=0，实得 %s" % _rc)
+    if "ALL OK" in _out:
+        dg.append("疑似＋未完成（默认档）末行不得标 ALL OK")
+    _mk("dg.xwl", BASE)
+
+    # ④o 「完整且无问题」：strict / 默认均 rc=0，末行明确「完整通过」
+    _ok_base = "AA\nBB\nCC"
+    _mk("dg.xwl", _ok_base)
+    _git(*GIT_ID, "commit", "-q", "-am", "complete-ok")
+    BASE = _ok_base
+    _mk("dg.xwl", "AA\nBB\nCC\nDD")
+    for _strict in (True, False):
+        _rc, _out = _dg_inproc(_strict, cap=None)
+        if _rc != 0:
+            dg.append("完整且无问题（strict=%s）应 rc=0，实得 %s" % (_strict, _rc))
+        if "完整通过" not in _out or "ALL OK" not in _out or "未完成" in _out:
+            dg.append("完整且无问题（strict=%s）末行应明确「完整通过」且无「未完成」" % _strict)
     _mk("dg.xwl", BASE)
 
     # （⑩ 超时臂已前置到本块最前面 —— 放在这里会被"建库超时／建库失败"两处 `return` 挡住。）
@@ -8024,7 +8218,12 @@ def _check_diffguard(tmp, node, failures, write) -> None:
     else:
         print("[ok]  压平必报 / 合法删减与单行变长不误报 / patch 改动不误报 / "
               "新文件与非仓库干净跳过 / --strict 与 --rev 的退出码正确 / "
-              "短名与长名两种 cwd 写法都能比对 / **计数未变时判为内容移动而不报压平** / "
+              "短名与长名两种 cwd 写法都能比对 / "
+              "**补偿式压平必报、基线行未改的极短行拼接与真实移动不误报 / "
+              "多位置逐个列出且有界 / 既有同文本行按「工作区是否多出现」判 / "
+              "相似度档同受基线变更行约束 / 变更行闸含组尾行（组首/组尾被改同判）** / "
+              "**预算触顶三态：strict 仅未完成 rc=2 / 疑似＋未完成 rc=1 / 完整通过 rc=0，"
+              "默认档末行不得 ALL OK** / "
               "**1ms 阈值下超时有界返回且原因显式**")
 
 
@@ -9022,7 +9221,7 @@ def _check_bc_contract(tmp, node, failures, write) -> None:
     _ok("params 侧与 itemids 侧对 app['名'] / app.<名> 的容器名认定逐名一致", f15)
 
     # 尾部两组（`app._X` 欠报 / params 按注册键找容器）已下沉为 `_check_bc_contract_tail`
-    #   （ITEM-1170：本函数 406 行，要进 400 的上限）。判据文本逐字未改。
+    #   （本函数 406 行，要进 400 的上限）。判据文本逐字未改。
     _check_bc_contract_tail(write, node, bc, _page, _ok)
 
     if bc:
@@ -9096,7 +9295,7 @@ def _blocks() -> list[tuple[str, object]]:
         ("eol_and_guards", _check_eol_and_guards),
         ("diffguard", _check_diffguard),
         ("bc_contract", _check_bc_contract),
-        # 序 2（`ITEM-1040`）新增：排在**末位** —— 块序即输出序，插在中间会让既有块的展示行整体后移
+        # 新增：排在**末位** —— 块序即输出序，插在中间会让既有块的展示行整体后移
         # （拆分那一序的"拆分前后逐行 diff 为空"对照会因此不可比）。
         ("rules_lint", _check_rules_lint),
     ]
@@ -9213,7 +9412,7 @@ def _run_block(name: str, fn, node) -> list[str]:
                         % (name, exc.code))
     except KeyboardInterrupt:
         # Ctrl-C 必须还能打断：记成"块失败"再接着跑下一块，等于把中断变成"再按 N 次"。
-        # 注入（2026-10-31，ITEM-1152）：在**子进程**里让块函数抛 KeyboardInterrupt，
+        # 注入：在**子进程**里让块函数抛 KeyboardInterrupt，
         #   父进程连跑 3 次都看到子进程 rc=3，且该块**没有被记成通过**（异常原样抛出，
         #   不进 failures、不打印汇总行）。所以本支的行为是"中断整个自检"，不是"记成失败后继续"。
         #   夹具在施工临时目录的 seq7_child.py / seq7_parent.py，不进仓。

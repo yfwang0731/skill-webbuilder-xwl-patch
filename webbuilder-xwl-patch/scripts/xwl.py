@@ -4442,13 +4442,21 @@ _FLAT_DELTA = 40       # 且绝对增量至少 40 字符（避免短行上比值
 #   ② 才是"短行 ratio 不稳"那个真问题的正解 —— 它直接问「这行内容到底进没进到那一行里去」：
 #     · 真压平 ⇒ 每一行都被对齐上（覆盖率≈1）；
 #     · 「只改了内容、结构没动」⇒ 工作区那行只等于窗口里的**第一行**，第二行覆盖率≈0 ⇒ 不报
-#       （这类本来也已被调用方的前置条件 `pressed` 挡掉，这里是第二道保险）。
+#       （这类由调用方的**基线变更行**闸挡掉，这里是第二道保险）。
 _SIM_MIN_TOTAL = 12    # 窗口（连续 ≥2 行去掉续行符后拼接）的**总长度**下限
 _SIM_LINE_COV = 0.5    # 窗口内**每一行**至少要有这么大比例被对齐上（见上 ⚠️ ②）
 _FLAT_SIM = 0.9        # 相似度阈值（difflib.SequenceMatcher.ratio）
 _SIM_GATE = 0.5        # 3-gram Jaccard **松门**：只用来省掉昂贵比较（ratio ≥ 0.9 的对照远高于它）
 _SIM_MAX_CMP = 50000   # 昂贵比较（SequenceMatcher）次数硬上限；触顶打 [note]，⛔ 不静默
 _SIM_MAX_GATE = 400000 # 松门求交次数硬上限（同性质的有界手段：放开长度门槛后候选变多，得有兜底）；触顶同样打 [note]
+
+# 精确命中被「只认新发生的合并」两道闸挡下时的原因文案（供 `[note]` 用）：
+#   unchanged ＝ 续行组不涉及基线变更行（内容移动/复制或极短行拼接巧合）
+#   not_new   ＝ 工作区出现次数没有多于基线（命中的是既有同文本行）
+_SKIP_WHY = {
+    "unchanged": "对应基线行**本次未改**（内容移动/复制或极短行拼接巧合）",
+    "not_new": "工作区没有比基线**多出现**同一文本（命中既有同文本行，不是新合并）",
+}
 
 
 def _char_grams(s: str, k: int = 3) -> set:
@@ -4481,7 +4489,29 @@ def _line_coverage(sm, segs) -> float:
     return worst
 
 
-def _similar_merge_hits(head_text: str, wd_text: str, exact_hits=()):
+def _changed_head_lines(head_text: str, wd_text: str) -> set:
+    """返回**基线里被本次改动覆盖**的行号集合（1-based），供精确/相似度两档共用。
+
+    「压平」只可能是**基线这一组续行本就被本次改动动过**时才新发生的合并：
+    基线行原封不动的续行组，即使工作区另有一行恰好等于它们的拼接，也只是
+    「内容移动/复制」或**极短行**（`}` / `');'` 这类）的巧合，不是压平。
+
+    对齐用 `difflib.SequenceMatcher` 做**行级**比对：`replace` / `delete` 覆盖到的基线行
+    算变更行（`insert` 没有基线行）；`autojunk=False` 必须显式给 —— 行级列表里重复行很常见，
+    默认的 autojunk 会把高频行当垃圾跳过，于是"改过的行"漏判、闸失效。
+    """
+    hl = ANY_EOL_RE.split(head_text)
+    wl = ANY_EOL_RE.split(wd_text)
+    sm = difflib.SequenceMatcher(None, hl, wl, autojunk=False)
+    changed: set = set()
+    for tag, i1, i2, _j1, _j2 in sm.get_opcodes():
+        if tag in ("replace", "delete"):
+            changed.update(range(i1 + 1, i2 + 1))
+    return changed
+
+
+def _similar_merge_hits(head_text: str, wd_text: str, exact_hits=(),
+                        changed_lines=None):
     """判据三（相似度档）：基线里**连续 ≥2 行**被压成工作区一行、**但内容已改**（逐字不等）。
 
     返回 `(hits, n_cmp, capped)`：`hits` ＝ `[(起始行号, 结束行号, 工作区行号, 该行开头, 相似度)]`。
@@ -4491,6 +4521,9 @@ def _similar_merge_hits(head_text: str, wd_text: str, exact_hits=()):
     判据二要求"最长行显著变长"，被压的内容若本来不长、或文件里已有更长的行，也不亮。
 
     ⛔ **必须 ≥2 行**：单行对单行的相似属于"改了内容"，不是压平 —— 那类改动本就不该被 diffguard 拦。
+
+    **与精确判据同权**：`changed_lines` 给了时，窗口必须涉及**基线变更行**（`_changed_head_lines`
+    的结果）—— 基线行原封不动的组不可能是"本次新压平"，否则"只改别处、结构没动"也会被这条抓进来。
 
     **有界**（⛔ 不做全对全）：
       · 只枚举"**以续行符结尾的行**"作起点、且只取**完整组**（组尾是不带续行符的行）—— 与判据一同一个几何；
@@ -4505,7 +4538,9 @@ def _similar_merge_hits(head_text: str, wd_text: str, exact_hits=()):
       · **内容去重**：同一份内容的多行只留一行当代表（结论只取决于内容）—— 大文件里成片的重复
         结构行不再让候选数乘上重复倍数；
       · 总体昂贵比较次数有 `_SIM_MAX_CMP` 硬上限、松门求交次数有 `_SIM_MAX_GATE` 硬上限
-        （任一触顶置 `capped`，由调用方打 `[note]`，⛔ 不静默）。
+        （任一触顶置 `capped`，由调用方打 `[note]`，⛔ 不静默）。⭐ `capped` 是**独立的预算/完成度状态**：
+        它与"过滤后还剩几条命中"无关，调用方必须**无条件保存并报告**（触顶即"该文件没检查完"），
+        ⛔ 不得因 `hits` 为空而丢弃 —— 丢了就会让没查完的文件被报成完整通过。
 
     与判据一**不重复报**：已在 `exact_hits` 里的（同 起始/结束/工作区行）跳过。
     """
@@ -4555,11 +4590,14 @@ def _similar_merge_hits(head_text: str, wd_text: str, exact_hits=()):
             continue                          # 起点必须是续行（字符串内部的多行）
         acc = hl[i][:-1]
         segs = [(0, len(acc))]                # 每行在 `acc` 里的 `(起, 止)` —— 供逐行覆盖闸用
+        touches = changed_lines is None or (i + 1) in changed_lines
         for j in range(i + 1, n):
             _seg = hl[j][:-1] if hl[j].endswith("\\") else hl[j]
             _s0 = len(acc)
             acc = acc + _seg
             segs.append((_s0, _s0 + len(_seg)))
+            if changed_lines is not None and (j + 1) in changed_lines:
+                touches = True
             if hl[j].endswith("\\"):
                 # 组还没结束：太长就没必要再拼（只会更长）
                 if len(acc) > max_w * 1.35:
@@ -4567,6 +4605,8 @@ def _similar_merge_hits(head_text: str, wd_text: str, exact_hits=()):
                 continue
             # 组结束 ⇒ 该起点**唯一**的候选窗口就是这一段（与判据一同一个几何，
             # ⛔ 不把"字符串后面的结构行"也拼进来 —— 那会造出永远不该成立的窗口）。
+            if not touches:
+                break                         # 基线行本次未改 ⇒ 不是新压平（与精确判据同权）
             a_len = len(acc)
             if a_len >= _SIM_MIN_TOTAL and (i + 1, j + 1) not in done_pairs:
                 _ga = None
@@ -4613,7 +4653,8 @@ def _similar_merge_hits(head_text: str, wd_text: str, exact_hits=()):
     return hits, n_cmp, capped
 
 
-def _merged_line_hits(head_text: str, wd_text: str) -> list:
+def _merged_line_hits(head_text: str, wd_text: str, changed_lines=None,
+                      skipped=None) -> list:
     """精确判据：找出「基线里**连续多行**被拼成了工作区的某一行」的位置。
 
     这是"压平"的**定义本身** —— 压平就是删掉「续行符 + 换行」，
@@ -4621,6 +4662,8 @@ def _merged_line_hits(head_text: str, wd_text: str) -> list:
         工作区该行 == (line_i 去掉续行符) + (line_{i+1} 去掉续行符) + … + line_j
 
     返回 [(起始行号, 结束行号, 工作区行号, 该行开头), …]（行号均 1-based）。
+    同一拼接文本在工作区出现**多处**时逐处返回（行号表存"文本→全部行号"），由调用方按
+    `(起始, 结束, 工作区行)` 去重并做有界展示。
 
     为什么不能只用「最长行长度」当指纹（这是本函数存在的理由，实测两个漏报面）：
       · 被压平的内容若**短于文件里已有的最长行** ⇒ 最长行纹丝不动 ⇒ 完全看不见；
@@ -4633,25 +4676,37 @@ def _merged_line_hits(head_text: str, wd_text: str) -> list:
       · 必须**至少跨过一条续行**（拼接 ≥2 行）才判；
       · 拼接结果必须与工作区的**某条物理行逐字相同** —— 删行会少内容、单行改长会多内容，
         两者都拼不出这条等式。
+
+    两条「只认新发生的合并」的闸（缺一条就会把既有内容当成新压平）：
+      ① `changed_lines` 给了时，续行组必须**涉及基线变更行**（`_changed_head_lines`）——
+         基线行原封未动的组，命中的只是工作区里既有的同文本行、移动/复制或极短行巧合；
+      ② **出现次数闸**：拼接文本在工作区出现的次数必须**多于基线** —— 基线里本来就有
+         同文本行时（例如这段在更早的提交里已压平入库），工作区没有"多出来"的那一份就不是新合并。
+    被闸掉的候选写进 `skipped`（若给了列表）：`(起始, 结束, 工作区行, why)`，
+    `why` ∈ `"unchanged"`（①）/ `"not_new"`（②），由调用方打 `[note]` 说明原因，⛔ 不静默丢。
     """
     hl = ANY_EOL_RE.split(head_text)
     wl = ANY_EOL_RE.split(wd_text)
     if not hl or not wl:
         return []
-    wset = set(wl)
-    wset_r = {l.rstrip() for l in wl}
-    # 起因（diffguard 行号落 0）：命中判定允许用 `acc.rstrip()` 去匹配（见下方 wset_r），但行号表只按**原始行**
-    # 建表（wpos）—— 当「工作区该行 = 拼接结果 + 尾随空白」时，acc 与 acc.rstrip() 都不是 wpos
-    # 的键，`wpos.get(acc, wpos.get(acc.rstrip(), 0))` 的 0 兜底就吐出 0 ⇒ 打印「工作区第 0 行」。
-    # 修法：两张表并存，按「哪张集合命中」取对应表（raw 命中 → wpos，rstrip 命中 → wpos_r），
-    # 行号恒为真实物理行，不再用 0 兜底。
-    wpos, wpos_r = {}, {}
+    # ⭐ 行号表：文本 → **全部**行号（不是只留首个）—— 同一拼接在工作区出现多处时逐处报。
+    #   raw / rstrip 两张表并存：命中判定允许用 `acc.rstrip()`（工作区该行可能带尾随空白），
+    #   行号必须按**命中的那张表**取 ⇒ 行号恒为真实物理行，不会落哨兵 0。
+    wpos: dict = {}
+    wpos_r: dict = {}
     for k, l in enumerate(wl, 1):
-        wpos.setdefault(l, k)
-        wpos_r.setdefault(l.rstrip(), k)
+        wpos.setdefault(l, []).append(k)
+        wpos_r.setdefault(l.rstrip(), []).append(k)
+    # 基线侧的同文本出现次数（出现次数闸的分母）。
+    hcount: dict = {}
+    hcount_r: dict = {}
+    for l in hl:
+        hcount[l] = hcount.get(l, 0) + 1
+        hcount_r[l.rstrip()] = hcount_r.get(l.rstrip(), 0) + 1
     max_w = max((len(l) for l in wl), default=0)
 
     hits = []
+    seen: set = set()
     n = len(hl)
     for i in range(n - 1, -1, -1):          # 倒序：便于"跳过已合并组"的剪枝
         if not hl[i].endswith("\\"):
@@ -4661,11 +4716,31 @@ def _merged_line_hits(head_text: str, wd_text: str) -> list:
             acc += hl[j][:-1] if hl[j].endswith("\\") else hl[j]
             if len(acc) > max_w:
                 break                       # 工作区不可能有这么长的行
-            key = acc if acc in wset else (acc.rstrip() if acc.rstrip() in wset_r else None)
-            if key is not None:
-                # 按「哪张集合命中」取对应表的行号（两张表的键空间与 wset / wset_r 一一对应）。
-                k = wpos[acc] if acc in wset else wpos_r[acc.rstrip()]
-                hits.append((i + 1, j + 1, k, acc[:70]))
+            if acc in wpos:                 # raw 命中 → raw 行号表 / raw 基线计数
+                want, base_n = wpos[acc], hcount.get(acc, 0)
+            elif acc.rstrip() and acc.rstrip() in wpos_r:   # rstrip 命中（工作区该行带尾随空白）→ rstrip 表
+                _key = acc.rstrip()
+                want, base_n = wpos_r[_key], hcount_r.get(_key, 0)
+            else:
+                want = None
+            if want is not None:
+                # 闸①：基线行本次未改 ⇒ 只可能是移动/复制或极短行巧合（⛔ 不是新合并）。
+                #   区间含**组尾行** `j + 1`（与相似度档 `touches` 的 `(j + 1) in changed_lines` 同口径）。
+                if changed_lines is not None and not any(
+                        ln in changed_lines for ln in range(i + 1, j + 2)):
+                    if skipped is not None:
+                        skipped.append((i + 1, j + 1, want[0], "unchanged"))
+                    break
+                # 闸②：工作区出现次数不高于基线 ⇒ 命中既有同文本行，不是新合并。
+                if len(want) <= base_n:
+                    if skipped is not None:
+                        skipped.append((i + 1, j + 1, want[0], "not_new"))
+                    break
+                for k in want:              # 多位置：逐处返回，按 (起, 止, 工作区行) 去重
+                    if (i + 1, j + 1, k) in seen:
+                        continue
+                    seen.add((i + 1, j + 1, k))
+                    hits.append((i + 1, j + 1, k, acc[:70]))
                 break
             if not hl[j].endswith("\\"):
                 break                       # 组到头了（这一行没有续行符）
@@ -4884,7 +4959,7 @@ def cmd_diffguard(args) -> int:
         print(f"[FAIL] 没找到可检查的 .xwl（{len(args.targets)} 个入参里没有文件）")
         return 2
 
-    # ⭐ 序 3（`ITEM-1104`）：**先把基线内容一次问完**，再进逐文件循环。
+    # ⭐ **先把基线内容一次问完**，再进逐文件循环。
     #   逐文件起 `git show` 时 `rel` 每件不同 ⇒ 缓存无解（60 件 ＝ 60 次进程，本机实测 13.4 s）；
     #   改成**按目录一次 `git cat-file --batch`**：同一目录下 N 个文件共用 **1 次**进程。
     #   ⚠️ 按 `cwd` 分组（不是全局一次）：入参可能跨目录／跨仓库，`cat-file` 只能在一个工作树里解析
@@ -4913,6 +4988,7 @@ def cmd_diffguard(args) -> int:
             _batch_bad[_cw] = (_why, _done, len(_rels))
 
     n_suspect = n_skip = n_clean = 0
+    n_incomplete = 0        # 相似度档预算触顶 ⇒ 该文件**没检查完**（与"有没有命中"无关）
     for path in files:
         name = os.path.basename(path)
         try:
@@ -4999,26 +5075,34 @@ def cmd_diffguard(args) -> int:
         n_head = len(ANY_EOL_RE.split(head_text))
         n_wd = len(ANY_EOL_RE.split(wd_text))
 
-        # 判据一（精确，主判据）：基线里连续多行被拼成了工作区的某一行 —— "压平"的定义本身
-        hits_all = _merged_line_hits(head_text, wd_text)
-        # ⚠️ **前置必要条件**："压平"的定义就是"多条物理行并成一条" ⇒ **续行符数与行数至少要有一个
-        #    减少**。缺了这条，`}` / `');'` 这类**极短行**的"内容恰好等于基线相邻两行的拼接"会被判成
-        #    压平 —— 实测在**真实历史版本**上误报，且同一条输出里三个计数一个都没变
-        #    （`行数 4470 → 4470` 在数学上就排除了压平），甚至同时报两条方向相反的命中。
+        # ⭐ 基线变更行对齐（`difflib` 行级）：精确/相似度两档共用同一组"本次改动动过的基线行"，
+        #    防止把工作区里**既有的**同文本行、内容移动/复制、极短行拼接巧合判成新压平。
+        changed = _changed_head_lines(head_text, wd_text)
+        # 判据一（精确，主判据）：基线里连续多行被拼成了工作区的某一行 —— "压平"的定义本身。
+        #    只认**新发生的合并**：续行组须涉及基线变更行、且工作区出现次数多于基线；
+        #    被这两道闸挡下的候选进 `skipped`，只在下面给 `[note]`，⛔ 不静默丢。
+        skipped: list = []
+        hits = _merged_line_hits(head_text, wd_text, changed, skipped)
+        # 净计数（续行符 / 行数）只作**说明**：它们同时反映"合法删减"，不能当否决条件 ——
+        # 拿它当否决就会漏报「补偿式压平」（别处新增续行把净计数抵消掉的真压平）。
         pressed = (c_wd < c_head) or (n_wd < n_head)
-        hits = hits_all if pressed else []
-        moved = bool(hits_all) and not pressed
         # 判据二（粗筛，补充）：续行符净减少 **且** 最长行显著变长。
         # 保留它是因为它能抓到"精确判据拼不出等式"的形态（例如压平**同时**还改了内容）；
         # 但它单独用会有两个漏报面（见 `_merged_line_hits` 注释），所以只当补充。
         grew = m_wd >= max(m_head * _FLAT_RATIO, m_head + _FLAT_DELTA)
         coarse = c_wd < c_head and grew
-        # 判据三（相似度，补「压平**且**改了内容」）：只在 `pressed` 时启用 —— 「压平」的定义
-        #   就是行数 / 续行符至少有一个减少，⛔ 不绕开它（否则"只改内容"也会被这条抓进来）。
-        sim_hits, sim_cmp, sim_capped = ([], 0, False)
-        if pressed:
-            sim_hits, sim_cmp, sim_capped = _similar_merge_hits(head_text, wd_text, hits)
+        # 判据三（相似度，补「压平**且**改了内容」）：与精确判据**同权** —— 同受基线变更行约束
+        #    （窗口不涉及变更行就不是新压平），⛔ 不再以净计数为前置条件。
+        sim_hits, sim_cmp, sim_capped = _similar_merge_hits(
+            head_text, wd_text, hits, changed)
         suspect = bool(hits) or coarse or bool(sim_hits)
+        # ⭐ 预算状态**独立保存**：`sim_capped` ＝「该文件没检查完」，与"过滤后是否还有命中"无关。
+        #   ⛔ 不得因 `hits` / `sim_hits` 为空而丢掉 —— 丢了就会让触顶的文件仍被报成完整通过。
+        incomplete = bool(sim_capped)
+        if incomplete:
+            n_incomplete += 1
+        _capped_note = (f"相似度档触及有界上限（松门求交 {_SIM_MAX_GATE} 次 / 昂贵比较 "
+                        f"{_SIM_MAX_CMP} 次）⇒ 本文件**未完成**（可能还有未报的命中），不算完整通过")
 
         stat = (f"续行符 {c_head} → {c_wd}（{c_wd - c_head:+d}）| "
                 f"最长行 {m_head} → {m_wd} 字符 | 行数 {n_head} → {n_wd}")
@@ -5043,9 +5127,8 @@ def cmd_diffguard(args) -> int:
                       f"**且内容不再逐字相同**（相似度 {ratio:.2f}）：{head70!r}")
             if len(sim_hits) > 3:
                 print(f"         （另有 {len(sim_hits) - 3} 处相似度命中）")
-            if sim_capped:
-                print(f"         [note] 相似度档触及有界上限（松门求交 {_SIM_MAX_GATE} 次 / 昂贵比较 "
-                      f"{_SIM_MAX_CMP} 次）⇒ 本文件**可能还有未报的**命中")
+            if incomplete:
+                print(f"         [note] {_capped_note}")
             if not hits and not sim_hits:
                 print(f"         第 {line_no} 行突然变长，开头是："
                       f"{wd_text.splitlines()[line_no - 1][:70]!r}")
@@ -5057,25 +5140,45 @@ def cmd_diffguard(args) -> int:
         else:
             n_clean += 1
             print(f"  [ok]   与基线有差异，但无压平迹象 —— {stat}")
-            if moved:
-                print(f"  [note] 另有 {len(hits_all)} 处「内容与基线相邻几行的拼接相同」，"
-                      f"但**续行符与行数都没减少** ⇒ 判为**内容移动/复制，不是压平**"
-                      f"（压平必然让行数或续行符减少），不计入告警")
+            if incomplete:
+                print(f"  [note] {_capped_note}")
+            if skipped:
+                _why_txt = "；".join(
+                    _SKIP_WHY[w] for w in ("unchanged", "not_new")
+                    if any(_s[3] == w for _s in skipped))
+                _net = (f"续行符 {c_head}→{c_wd}、行数 {n_head}→{n_wd}"
+                        + ("（至少一项减少）" if pressed else "（都没减少）"))
+                print(f"  [note] 另有 {len(skipped)} 处「内容与基线相邻几行的拼接相同」，"
+                      f"但{_why_txt} ⇒ 不计入告警（净计数只作说明：{_net}）")
             if c_wd < c_head and not grew:
                 print("         续行符变少而最长行没变长 ⇒ 像是**正常删减**（删多行代码 / 删控件），"
                       "不是「把多行合并成一行」")
-            print("  -> OK")
+            print("  -> OK（未完成：相似度档预算触顶）" if incomplete else "  -> OK")
 
-    print(f"=== 结果: {'FAIL' if (n_suspect and args.strict) else 'ALL OK'}"
-          f"（疑似压平 {n_suspect} / 无迹象 {n_clean} / 跳过 {n_skip}）")
+    _cnt = (f"疑似压平 {n_suspect} / 无迹象 {n_clean} / 跳过 {n_skip}"
+            + (f" / 未完成 {n_incomplete}" if n_incomplete else ""))
+    _complete = (n_suspect == 0 and n_incomplete == 0 and n_skip == 0)
+    if n_suspect and args.strict:
+        print(f"=== 结果: FAIL（{_cnt}）")
+    elif n_incomplete:
+        # 默认档 rc 仍为 0，但**不得**标完整 `ALL OK`（没查完 ≠ 通过）。
+        print(f"=== 结果: 未完成（{_cnt}）—— "
+              + ("`--strict` 下不能算通过" if args.strict
+                 else "默认只告警（rc=0），但不能当成完整通过"))
+    else:
+        print(f"=== 结果: ALL OK（{'完整通过；' if _complete else ''}{_cnt}）")
     if n_suspect and not args.strict:
         print("> 有疑似压平项，但默认只告警（rc=0）。要让它阻塞请加 `--strict`。")
-    # 退出码优先级（`--strict` 下）：**可疑压平 > 跳过**
-    #   理由：可疑压平是"真的可能改坏了"，而跳过只是"这个文件比不了"；
-    #   若让跳过优先，任何一次带新增文件的提交都会让 CI 直接红，`--strict` 就没法用在 CI 里了。
-    #   只有"一个文件都没比成"时才算前置条件不满足（rc=2）。
+    if n_incomplete and not args.strict:
+        print("> 有文件未检查完（相似度档预算触顶）：默认只告警（rc=0），但这不等于完整通过。")
+    # 退出码优先级（`--strict` 下）：**可疑压平 1 > 未完成 2 > 跳过**；默认档：未完成仍 0。
+    #   理由：可疑压平是"真的可能改坏了"；未完成是"没查完"（既不能算过、也不该冒充有问题）。
     if n_suspect and args.strict:
         return 1
+    if args.strict and n_incomplete:
+        return 2
+    # 跳过不是"有问题"、也不是"没查完"：有可判定文件时 `--strict` 不因跳过而红
+    #   （否则带新增文件的 CI 会永远红）；只有"一个文件都没比成"时才算前置条件不满足（rc=2）。
     if n_skip and args.strict and not (n_clean + n_suspect):
         print("[FAIL] --strict 下至少要有一个文件能比对：本次全部跳过（"
               f"{n_skip} 个），先把原因解决掉（git 仓库 / 基线里有该文件）")
@@ -5091,7 +5194,7 @@ def cmd_diffguard(args) -> int:
 # --------------------------------------------------------------------------- #
 _HASH_RE = re.compile(r"\{#([^}]{1,64})#\}")
 _PARAM_RE = re.compile(r"\{\?([^}]{1,64})\?\}")
-# `request.setAttribute('名', …)` 的**真实供给**识别（序2／ITEM-1191）。
+# `request.setAttribute('名', …)` 的**真实供给**识别。
 # 判据（四条，均由 `_scan_setattr_supply` 词法级落实）：①只认代码层调用（注释与字符串内容里的
 # 伪调用不算）；②接收者须为 `request`（`foo.setAttribute`、裸 `setAttribute` 不算）；
 # ③首参为字符串字面量才算**已证明供给**，其余只算「可能提供」；④方法与括号之间允许空白。
@@ -5269,7 +5372,7 @@ def cmd_sqlrefs(args) -> int:
     warnings: list[str] = []
 
     # serverScript 侧
-    #   序2／ITEM-1191：只认**代码层**、接收者为 `request`、首参为**字面量**的
+    #   只认**代码层**、接收者为 `request`、首参为**字面量**的
     #   `request.setAttribute('名', …)` 为**已证明供给**（`provided`）；首参非字面量的调用只算
     #   **可能提供**（`possible`），不进 `provided`、不抵消外部引用。注释／纯字符串里的伪调用、
     #   其他接收者的调用都**不算**供给。
@@ -5340,7 +5443,7 @@ def cmd_sqlrefs(args) -> int:
         top = ", ".join(f"{k}({v})" for k, v in sorted(params.items(), key=lambda kv: -kv[1])[:10])
         print(f"  [info] {{?param?}} 共 {len(params)} 个名字，Top: {top}")
 
-    # 序3／ITEM-1192：按**适用内容**判空（不是按引用数、也不是按数据库查询零行）。
+    # 按**适用内容**判空（不是按引用数、也不是按数据库查询零行）。
     #   适用对象 = 非空的 dataprovider.sql / totalSql，或非空的 module.serverScript。
     has_target = bool(used) or bool(params) or any(
         isinstance(c.get("serverScript"), str) and c.get("serverScript").strip() for c, _p in modules
@@ -5697,7 +5800,7 @@ def find_transfers_with_target(js: str, field_set) -> list[tuple]:
     · 第 5 元「目标键」＝该 `out:`/`params:` 所在对象字面量里 `url:` 的 `m?xwl=` 目标（可静态关联时）；
     · 第 6 元「接收者名」＝形如 `app.<名>.load(...)` 的 `<名>`，用于对象无 `url:` 时回退到该 store
       自身配置的 `url` 作为请求目标（`Wb.request`/`Wb.upload` 等不为 `app.<store>` 时为 `None`）。
-    二者共同支撑**请求级归属**：一笔供给只给它自己那次请求背书（序1／ITEM-1187）。
+    二者共同支撑**请求级归属**：一笔供给只给它自己那次请求背书。
     """
     js = strip_js_comments(js)
     found: list[tuple] = []
