@@ -2,7 +2,7 @@
 name: webbuilder-xwl-patch
 slug: skill-webbuilder-xwl-patch
 displayName: webbuilder-xwl-patch
-version: 1.7.13
+version: 1.7.14
 license: MIT
 metadata:
   category: development-tools
@@ -414,8 +414,8 @@ python <skill根>/scripts/xwl.py diffguard <改过的文件或目录> --strict  
 | 退出码 | 含义 |
 |---|---|
 | `0` | 成功 |
-| `1` | **被检查对象或查询结果有问题**（`check` 有 `[FAIL]`；`paths` / `sqlrefs` / `sql` / `events` 没找到目标字段 —— 即无可抽取内容、**无适用检查内容**判 `1`） |
-| `2` | **用法或前置条件不满足**（缺必填参数、`edit` 锚点次数不符、`new` 拒绝覆盖、读不到目标文件；**`check` 的 `--controls` 取不到控件注册表** —— 此时 ①–⑧⑩ 已照常判定，只有 ⑨ 与 configs 内联 `[js]` 未校；**`patch`／`edit` 的写前门禁：node 调用失败（超时/崩溃）也判 `2`**；**`params --strict` 下「仅未核对」判 `2`**；**`diffguard --strict` 下「检查未完成」（相似度档预算触顶）判 `2`** —— 含义是"没查完"，不是"有问题"） |
+| `1` | **被检查对象或查询结果有问题**（`check` 有 `[FAIL]`；`paths` / `sqlrefs` / `sql` / `events` 没找到目标字段 —— 即无可抽取内容、**无适用检查内容**判 `1`；**`folders` 的索引 JSON／结构损坏、或 `index` 确认悬空判 `1`**） |
+| `2` | **用法或前置条件不满足**（缺必填参数、`edit` 锚点次数不符、`new` 拒绝覆盖、读不到目标文件；**`check` 的 `--controls` 取不到控件注册表** —— 此时 ①–⑧⑩ 已照常判定，只有 ⑨ 与 configs 内联 `[js]` 未校；**`patch`／`edit` 的写前门禁：node 调用失败（超时/崩溃）也判 `2`**；**`params --strict` 下「仅未核对」判 `2`**；**`diffguard --strict` 下「检查未完成」（相似度档预算触顶）判 `2`** —— 含义是"没查完"，不是"有问题"；**`folders` 的索引读不动（无法判断）判 `2`**；**`params`／`sqlrefs` 读依赖失败（SQL 载体／`var.json`／`--upstream` 反查扫描）：默认与 `--strict` 均判 `2`** —— 同为"没查完"；`--strict` 下若另有已确认缺参／悬空，汇总判 `1` 并同时列出读取失败） |
 
 两类**判定会随命令线宽严变化**的命令，各自三档（默认 / 收紧 / 放松）：`diffguard`（疑似压平默认只告警，
 `--strict` 判失败 rc=1；**相似度档预算触顶＝检查未完成**：默认档 rc=0 但末行标 `=== 结果: 未完成`、不算完整通过，

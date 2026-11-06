@@ -12,8 +12,7 @@
     "edit_eol",
     "eol_and_guards",
     "diffguard",
-    "bc_contract",
-    "rules_lint"
+    "bc_contract"
   ],
   "doc_guard_blocks": {
     "17j-10": 1,

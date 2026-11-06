@@ -1492,6 +1492,8 @@ def _js_err_head(err: str) -> str:
 
 
 def cmd_check(args) -> int:
+    # 注册表事实源：一次命令上下文只加载一次 —— 入口清身份缓存（跨命令不复用旧缓存）。
+    _registry_reset()
     # ⚠️ `no_js` 一律 `getattr(..., False)` 取：本仓惯用「手工 Namespace」（`selftest._run_check`
     #    只带 `{files,node,no_js}`、`_post_check` 自带该键）⇒ 属性缺失时按 False，⛔ 别改回直取。
     no_js = getattr(args, "no_js", False)
@@ -2153,6 +2155,87 @@ def _post_check(file: str, args, obj=None, detail=None) -> int:
 _CHECK_IMMUTABLE_CFG_KEYS = frozenset({"itemId"})
 
 
+# --------------------------------------------------------------------------- #
+# 注册表事实源：一次命令上下文只加载一次（以文件强身份为键）
+# --------------------------------------------------------------------------- #
+# 起因：`field_types` / `normalname_types` / `_registry_configs` 各读各的 ⇒ 一次判定里同一份
+#   注册表可能被 `json` 解析 2～3 次（2.4 MB 约 106 ms/次），且同一读取失败在三个命令里
+#   三种去向、三种文案。这里改成：**同一强身份（realpath, mtime_ns, size）只解析一次**，
+#   记录来源路径／身份／状态（ok / absent / failed）／人读原因；调用方按各自成功条件解释。
+# ⚠️ 缓存**不跨命令上下文**：`cmd_check` / `cmd_itemids` / `cmd_params` 入口各调一次
+#   `_registry_reset()`；文件被改（mtime_ns / size / realpath 变）时身份键不同 ⇒ 自动重读，
+#   ⛔ 不会复用到过期数据。
+_REG_LOADS = 0                 # 实际 `json` 解析次数（自检/探针钩子）
+_REG_CACHE: dict = {}          # 身份键 → 读取记录
+_REG_LAST: dict = {}           # 绝对路径 → 最近一次读取记录（供报告"来源/降级"）
+
+
+def _registry_reset() -> None:
+    """开始一次命令上下文：清空身份缓存（保留累计计数），保证命令间不共享旧缓存。"""
+    _REG_CACHE.clear()
+
+
+def _registry_identity(path: str):
+    """`(realpath, mtime_ns, size)` 强身份；路径不存在/不可 stat ⇒ `None`。"""
+    try:
+        st = os.stat(path)
+        return (os.path.normcase(os.path.realpath(path)), st.st_mtime_ns, st.st_size)
+    except OSError:
+        return None
+
+
+def _registry_load(controls) -> dict:
+    """读注册表（一次上下文内按强身份**只解析一次**），返回读取记录。
+
+    记录字段：`path`（绝对路径）、`identity`、`state ∈ {"absent","ok","failed"}`、
+    `why`（失败原因）、`data`（解析出的对象）、`types`/`types_done`（派生缓存）、`loaded_now`。
+    `absent`（没给 / 文件不存在）**不是失败**；`failed`（读不动 / JSON 坏）由调用方按各自成功条件解释。
+    """
+    global _REG_LOADS
+    rec_path = os.path.abspath(controls) if controls else ""
+    if not controls:
+        rec = {"path": "", "identity": None, "state": "absent", "why": None,
+               "data": None, "types": None, "types_done": False, "loaded_now": False}
+        _REG_LAST[rec_path] = rec
+        return rec
+    identity = _registry_identity(rec_path)
+    if identity is None:
+        rec = {"path": rec_path, "identity": None, "state": "absent", "why": None,
+               "data": None, "types": None, "types_done": False, "loaded_now": False}
+        _REG_LAST[rec_path] = rec
+        return rec
+    rec = _REG_CACHE.get(identity)
+    if rec is not None:
+        rec["loaded_now"] = False
+        _REG_LAST[rec_path] = rec
+        return rec
+    _REG_LOADS += 1
+    try:
+        with open(rec_path, "rb") as fh:
+            text = fh.read().decode("utf-8-sig")
+        data = json.loads(text)
+        rec = {"path": rec_path, "identity": identity, "state": "ok", "why": None,
+               "data": data, "types": None, "types_done": False, "loaded_now": True}
+    except (OSError, UnicodeDecodeError, ValueError) as exc:
+        rec = {"path": rec_path, "identity": identity, "state": "failed",
+               "why": "%s: %s" % (type(exc).__name__, exc),
+               "data": None, "types": None, "types_done": False, "loaded_now": True}
+    _REG_CACHE[identity] = rec
+    _REG_LAST[rec_path] = rec
+    return rec
+
+
+def _registry_state(controls) -> dict:
+    """返回某路径最近一次读取记录的**副本**（来源路径／身份／状态／原因／本次是否新解析）。"""
+    rec = _REG_LAST.get(os.path.abspath(controls) if controls else "")
+    if rec is None:
+        rec = _registry_load(controls) if controls else None
+    if rec is None:
+        return {"path": "", "identity": None, "state": "absent", "why": None,
+                "loaded_now": False}
+    return {k: rec[k] for k in ("path", "identity", "state", "why", "loaded_now")}
+
+
 def _registry_configs(controls: str):
     """读注册表 → `{type: {"configs": {键…}, "js": {标 [js] 的键}}}`；读不了 / **解析出空** ⇒ `None`。
 
@@ -2160,34 +2243,35 @@ def _registry_configs(controls: str):
        `cmd_check` 拿到 `None` ⇒ 只跳过 ⑨ / ⑥-ext、其余各项照跑，末了 `rc=2`。若只把"读不了"当
        失败，`--controls` 指到形状不对的文件时 `_registry_configs` 会返回**空 dict** ⇒ ⑨ 一个节点都不校、
        `[ok] ⑨ … 0 个非法键` 照打、rc=0 —— **假绿只是从"路径错"换成了"形状错"**。
-    ⚠️ 读取用 `encoding="utf-8-sig"`：Windows 上手工编辑 / PowerShell 重定向常给注册表加
-       UTF-8 BOM，`utf-8` 会把它当非法字符 ⇒ `json.load` 抛 `JSONDecodeError` ⇒ 合法注册表反被判
-       「取不到」(rc=2)。`utf-8-sig` 对**无 BOM** 的文件行为完全一致（只是多剥可选 BOM）。
+    ⚠️ 读取统一走 `_registry_load`（`utf-8-sig`、**一次上下文按强身份只解析一次**，BOM 也能读）；
+       本函数只做**派生**（不重复解析），派生结果按身份缓存。
     """
-    try:
-        reg = json.load(open(controls, "r", encoding="utf-8-sig"))
-    except Exception:  # noqa: BLE001 —— 读不了由调用方给 warn、跳过，不崩
+    rec = _registry_load(controls)
+    if rec["state"] != "ok":
         return None
-    types: dict = {}
+    if not rec["types_done"]:
+        types: dict = {}
 
-    def walk(o):
-        if isinstance(o, dict):
-            i = o.get("id")
-            if isinstance(i, str) and i not in types:
-                cfg = o.get("configs") if isinstance(o.get("configs"), dict) else {}
-                types[i] = {
-                    "configs": set(cfg.keys()),
-                    "js": {k for k, v in cfg.items()
-                           if isinstance(v, dict) and v.get("type") == "js"},
-                }
-            for v in o.values():
-                walk(v)
-        elif isinstance(o, list):
-            for v in o:
-                walk(v)
+        def walk(o):
+            if isinstance(o, dict):
+                i = o.get("id")
+                if isinstance(i, str) and i not in types:
+                    cfg = o.get("configs") if isinstance(o.get("configs"), dict) else {}
+                    types[i] = {
+                        "configs": set(cfg.keys()),
+                        "js": {k for k, v in cfg.items()
+                               if isinstance(v, dict) and v.get("type") == "js"},
+                    }
+                for v in o.values():
+                    walk(v)
+            elif isinstance(o, list):
+                for v in o:
+                    walk(v)
 
-    walk(reg)
-    return types or None       # 空 ⇒ `None`（见 docstring 第一条 ⚠️）
+        walk(rec["data"])
+        rec["types"] = types or None       # 空 ⇒ `None`（见 docstring 第一条 ⚠️）
+        rec["types_done"] = True
+    return rec["types"]
 
 
 def _scan_configs_keys(obj, reg_types):
@@ -2556,6 +2640,23 @@ _NORMALNAME_FALLBACK = (
 ).split()
 
 
+def _read_optional_json(path, what: str):
+    """可选资源的**三分**读入：`(state, data, why)`，`state ∈ {"absent","ok","failed"}`。
+
+    `absent` ＝ 未发现可选资源（**不是失败**，退回兜底即可）；
+    `failed` ＝ 存在但读不动／JSON 解析失败（带人读原因）。
+    ⛔ 「没有」不升级为失败、⛔ 「读不出」也不静默当成没有 —— 两种事实都要能传到调用方。
+    """
+    if not path or not os.path.isfile(path):
+        return "absent", None, None
+    try:
+        with open(path, "rb") as fh:
+            data = json.loads(fh.read().decode("utf-8"))
+    except (OSError, UnicodeDecodeError, ValueError) as exc:
+        return "failed", None, "%s: %s" % (type(exc).__name__, exc)
+    return "ok", data, None
+
+
 def _find_upward(start_file: str, rel: str) -> str | None:
     """从文件位置向上找工程内的 `wb/<rel>`（最多上溯 12 层）。"""
     d = os.path.dirname(os.path.abspath(start_file))
@@ -2592,27 +2693,22 @@ def normalname_types(controls_path: str | None = None) -> tuple:
     ⇒ 明明合法的类型被判"不在白名单里"，修法建议跟着错。并集只会**少报**，是安全方向。
     """
     ids: set[str] = set(_NORMALNAME_FALLBACK)
-    if controls_path:
-        try:
-            # `utf-8-sig`：带 BOM 的注册表也要能读（与 `_registry_configs` 同口径；
-            #   无 BOM 时行为完全一致）。
-            reg = json.load(open(controls_path, encoding="utf-8-sig"))
-        except Exception:  # noqa: BLE001
-            reg = None
-        if reg is not None:
+    rec = _registry_load(controls_path)
+    if rec["state"] == "ok":
+        reg = rec["data"]
 
-            def walk(o):
-                if isinstance(o, dict):
-                    if (isinstance(o.get("id"), str) and isinstance(o.get("configs"), dict)
-                            and "normalName" in o["configs"]):
-                        ids.add(o["id"])
-                    for v in o.values():
-                        walk(v)
-                elif isinstance(o, list):
-                    for v in o:
-                        walk(v)
+        def walk(o):
+            if isinstance(o, dict):
+                if (isinstance(o.get("id"), str) and isinstance(o.get("configs"), dict)
+                        and "normalName" in o["configs"]):
+                    ids.add(o["id"])
+                for v in o.values():
+                    walk(v)
+            elif isinstance(o, list):
+                for v in o:
+                    walk(v)
 
-            walk(reg)
+        walk(reg)
     return tuple(sorted(ids))
 
 
@@ -3420,6 +3516,8 @@ def cmd_itemids(args) -> int:
 
     **只读** —— 不修改文件。要改，由用户确认后走 `patch`。
     """
+    # 注册表事实源：一次命令上下文只加载一次（入口清身份缓存）。
+    _registry_reset()
     try:
         text, _has_bom, obj = load_xwl(args.file)
     except XwlLoadError as exc:
@@ -4249,18 +4347,47 @@ def cmd_new(args) -> int:
 # --------------------------------------------------------------------------- #
 _FOLDER_NAME = "folder.json"
 
+# `folder.json` 的**读入分层**：读不动／JSON 坏／结构不合法／缺文件必须分开 ——
+#   「读不到」既不能算通过、也不能与「磁盘有文件未登记」或「确认悬空」混成一句。
+_FJ_ABSENT = "absent"          # 文件不存在（良性缺索引，不是损坏）
+_FJ_UNREADABLE = "unreadable"  # 存在但读不动（I/O、权限、解码）⇒ 无法判断
+_FJ_BAD_JSON = "bad_json"      # 可读，但不是合法 JSON
+_FJ_BAD_STRUCT = "bad_struct"  # 合法 JSON，但结构不合法（顶层非对象／index 非数组／元素非字符串）
+_FJ_OK = "ok"
+
 
 def _read_folder_json(d: str):
-    """返回 `(data, path)`；`data=None` 表示文件不存在，`data=False` 表示存在但解析失败。"""
+    """读 `<d>/folder.json`，返回 `(state, data, path, why)`。
+
+    `state` ∈ `{ok, absent, unreadable, bad_json, bad_struct}`：
+      · `absent`     ＝ 文件不存在（**良性**：不是损坏，也不是"全部未登记"）；
+      · `unreadable` ＝ 存在但读不动（I/O／权限／解码）⇒ **无法判断**（⛔ 不许当成"损坏"或"跳过"）；
+      · `bad_json`   ＝ 可读但不是合法 JSON；
+      · `bad_struct` ＝ 合法 JSON 但结构不合法：顶层非对象／`index` 不是数组／`index` 元素不是字符串。
+    `data` 仅当 `state=="ok"` 时为解析后的 dict；`why` 是 `state!="ok"` 时的人读原因。
+    """
     p = os.path.join(d, _FOLDER_NAME)
     if not os.path.exists(p):
-        return None, p
+        return _FJ_ABSENT, None, p, "文件不存在"
     try:
-        with open(p, "r", encoding="utf-8") as f:
-            data = json.load(f)
-        return (data if isinstance(data, dict) else False), p
-    except Exception:  # noqa: BLE001
-        return False, p
+        with open(p, "rb") as fh:
+            raw = fh.read()
+        text = raw.decode("utf-8")
+    except (OSError, UnicodeDecodeError) as exc:
+        return _FJ_UNREADABLE, None, p, "%s: %s" % (type(exc).__name__, exc)
+    try:
+        data = json.loads(text)
+    except ValueError as exc:  # json.JSONDecodeError 是 ValueError 子类
+        return _FJ_BAD_JSON, None, p, "JSON 语法错误（%s）" % exc
+    if not isinstance(data, dict):
+        return _FJ_BAD_STRUCT, None, p, "顶层不是对象（%s）" % type(data).__name__
+    idx = data.get("index")
+    if not isinstance(idx, list):
+        return _FJ_BAD_STRUCT, None, p, "`index` 不是数组（%s）" % type(idx).__name__
+    _not_str = [x for x in idx if not isinstance(x, str)]
+    if _not_str:
+        return _FJ_BAD_STRUCT, None, p, "`index` 有非字符串元素 %r" % (_not_str[:3],)
+    return _FJ_OK, data, p, ""
 
 
 def _register_one(target: str, args) -> int:
@@ -4270,18 +4397,18 @@ def _register_one(target: str, args) -> int:
     if not os.path.exists(target):
         print(f"[FAIL] 文件不存在：{target}")
         return 2
-    data, jp = _read_folder_json(d)
-    if data is None:
+    state, data, jp, why = _read_folder_json(d)
+    if state == _FJ_ABSENT:
         print(f"[FAIL] {d} 下没有 {_FOLDER_NAME} —— 该目录未被设计器管理，")
         print("       请先在设计器里建这个目录（或确认路径是否写错）。")
         return 2
-    if data is False:
-        print(f"[FAIL] {jp} 不是合法 JSON，本工具不动它")
+    if state == _FJ_UNREADABLE:
+        print(f"[FAIL] {jp} 读不动（{why}）—— 无法判断其结构，本工具不动它")
         return 2
-    idx = data.get("index")
-    if not isinstance(idx, list):
-        print(f"[FAIL] {jp} 的 index 不是数组，本工具不动它")
+    if state in (_FJ_BAD_JSON, _FJ_BAD_STRUCT):
+        print(f"[FAIL] {jp} 结构不合法（{why}），本工具不动它")
         return 2
+    idx = data["index"]
     if name in idx:
         print(f"[ok]   {name} 已登记在 {jp} 的 index 第 {idx.index(name) + 1} 项，无需改动")
         return 0
@@ -4321,6 +4448,16 @@ def cmd_folders(args) -> int:
     `--register` **只认文件路径**（给目录会被拒绝：一个目录里可能有好几个文件，工具不知道登记哪个）；
     所在目录还没有 `folder.json` 时**不会替你创建**（会报错退出 2）。
     默认**只读**；只有 `--register` 才写（把该文件名追加到 index 末尾）。
+
+    检查是**分层**的（码值 2／1／0；⛔ 不再把「读不动」「结构坏了」与「磁盘有文件未登记」混成一句）：
+      · 索引**读不动**（I/O／权限／解码）⇒ `rc=2`（无法判断：既不算通过、也不算"不一致"）；
+      · JSON 或结构不合法（顶层非对象／`index` 非数组／元素非字符串）⇒ `rc=1`；
+      · `index` 悬空项**确认存在**（已登记、盘上确实没有）⇒ `rc=1`；
+      · 良性未登记（盘上有 `.xwl`、索引没登记）⇒ 只进明细，`rc=0`；
+      · 目录里没有 `folder.json`（只读）⇒ `rc=0` ＋ `[note] 未发现 folder.json，本次未执行索引检查`。
+    多目标聚合取**最高严重度**（2 > 1 > 0）；每个坏目录点名相对路径与原因。
+    只读扫描的**应检索引面**：含 `folder.json` **或**含 `.xwl` 的目录都纳入 —— 连「只有 `folder.json`、
+    没有任何 `.xwl`」的子目录也会被枚举（否则它的悬空项永远看不见）。
     """
     target = os.path.abspath(args.path)
     if os.path.isfile(target):
@@ -4345,33 +4482,47 @@ def cmd_folders(args) -> int:
         recursive = True
         for d, _subs, files in os.walk(target):
             xs = [x for x in files if x.endswith(".xwl")]
-            if xs:
+            # 应检索引面：有 folder.json **或** 有 .xwl 即纳入（⛔ 不再 `if xs:` 整目录跳过）
+            if _FOLDER_NAME in files or xs:
                 jobs.append((d, xs))
         if not jobs:
-            print(f"[FAIL] {target} 下没有 .xwl 文件")
+            print(f"[FAIL] {target} 下没有可检查的目录"
+                  f"（既无 {_FOLDER_NAME} 也无 .xwl 文件）")
             return 2
     else:
         print(f"[FAIL] 路径不存在：{target}")
         return 2
 
-    n_dir = n_unreg = n_dangling = n_bad = 0
+    n_dir = n_fj = n_unreg = n_dangling = n_bad = n_unread = 0
+    level = 0                  # 最高严重度：读不动 2 ＞ 结构损坏／确认悬空 1 ＞ 0
     detail: list = []
     registered_at = None
-    _has_fj = False   # `#57`：本轮是否见过「有效 folder.json」（决定建议 `--register` 还是「先建 folder.json」）
+    _has_fj = False   # `#57`：本轮是否见过「可用的 folder.json」（决定建议 `--register` 还是「先建 folder.json」）
     for d, names in sorted(jobs):
         n_dir += 1
         rel = safe_relpath(d, base) if recursive else os.path.basename(d)
-        data, jp = _read_folder_json(d)
-        if data is None:
-            n_unreg += len(names)
-            detail.append(("缺 folder.json", rel, f"{len(names)} 个 xwl 未登记"))
+        state, data, jp, why = _read_folder_json(d)
+        if state == _FJ_ABSENT:
+            if names:
+                n_unreg += len(names)
+                detail.append(("缺 folder.json", rel, "%d 个 xwl 未登记" % len(names)))
+            else:
+                detail.append(("缺 folder.json", rel, "无 .xwl、无索引（只读未执行）"))
             continue
-        if data is False:
+        if state == _FJ_UNREADABLE:
+            n_unread += 1
+            level = 2          # 读不动 ⇒ 无法判断：最高严重度（⛔ 不许与"确认悬空"同格）
+            detail.append(("读不动（无法判断）", rel, why))
+            continue
+        if state in (_FJ_BAD_JSON, _FJ_BAD_STRUCT):
             n_bad += 1
-            detail.append(("folder.json 损坏", rel, os.path.basename(jp)))
+            level = max(level, 1)
+            detail.append(("folder.json 损坏", rel, why))
             continue
+        # state == ok
+        n_fj += 1
         _has_fj = True   # `#57`：该目录有可用的 folder.json ⇒ `--register` 才可能成功
-        idx = data.get("index") if isinstance(data.get("index"), list) else []
+        idx = data["index"]
         miss = [x for x in names if x not in idx]
         if miss:
             n_unreg += len(miss)
@@ -4381,15 +4532,15 @@ def cmd_folders(args) -> int:
             registered_at = (names[0], jp, idx.index(names[0]) + 1)
         # 悬空：index 项在磁盘上既不是文件也不是子目录（文件/目录被删了但登记还留着）
         for it in idx:
-            if isinstance(it, str) and it and not os.path.exists(os.path.join(d, it)):
+            if it and not os.path.exists(os.path.join(d, it)):
                 n_dangling += 1
-                detail.append(("index 悬空", rel, it))
+                level = max(level, 1)
+                detail.append(("index 悬空（已登记、盘上无）", rel, it))
 
-    # 结论行只报**真问题**：`index` 悬空项（登记了但文件不存在）与 `folder.json` 损坏。
-    # 「未登记」只进明细、不上结论行 —— 实测"未登记"约一成、且多是"被引用的片段页"
-    #   （本就不该进导航树）⇒ 上结论行会恒亮、用户无法据此行动。
-    # 依据（结论行只报悬空项这条处置）：references/workflow-notes.md。
-    print(f"目录 {n_dir} 个 | index 悬空项 {n_dangling} 个 | folder.json 损坏 {n_bad} 个")
+    # 结论行：**确认的问题**（悬空／损坏）与**无法判断**（读不动）分列；「未登记」只进明细、不上结论行
+    #   —— 实测"未登记"约一成、且多是"被引用的片段页"（本就不该进导航树）⇒ 上结论行会恒亮。
+    print(f"目录 {n_dir} 个（有 folder.json {n_fj} 个） | index 悬空项 {n_dangling} 个 | "
+          f"folder.json 损坏 {n_bad} 个 | 读不动 {n_unread} 个")
     if detail:
         print("\n明细（最多 40 条）：")
         for kind, rel, info in detail[:40]:
@@ -4399,8 +4550,11 @@ def cmd_folders(args) -> int:
     elif registered_at:
         nm, jp, pos = registered_at
         print(f"[ok]   {nm} 已登记在 {safe_relpath(jp)} 的 index 第 {pos} 项。")
-    else:
+    elif n_fj:
         print("[ok]   index 与实际文件一致。")
+    if n_fj == 0 and n_unread == 0 and n_bad == 0:
+        # 只读、且整个应检面里没有任何文件夹索引可读 ⇒ 明确"未执行"，⛔ 不得宣称一致
+        print(f"[note] 未发现 {_FOLDER_NAME}，本次未执行索引检查")
     if n_unreg and not recursive:
         if _has_fj:
             print(f"\n登记：xwl.py folders {safe_relpath(target)} --register {os.path.basename(target)}")
@@ -4408,7 +4562,7 @@ def cmd_folders(args) -> int:
             print(f"\n登记：该目录还没有 {_FOLDER_NAME} —— 请先在**设计器里建这个目录**（或手动补 {_FOLDER_NAME}），再跑 `xwl.py folders {safe_relpath(target)} --register`。")
     if n_unreg:
         print("\n> index 里带 `.xwl` 的是文件、不带后缀的是子目录；顺序 = 导航树显示顺序。")
-    return 0
+    return level
 
 
 # --------------------------------------------------------------------------- #
@@ -4450,12 +4604,14 @@ _SIM_GATE = 0.5        # 3-gram Jaccard **松门**：只用来省掉昂贵比较
 _SIM_MAX_CMP = 50000   # 昂贵比较（SequenceMatcher）次数硬上限；触顶打 [note]，⛔ 不静默
 _SIM_MAX_GATE = 400000 # 松门求交次数硬上限（同性质的有界手段：放开长度门槛后候选变多，得有兜底）；触顶同样打 [note]
 
-# 精确命中被「只认新发生的合并」两道闸挡下时的原因文案（供 `[note]` 用）：
-#   unchanged ＝ 续行组不涉及基线变更行（内容移动/复制或极短行拼接巧合）
-#   not_new   ＝ 工作区出现次数没有多于基线（命中的是既有同文本行）
+# 精确/相似度两档被「只认新发生的合并」的闸挡下时的原因文案（供 `[note]` 用）：
+#   unchanged ＝ 续行组**整组**本次未改（内容移动/复制或极短行拼接巧合）
+#   partial   ＝ 续行组**仍有行本次未改**（只改组首/组尾或组内个别行，不是新压平）
+#   existing  ＝ 命中位置是**基线里既有的同文本行**（本次没有新压出该行）
 _SKIP_WHY = {
     "unchanged": "对应基线行**本次未改**（内容移动/复制或极短行拼接巧合）",
-    "not_new": "工作区没有比基线**多出现**同一文本（命中既有同文本行，不是新合并）",
+    "partial": "续行组**仍有行本次未改**（只改组内个别行，不是新压平）",
+    "existing": "命中位置是**基线里既有的同文本行**（本次没有新压出该行）",
 }
 
 
@@ -4489,29 +4645,39 @@ def _line_coverage(sm, segs) -> float:
     return worst
 
 
-def _changed_head_lines(head_text: str, wd_text: str) -> set:
-    """返回**基线里被本次改动覆盖**的行号集合（1-based），供精确/相似度两档共用。
+def _diff_line_maps(head_text: str, wd_text: str) -> tuple:
+    """返回 `(changed_head, new_wd)` 两个 1-based 行号集合（`difflib` **行级**比对，一次算完）。
 
-    「压平」只可能是**基线这一组续行本就被本次改动动过**时才新发生的合并：
-    基线行原封不动的续行组，即使工作区另有一行恰好等于它们的拼接，也只是
-    「内容移动/复制」或**极短行**（`}` / `');'` 这类）的巧合，不是压平。
+    · `changed_head` ＝ **基线里被本次改动覆盖**的行号（`replace` / `delete` 的基线侧）——
+      供精确/相似度两档判断"这组续行是不是本次新动过"；
+    · `new_wd` ＝ **工作区里由 `insert` / `replace` 产出的行号**（"新行"）——
+      ⭐ 命中位置必须在其中：命中若落在 `equal` 的工作区行，那只是**基线既有行**
+      （「只改组首/组尾＋别处多出同文本」与「组内改一字但命中基线既有近似行」两类误报就是这么来的），
+      不是本次新压平出来的行。
 
-    对齐用 `difflib.SequenceMatcher` 做**行级**比对：`replace` / `delete` 覆盖到的基线行
-    算变更行（`insert` 没有基线行）；`autojunk=False` 必须显式给 —— 行级列表里重复行很常见，
-    默认的 autojunk 会把高频行当垃圾跳过，于是"改过的行"漏判、闸失效。
+    `autojunk=False` 必须显式给 —— 行级列表里重复行很常见，默认 autojunk 会把高频行当垃圾跳过，
+    于是"改过的行"漏判、闸失效。
     """
     hl = ANY_EOL_RE.split(head_text)
     wl = ANY_EOL_RE.split(wd_text)
     sm = difflib.SequenceMatcher(None, hl, wl, autojunk=False)
     changed: set = set()
-    for tag, i1, i2, _j1, _j2 in sm.get_opcodes():
+    new_wd: set = set()
+    for tag, i1, i2, j1, j2 in sm.get_opcodes():
         if tag in ("replace", "delete"):
             changed.update(range(i1 + 1, i2 + 1))
-    return changed
+        if tag in ("insert", "replace"):
+            new_wd.update(range(j1 + 1, j2 + 1))
+    return changed, new_wd
+
+
+def _changed_head_lines(head_text: str, wd_text: str) -> set:
+    """返回**基线里被本次改动覆盖**的行号集合（1-based）；`_diff_line_maps` 的薄包装（保留旧 API）。"""
+    return _diff_line_maps(head_text, wd_text)[0]
 
 
 def _similar_merge_hits(head_text: str, wd_text: str, exact_hits=(),
-                        changed_lines=None):
+                        changed_lines=None, new_wd=None):
     """判据三（相似度档）：基线里**连续 ≥2 行**被压成工作区一行、**但内容已改**（逐字不等）。
 
     返回 `(hits, n_cmp, capped)`：`hits` ＝ `[(起始行号, 结束行号, 工作区行号, 该行开头, 相似度)]`。
@@ -4522,8 +4688,11 @@ def _similar_merge_hits(head_text: str, wd_text: str, exact_hits=(),
 
     ⛔ **必须 ≥2 行**：单行对单行的相似属于"改了内容"，不是压平 —— 那类改动本就不该被 diffguard 拦。
 
-    **与精确判据同权**：`changed_lines` 给了时，窗口必须涉及**基线变更行**（`_changed_head_lines`
-    的结果）—— 基线行原封不动的组不可能是"本次新压平"，否则"只改别处、结构没动"也会被这条抓进来。
+    **与精确判据同权（同一组闸，口径一字不差）**：
+      · 窗口内**每一行**都必须是基线变更行（`changed_lines`）—— 只要还有一行本次未改，该组就
+        不是"新压平"（只改别处/组首组尾的既有组会在这里被挡下，不再借相似度档复活）；
+      · **命中位置必须是工作区新行**（`new_wd`：`insert`/`replace` 产出的行）—— 命中的若是与基线
+        某行 `equal` 的既有物理行，那只是**基线里本来就有的近似同文本行**（「组内只改一字、基线已有逐字同文本行」的窄误报），不是新合并。
 
     **有界**（⛔ 不做全对全）：
       · 只枚举"**以续行符结尾的行**"作起点、且只取**完整组**（组尾是不带续行符的行）—— 与判据一同一个几何；
@@ -4590,14 +4759,11 @@ def _similar_merge_hits(head_text: str, wd_text: str, exact_hits=(),
             continue                          # 起点必须是续行（字符串内部的多行）
         acc = hl[i][:-1]
         segs = [(0, len(acc))]                # 每行在 `acc` 里的 `(起, 止)` —— 供逐行覆盖闸用
-        touches = changed_lines is None or (i + 1) in changed_lines
         for j in range(i + 1, n):
             _seg = hl[j][:-1] if hl[j].endswith("\\") else hl[j]
             _s0 = len(acc)
             acc = acc + _seg
             segs.append((_s0, _s0 + len(_seg)))
-            if changed_lines is not None and (j + 1) in changed_lines:
-                touches = True
             if hl[j].endswith("\\"):
                 # 组还没结束：太长就没必要再拼（只会更长）
                 if len(acc) > max_w * 1.35:
@@ -4605,8 +4771,10 @@ def _similar_merge_hits(head_text: str, wd_text: str, exact_hits=(),
                 continue
             # 组结束 ⇒ 该起点**唯一**的候选窗口就是这一段（与判据一同一个几何，
             # ⛔ 不把"字符串后面的结构行"也拼进来 —— 那会造出永远不该成立的窗口）。
-            if not touches:
-                break                         # 基线行本次未改 ⇒ 不是新压平（与精确判据同权）
+            # ⭐ 闸①（与精确判据同口径）：窗口内**每一行**都必须是基线变更行；任一未改 ⇒ 不是新压平。
+            if changed_lines is not None and not all(
+                    (ln + 1) in changed_lines for ln in range(i, j + 1)):
+                break
             a_len = len(acc)
             if a_len >= _SIM_MIN_TOTAL and (i + 1, j + 1) not in done_pairs:
                 _ga = None
@@ -4617,6 +4785,10 @@ def _similar_merge_hits(head_text: str, wd_text: str, exact_hits=(),
                             continue
                         wl_len = len(wl[k - 1])
                         if not (0.75 * a_len <= wl_len <= 1.35 * a_len):
+                            continue
+                        # ⭐ 闸②：命中位置必须是工作区**新行**（insert/replace 产出）——
+                        #   落在 equal 行上只是"基线既有近似同文本行"（组内改一字、基线已有逐字同文本行），不是新压平。
+                        if new_wd is not None and k not in new_wd:
                             continue
                         if _ga is None:
                             _ga = _char_grams(acc)
@@ -4654,7 +4826,7 @@ def _similar_merge_hits(head_text: str, wd_text: str, exact_hits=(),
 
 
 def _merged_line_hits(head_text: str, wd_text: str, changed_lines=None,
-                      skipped=None) -> list:
+                      skipped=None, new_wd=None) -> list:
     """精确判据：找出「基线里**连续多行**被拼成了工作区的某一行」的位置。
 
     这是"压平"的**定义本身** —— 压平就是删掉「续行符 + 换行」，
@@ -4677,13 +4849,17 @@ def _merged_line_hits(head_text: str, wd_text: str, changed_lines=None,
       · 拼接结果必须与工作区的**某条物理行逐字相同** —— 删行会少内容、单行改长会多内容，
         两者都拼不出这条等式。
 
-    两条「只认新发生的合并」的闸（缺一条就会把既有内容当成新压平）：
-      ① `changed_lines` 给了时，续行组必须**涉及基线变更行**（`_changed_head_lines`）——
-         基线行原封未动的组，命中的只是工作区里既有的同文本行、移动/复制或极短行巧合；
-      ② **出现次数闸**：拼接文本在工作区出现的次数必须**多于基线** —— 基线里本来就有
-         同文本行时（例如这段在更早的提交里已压平入库），工作区没有"多出来"的那一份就不是新合并。
-    被闸掉的候选写进 `skipped`（若给了列表）：`(起始, 结束, 工作区行, why)`，
-    `why` ∈ `"unchanged"`（①）/ `"not_new"`（②），由调用方打 `[note]` 说明原因，⛔ 不静默丢。
+    三条「只认新发生的合并」的闸（缺一条就会把既有内容当新压平，或漏掉真压平）：
+      ① `changed_lines` 给了时，续行组**每一行**都必须是基线变更行 —— 只要还有一行本次未改，
+         该组就不是新压平（「只改组首/组尾＋别处多出同文本行」正是这一格）；
+      ② `new_wd` 给了时，命中位置必须是工作区**新行**（`insert`/`replace` 产出的行）——
+         命中落在 `equal` 行上只是基线里本来就有的同文本行，不是新合并（「只改组首/组尾」误报的另一半）；
+         被这条挡下时只丢该位置，不丢整个组。
+      ③ ⛔ **不再有「出现次数必须多于基线」这道闸**：真压平**同时删掉**基线里那处既有同文本行时，
+         工作区出现次数与基线相同（「真压平＋删掉既有同文本行」漏报的根因）—— 是否新合并由 ①② 判定，不由计数判定。
+    被闸掉的候选写进 `skipped`（若给了列表）：`(起始, 结束, 工作区行或 0, why)`，
+    `why` ∈ `"unchanged"`（组内整组未改）/`"partial"`（组内只有部分行被改）/`"existing"`
+    （命中位置全是既有行），由调用方打 `[note]` 说明原因，⛔ 不静默丢。
     """
     hl = ANY_EOL_RE.split(head_text)
     wl = ANY_EOL_RE.split(wd_text)
@@ -4697,12 +4873,6 @@ def _merged_line_hits(head_text: str, wd_text: str, changed_lines=None,
     for k, l in enumerate(wl, 1):
         wpos.setdefault(l, []).append(k)
         wpos_r.setdefault(l.rstrip(), []).append(k)
-    # 基线侧的同文本出现次数（出现次数闸的分母）。
-    hcount: dict = {}
-    hcount_r: dict = {}
-    for l in hl:
-        hcount[l] = hcount.get(l, 0) + 1
-        hcount_r[l.rstrip()] = hcount_r.get(l.rstrip(), 0) + 1
     max_w = max((len(l) for l in wl), default=0)
 
     hits = []
@@ -4716,26 +4886,28 @@ def _merged_line_hits(head_text: str, wd_text: str, changed_lines=None,
             acc += hl[j][:-1] if hl[j].endswith("\\") else hl[j]
             if len(acc) > max_w:
                 break                       # 工作区不可能有这么长的行
-            if acc in wpos:                 # raw 命中 → raw 行号表 / raw 基线计数
-                want, base_n = wpos[acc], hcount.get(acc, 0)
+            if acc in wpos:                 # raw 命中 → raw 行号表
+                want = wpos[acc]
             elif acc.rstrip() and acc.rstrip() in wpos_r:   # rstrip 命中（工作区该行带尾随空白）→ rstrip 表
-                _key = acc.rstrip()
-                want, base_n = wpos_r[_key], hcount_r.get(_key, 0)
+                want = wpos_r[acc.rstrip()]
             else:
                 want = None
             if want is not None:
-                # 闸①：基线行本次未改 ⇒ 只可能是移动/复制或极短行巧合（⛔ 不是新合并）。
-                #   区间含**组尾行** `j + 1`（与相似度档 `touches` 的 `(j + 1) in changed_lines` 同口径）。
-                if changed_lines is not None and not any(
-                        ln in changed_lines for ln in range(i + 1, j + 2)):
-                    if skipped is not None:
-                        skipped.append((i + 1, j + 1, want[0], "unchanged"))
-                    break
-                # 闸②：工作区出现次数不高于基线 ⇒ 命中既有同文本行，不是新合并。
-                if len(want) <= base_n:
-                    if skipped is not None:
-                        skipped.append((i + 1, j + 1, want[0], "not_new"))
-                    break
+                # 闸①：组内**每一行**都必须是本次改过的基线行（与相似度档同一口径）。
+                if changed_lines is not None:
+                    _hit_n = sum(1 for ln in range(i + 1, j + 2) if ln in changed_lines)
+                    if _hit_n != j - i + 1:
+                        if skipped is not None:
+                            why = "unchanged" if _hit_n == 0 else "partial"
+                            skipped.append((i + 1, j + 1, want[0], why))
+                        break
+                # 闸②：命中位置必须是工作区**新行**（insert/replace 产出），否则只是既有同文本行。
+                if new_wd is not None:
+                    want = [k for k in want if k in new_wd]
+                    if not want:
+                        if skipped is not None:
+                            skipped.append((i + 1, j + 1, 0, "existing"))
+                        break
                 for k in want:              # 多位置：逐处返回，按 (起, 止, 工作区行) 去重
                     if (i + 1, j + 1, k) in seen:
                         continue
@@ -5076,13 +5248,13 @@ def cmd_diffguard(args) -> int:
         n_wd = len(ANY_EOL_RE.split(wd_text))
 
         # ⭐ 基线变更行对齐（`difflib` 行级）：精确/相似度两档共用同一组"本次改动动过的基线行"，
-        #    防止把工作区里**既有的**同文本行、内容移动/复制、极短行拼接巧合判成新压平。
-        changed = _changed_head_lines(head_text, wd_text)
+        #    以及**工作区新行集**（命中位置必须落在其中）。
+        changed, new_wd = _diff_line_maps(head_text, wd_text)
         # 判据一（精确，主判据）：基线里连续多行被拼成了工作区的某一行 —— "压平"的定义本身。
-        #    只认**新发生的合并**：续行组须涉及基线变更行、且工作区出现次数多于基线；
-        #    被这两道闸挡下的候选进 `skipped`，只在下面给 `[note]`，⛔ 不静默丢。
+        #    只认**新发生的合并**：组内每一行须是本次改过的基线行、且命中位置须是工作区新行；
+        #    被闸挡下的候选进 `skipped`，只在下面给 `[note]`，⛔ 不静默丢。
         skipped: list = []
-        hits = _merged_line_hits(head_text, wd_text, changed, skipped)
+        hits = _merged_line_hits(head_text, wd_text, changed, skipped, new_wd)
         # 净计数（续行符 / 行数）只作**说明**：它们同时反映"合法删减"，不能当否决条件 ——
         # 拿它当否决就会漏报「补偿式压平」（别处新增续行把净计数抵消掉的真压平）。
         pressed = (c_wd < c_head) or (n_wd < n_head)
@@ -5094,7 +5266,7 @@ def cmd_diffguard(args) -> int:
         # 判据三（相似度，补「压平**且**改了内容」）：与精确判据**同权** —— 同受基线变更行约束
         #    （窗口不涉及变更行就不是新压平），⛔ 不再以净计数为前置条件。
         sim_hits, sim_cmp, sim_capped = _similar_merge_hits(
-            head_text, wd_text, hits, changed)
+            head_text, wd_text, hits, changed, new_wd)
         suspect = bool(hits) or coarse or bool(sim_hits)
         # ⭐ 预算状态**独立保存**：`sim_capped` ＝「该文件没检查完」，与"过滤后是否还有命中"无关。
         #   ⛔ 不得因 `hits` / `sim_hits` 为空而丢掉 —— 丢了就会让触顶的文件仍被报成完整通过。
@@ -5144,7 +5316,7 @@ def cmd_diffguard(args) -> int:
                 print(f"  [note] {_capped_note}")
             if skipped:
                 _why_txt = "；".join(
-                    _SKIP_WHY[w] for w in ("unchanged", "not_new")
+                    _SKIP_WHY[w] for w in _SKIP_WHY
                     if any(_s[3] == w for _s in skipped))
                 _net = (f"续行符 {c_head}→{c_wd}、行数 {n_head}→{n_wd}"
                         + ("（至少一项减少）" if pressed else "（都没减少）"))
@@ -5221,19 +5393,29 @@ _SQL_TYPE_NAMES = frozenset("""
 """.split())
 
 
-def builtin_prefixes(start_file: str | None = None) -> tuple:
-    """框架内置变量前缀白名单 = `wb/system/var.json` 顶层键推导 ∪ 内置兜底。"""
+def builtin_prefixes(start_file: str | None = None):
+    """框架内置变量前缀白名单 = `wb/system/var.json` 顶层键推导 ∪ 内置兜底。
+
+    返回 `(前缀元组, 读失败)`：`读失败 = (路径, 原因)` 或 `None`。
+    `var.json` **三分**处理：
+      · **未发现**（可选资源缺席）⇒ 不算失败，只退回内置兜底；
+      · **合法字典**（含空字典）⇒ 顶层键并进白名单；
+      · **存在但读不出／JSON 坏／顶层不是对象** ⇒ 记录失败（由调用方报告并计入"本次核对不完整"），
+        ⛔ 不静默退回内置 —— 那会把"读不到"伪装成"没这个东西"。
+    """
     pref = set(_BUILTIN_PREFIX)
+    fail = None
     if start_file:
         vp = _find_upward(start_file, os.path.join("system", "var.json"))
-        if vp:
-            try:
-                v = json.load(open(vp, encoding="utf-8"))
-            except Exception:  # noqa: BLE001
-                v = None
-            if isinstance(v, dict):
-                pref |= {"%s." % k for k in v if isinstance(k, str) and k}
-    return tuple(sorted(pref))
+        state, data, why = _read_optional_json(vp, "var.json")
+        if state == "ok":
+            if isinstance(data, dict):
+                pref |= {"%s." % k for k in data if isinstance(k, str) and k}
+            else:
+                fail = (vp, "顶层不是对象（%s）" % type(data).__name__)
+        elif state == "failed":
+            fail = (vp, why)
+    return tuple(sorted(pref)), fail
 
 
 def strip_sql_type_prefix(name: str, provided) -> str:
@@ -5415,7 +5597,11 @@ def cmd_sqlrefs(args) -> int:
     # 逐个判定 {#name#}
     # 内置前缀白名单**按本文件所在工程推导**（`wb/system/var.json` 顶层键 ∪ 内置），
     # 而不是拿硬编码的常量 —— 工程自定义命名空间也要认（见 `builtin_prefixes`）。
-    prefixes = builtin_prefixes(args.file)
+    # ⭐ 依赖读失败必须留缺口：`var.json` 存在却读不出/结构不合 ⇒ 本入口的「框架内置变量」判定不完整。
+    prefixes, _pref_fail = builtin_prefixes(args.file)
+    if _pref_fail is not None:
+        print(f"  [FAIL] 读依赖失败：{_pref_fail[0]}（{_pref_fail[1]}）—— "
+              "「框架内置变量」判定不完整（已按内置兜底继续，但本次核对**未完成**）")
     missing = []
     for name, cnt in sorted(used.items(), key=lambda kv: -kv[1]):
         if name in provided:
@@ -5464,6 +5650,11 @@ def cmd_sqlrefs(args) -> int:
     if missing:
         print("=== 结果: FAIL")
         return 1
+    # 依赖读失败（默认与 `--strict` 同为"不能检查完"⇒ 2）；已确认内容失败（problems/missing/无适用内容）
+    #   的优先级更高，已在上面以 1 返回并已逐条列出读取失败。
+    if _pref_fail is not None:
+        print("=== 结果: FAIL（检查未完成：依赖读不出）")
+        return 2
     print("=== 结果: OK" + ("（有警告）" if warnings else ""))
     return 0
 
@@ -5510,28 +5701,24 @@ def field_types(controls_path: str | None = None) -> tuple:
     ⇒ **union 无副作用**，而"更宽的清单"只会**少报** miss（安全方向）。
     """
     ids: set[str] = set(_FIELD_FALLBACK)
-    if controls_path:
-        try:
-            # `utf-8-sig`：与 `_registry_configs` / `normalname_types` 同口径（BOM 也要能读）。
-            reg = json.load(open(controls_path, encoding="utf-8-sig"))
-        except Exception:  # noqa: BLE001
-            reg = None
-        if reg is not None:
+    rec = _registry_load(controls_path)
+    if rec["state"] == "ok":
+        reg = rec["data"]
 
-            def walk(o):
-                if isinstance(o, dict):
-                    g = o.get("general")
-                    if (isinstance(g, dict) and isinstance(g.get("type"), str)
-                            and g["type"].startswith("Ext.form.field.")
-                            and isinstance(o.get("id"), str)):
-                        ids.add(o["id"])
-                    for v in o.values():
-                        walk(v)
-                elif isinstance(o, list):
-                    for v in o:
-                        walk(v)
+        def walk(o):
+            if isinstance(o, dict):
+                g = o.get("general")
+                if (isinstance(g, dict) and isinstance(g.get("type"), str)
+                        and g["type"].startswith("Ext.form.field.")
+                        and isinstance(o.get("id"), str)):
+                    ids.add(o["id"])
+                for v in o.values():
+                    walk(v)
+            elif isinstance(o, list):
+                for v in o:
+                    walk(v)
 
-            walk(reg)
+        walk(reg)
     return tuple(sorted(ids))
 
 
@@ -6088,9 +6275,12 @@ def _scan_upstream(root: str, page_file: str, field_set, target_key: str | None 
     保持既有输出）；置真时**仍把引用方文件列进 `calls`**（键为空 list）—— 载体常经 `store.configs.url` 这类
     **纯 url 字符串**被引用（`find_transfers` 在该串上取不到键）⇒ 载体口径要把"哪个页面引用了我"列出来。
 
-    返回：`n_files`（扫了多少个 `.xwl`，不含本文件）；`calls` = [(调用方相对路径, 传入键 list)]，
+    返回：`n_files`（扫了多少个 `.xwl`，不含本文件）；`n_ok`／**`n_failed`**（成功解析／读取失败的文件数）
+    与 **`failed`**（`[(相对路径, 原因)]`）；`calls` = [(调用方相对路径, 传入键 list)]，
     只含能展开的**字面量** `params` 键；`n_out` / `n_dyn` / `n_none` = 三类“未展开”的处数：
     `out:` 形态 / url 为运行时拼接 / 命中目标但既无字面量键也无 `out:`。
+    ⚠️ 读取失败的文件**不静默丢**：计入 `n_failed`／`failed`，调用方据此把"反查覆盖"标**未完成**
+    （否则"0 处调用"与"读不出所以没看到"不可区分）。
     """
     page_abs = os.path.abspath(page_file)
     page_key = target_key if target_key is not None else _page_ref_key(page_file, root)
@@ -6098,7 +6288,8 @@ def _scan_upstream(root: str, page_file: str, field_set, target_key: str | None 
     # ⇒ 直接按 `m?xwl=<本页键>` 匹配，并卡右边界，免得把更长的路径前缀误当本页。
     _ref_re = re.compile(r"m\?xwl=" + re.escape(page_key) + r"(?![A-Za-z0-9_.\-/])")
     calls: list = []
-    n_files = n_out = n_dyn = n_none = 0
+    n_files = n_ok = n_failed = n_out = n_dyn = n_none = 0
+    failed: list = []
     for dirpath, _dirs, files in os.walk(root):
         for fn in sorted(files):
             if not fn.lower().endswith(".xwl"):
@@ -6107,12 +6298,16 @@ def _scan_upstream(root: str, page_file: str, field_set, target_key: str | None 
             if os.path.abspath(fp) == page_abs:
                 continue
             n_files += 1
-            try:
-                with open(fp, "rb") as fh:
-                    obj = parse_xwl(fh.read().decode("utf-8"))
-            except Exception:  # noqa: BLE001 —— 坏文件不该让整轮反查崩掉
-                continue
             caller_rel = os.path.relpath(fp, root).replace(os.sep, "/")
+            try:
+                # ⭐ 复用**公共加载入口**（宽容面，与 `params` 本文件同口径）：BOM／单引号键等
+                #   宽容写法也能读；失败抛 `XwlLoadError`（不进静默分支）。
+                _t, _b, obj = load_xwl(fp, loader=True)
+            except XwlLoadError as exc:  # 坏文件不该让整轮反查崩掉，但**必须留缺口**
+                n_failed += 1
+                failed.append((caller_rel, str(exc)))
+                continue
+            n_ok += 1
             for js in _iter_js_strings(obj):
                 if not _ref_re.search(js):
                     # 页面路径以字面量出现、但 `m?xwl=` 目标被运行时拼出来 ⇒ 计入“未展开·动态”
@@ -6134,8 +6329,8 @@ def _scan_upstream(root: str, page_file: str, field_set, target_key: str | None 
                     calls.append((caller_rel, []))   # 载体口径：纯 url 命中（无可展开键）也列出引用方
                 else:
                     n_none += 1
-    return {"n_files": n_files, "calls": calls, "n_out": n_out,
-            "n_dyn": n_dyn, "n_none": n_none}
+    return {"n_files": n_files, "n_ok": n_ok, "n_failed": n_failed, "failed": failed,
+            "calls": calls, "n_out": n_out, "n_dyn": n_dyn, "n_none": n_none}
 
 
 # 起因：出现级统计的 `url:` 里，除裸引号字面量（`url: 'm?xwl=…'`）外，真实工程还有一种
@@ -6179,19 +6374,21 @@ def _appearance_url_counts(text: str) -> tuple:
     return n_lit_m, n_lit_other, n_dyn
 
 
-def _print_params_tail(args, root, text, stores, field_set, target_is_carrier=False) -> None:
+def _print_params_tail(args, root, text, stores, field_set, target_is_carrier=False):
     """`params` 末尾两段附加输出（只在开了 `--upstream` 时出现）。
 
     ① 反查分组（目标为**页面** ⇒ `[外部可传入]`；目标为 **SQL 载体** ⇒ `[引用本载体的页面]`）；
     ② 载入侧“未纳入核对”汇总行（**永远是最后一行**）。
     默认关 ⇒ 本函数直接 `return`；调用方输出**逐字不变**，而它只对"无 miss 的页面"成立（有 miss 且未开 `--strict` 时，§4.2 的留痕规则本就多一行 `[note]`；保住 `params` 的量级）。
     ⚠️ 目标是**页面**时，本段输出**逐字节不变**（`_scan_upstream` 目标键参数化、默认 ＝ 本文件键）。
+    返回 `_scan_upstream` 的结果（含 `n_ok`／`n_failed`／`failed`，供调用方把「反查覆盖未完成」计入码值）；
+    未开 `--upstream` 或定位不到模块根时返回 `None`（此时没有反查，也就没有"未完成"）。
     """
     if not getattr(args, "upstream", False):
-        return
+        return None
     if not root or not os.path.isdir(root):
         print("\n[note] --upstream：未找到模块根（用 --module-root 指定）⇒ 跳过跨页反查")
-        return
+        return None
     # `#53`：目标键**参数化**（默认 ＝ 本文件键）。目标为**页面** ⇒ "谁调用本页"（输出不变）；
     #   目标为 **SQL 载体** ⇒ "谁引用本载体"（`target_is_carrier` 由 `cmd_params` 按结构判出，文案分场景）。
     #   ⛔ 不新增 CLI 参数 —— 载体经"页面 ＋ 载体"成对工作流直接把载体文件传给 `params --upstream`。
@@ -6217,7 +6414,16 @@ def _print_params_tail(args, root, text, stores, field_set, target_is_carrier=Fa
             print("    %s  → 传入键 %s" % (_caller, _keys))
     print("  [未展开] `out: app.<容器>` %d 处 / 动态 url %d 处 / 命中但无字面量键 %d 处"
           % (info["n_out"], info["n_dyn"], info["n_none"]))
-    print("  （扫描范围：本根 %d 个 .xwl；本工具只判本根，跨工程引用看不到）" % info["n_files"])
+    print("  （扫描范围：本根 %d 个 .xwl；成功解析 %d / 读取失败 %d；本工具只判本根，跨工程引用看不到）"
+          % (info["n_files"], info["n_ok"], info["n_failed"]))
+    if info["n_failed"]:
+        # ⛔ 读不出不等于"没调用"：必须把反查覆盖标**未完成**，并逐条列失败路径（有界展示）。
+        print("  [warn] 反查覆盖**未完成**：%d 个文件读不出（`m?xwl=` 是否在里面本工具看不到）——"
+              % info["n_failed"])
+        for _rel, _why in info["failed"][:10]:
+            print("        · %s：%s" % (_rel, _why))
+        if len(info["failed"]) > 10:
+            print("        ...（另有 %d 个读取失败）" % (len(info["failed"]) - 10))
     # ---- ② 载入侧“未纳入核对”汇总行（最后一行）----
     # 节点级：本页 `store` 里带 `url` 的节点，按“能否在本根解析到文件”分两类。
     # ⚠️ 更细的“同根命中 / 跨工程 / 全根不存在”三分口径需**多根**；运行时只有单根
@@ -6241,7 +6447,7 @@ def _print_params_tail(args, root, text, stores, field_set, target_is_carrier=Fa
           " / 非 m?xwl 的 url %d 处（跨工程 · 全根不存在的三分细口径需多根，见 references/measured-data.md）；"
           "出现级（全文 `url:` 写法）：动态写法 %d 处 / 非 m?xwl 字面量 %d 处"
           % (n_hit, n_miss, n_other, _n_dyn_url, _n_lit_other))
-    return
+    return info
 
 
 def cmd_params(args) -> int:
@@ -6262,6 +6468,8 @@ def cmd_params(args) -> int:
 
     SQL 侧需求：`{?名字?}`（sql / totalSql / serverScript 里都算）与 `app.get('名字')`。
     """
+    # 注册表事实源：一次命令上下文只加载一次（入口清身份缓存；字段类型/注册表派生共用同一份）。
+    _registry_reset()
     field_set = field_types(getattr(args, "controls", None))
     if getattr(args, "list_fields", False):
         print(f"取值控件类型（{len(field_set)} 种）:")
@@ -6361,6 +6569,9 @@ def cmd_params(args) -> int:
     #   记 物理键 → 显示名，供计数回填。`Wb.request` 侧也走同一收集 ⇒ 修掉"已由 store 登记过就不再
     #   计数"的漏计（`#56` 引用计数口径）。
     _phys_display: dict[str, str] = {}
+    # ⭐ 读依赖（SQL 载体／`var.json`／反查扫描）失败必须**留缺口**（路径＋原因）：
+    #   ⛔ 不再 `except Exception: continue` 静默吞 —— 读不出会让"需要集合"不完整却仍显示无问题。
+    carrier_failed: list = []
 
     def _add_carrier(tgt: str, fp: str) -> None:
         """把一个**存在**的载体纳入 `sql_files`（按物理文件去重）并累计引用计数（store / `Wb.request` 同口径）。"""
@@ -6588,8 +6799,11 @@ def cmd_params(args) -> int:
         _ck = _phys(fp)
         carrier_needs.setdefault(_ck, set())
         try:
-            so = parse_xwl(open(fp, "rb").read().decode("utf-8"))
-        except Exception as exc:  # noqa: BLE001
+            # ⭐ 复用**公共加载入口**（宽容面，与 `params` 本文件同口径）：BOM／单引号键等宽容写法
+            #   也能读；失败抛 `XwlLoadError` ⇒ 记入失败清单，⛔ 不再静默 `continue`。
+            so = load_xwl(fp, loader=True)[2]
+        except XwlLoadError as exc:
+            carrier_failed.append((tgt, str(exc)))
             print(f"\n=== SQL 侧 {tgt}.xwl 读取失败: {exc}")
             continue
         _n_ref56 = sql_ref_count.get(tgt, 1)
@@ -6613,6 +6827,24 @@ def cmd_params(args) -> int:
                         carrier_needs[_ck] |= set(ps)
 
     needed = need_sql | need_req
+    if carrier_failed:
+        # ⛔ 读不出 ≠ "载体没需求"：逐条列路径与原因，并标明本次核对未完成（码值在下方出口统一给）
+        print("\n  [FAIL] SQL 载体读取失败 %d 处 ⇒ 本次核对**未完成**（缺参与未核对结论不完整）："
+              % len(carrier_failed))
+        for _t, _w in carrier_failed[:10]:
+            print("         · %s.xwl：%s" % (_t, _w))
+        if len(carrier_failed) > 10:
+            print("         ...（另有 %d 处读取失败）" % (len(carrier_failed) - 10))
+
+    # 真白名单：`sys.*` / `Str.*`（以及工程在 `wb/system/var.json` 里自定义的命名空间）
+    # **不计 miss** —— 它们由框架往 request 里塞，不需要页面提供。
+    # ⭐ **一次上下文只读一次**：下面前后两个出口（`needed` 为空的早返／末行）复用同一结果；
+    #   读失败必须进入两边的 `_read_fail` —— 否则「页面无参数需求 ＋ var.json 读不出」的早返会把
+    #   失败漏掉、rc 假绿（复核退回项）。
+    prefixes, _pref_fail = builtin_prefixes(args.file)
+    if _pref_fail is not None:
+        print(f"  [FAIL] 读依赖失败：{_pref_fail[0]}（{_pref_fail[1]}）—— "
+              "「框架内置变量」判定不完整（已按内置兜底继续，但本次核对**未完成**）")
     if not needed:
         # `#58`："页面**压根没有 store**"与"**有 store、但 SQL 侧无 `{?名?}`／`app.get`**"是两种
         #   不同处境，合并成一句 `（SQL 侧没有 {?…?} / app.get，跳过交叉核对）` ⇒ 易被读成
@@ -6626,7 +6858,19 @@ def cmd_params(args) -> int:
         else:
             print("\n[warn] （未发现 store，跳过交叉核对）")
         _emit_36(args, dangling36, placeholder36, mod36_notes)
-        _print_params_tail(args, root, text, stores, field_set, target_is_carrier=_target_is_carrier)
+        _tail = _print_params_tail(args, root, text, stores, field_set,
+                                   target_is_carrier=_target_is_carrier)
+        # 读依赖失败（载体／`var.json`／反查扫描）⇒ 本次核对未完成：默认与 `--strict` 均 rc=2；
+        #   但 `--strict` 下若另有**已确认内容失败**（确悬空）⇒ 汇总 rc=1（上面已逐条列出读取失败）。
+        #   ⚠️ `_pref_fail` 必须并入本出口：无 needed 的页面同样可能读不出 var.json（复核退回项）。
+        _read_fail = list(carrier_failed)
+        if _pref_fail is not None:
+            _read_fail.append((_pref_fail[0], _pref_fail[1]))
+        if _tail and _tail.get("n_failed"):
+            _read_fail += [("%s.xwl" % _r, _w) for _r, _w in _tail["failed"]]
+        if _read_fail:
+            print("  [FAIL] 依赖读取失败 %d 处 ⇒ 本次核对**未完成**（缺参/未核对结论不完整）：%s"
+                  % (len(_read_fail), "、".join(str(_p) for _p, _w in _read_fail[:8])))
         # `#36` 判失败（⭐ **早返出口**）：**"悬空-only"页**（页面无参数需求、只悬空）走的正是本出口
         #   ⇒ ⛔ 只改末行 ⇒ 该形态仍 `rc=0`。⚠️ 上方那两条「跳过交叉核对」的 `[warn]` **原文案一字不动**
         #   （它们是**默认面**）⇒ 本出口只在 `--strict` 且**确悬空**时**追加一句**、并把 rc 抬到 1。
@@ -6634,12 +6878,12 @@ def cmd_params(args) -> int:
             print("         ⚠️ 已跳过交叉核对，**但存在 %d 处悬空取数 url**，按 `--strict` 判失败（rc=1）。"
                   % len(dangling36))
             return 1
+        if _read_fail:
+            return 2
         return 0
 
-    # 真白名单：`sys.*` / `Str.*`（以及工程在 `wb/system/var.json` 里自定义的命名空间）
-    # **不计 miss** —— 它们由框架往 request 里塞，不需要页面提供。
-    prefixes = builtin_prefixes(args.file)
-
+    # 真白名单 `prefixes`（含 `var.json` 读失败 `_pref_fail`）已在 `if not needed` 之前**一次读入并上报**，
+    # 本段直接复用，⛔ 不再重复读第二遍。
     # ---- 逐载体、逐名字判定：已提供 / 内置 / 带点疑似内置 / 未核对 / 确缺参 ----
     miss_by_carrier: dict[str, list] = {}     # 载体显示名 → 确缺参名字列表
     unknown_by_carrier: dict[str, list] = {}  # 载体显示名 → 未核对名字列表
@@ -6701,7 +6945,19 @@ def cmd_params(args) -> int:
         print(f"  [info] 页面送了但 SQL 未用到: {extra}")
     print("\n  提示：参数名 = 控件 `itemId`；改了 itemId 或把控件移出容器都会**静默失效**（取到空值）。")
     _emit_36(args, dangling36, placeholder36, mod36_notes)
-    _print_params_tail(args, root, text, stores, field_set, target_is_carrier=_target_is_carrier)
+    _tail = _print_params_tail(args, root, text, stores, field_set,
+                               target_is_carrier=_target_is_carrier)
+    # 读依赖失败（SQL 载体／`var.json`／反查扫描）⇒ 本次核对未完成：
+    #   默认与 `--strict` 均 rc=2；`--strict` 下若另有**已确认内容失败**（确缺参／确悬空）⇒ 汇总 rc=1，
+    #   并同时列出读取失败；默认档原本仅告警的缺参**不因并存而升级**（是否 2 只看读失败本身）。
+    _read_fail = list(carrier_failed)
+    if _pref_fail is not None:
+        _read_fail.append((_pref_fail[0], _pref_fail[1]))
+    if _tail and _tail.get("n_failed"):
+        _read_fail += [("%s.xwl" % _r, _w) for _r, _w in _tail["failed"]]
+    if _read_fail:
+        print("  [FAIL] 依赖读取失败 %d 处 ⇒ 本次核对**未完成**（缺参/未核对结论不完整）：%s"
+              % (len(_read_fail), "、".join(str(_p) for _p, _w in _read_fail[:8])))
     # `#36` 判失败（⭐ **末行出口**）：已确认缺参（`miss`）／真·悬空 url ⇒ `--strict` 下 rc=1；
     #   仅「未核对」⇒ `--strict` 下 rc=2（输入不可静态判定，非内容判据失败）；否则 rc=0。
     #   ⛔ 显式占位不计入 `dangling36`（分类见 `_ref_kind36`）⇒ 占位豁免继续生效。
@@ -6710,6 +6966,11 @@ def cmd_params(args) -> int:
             return 1
         if unknown:
             return 2
+        if _read_fail:
+            return 2
+        return 0
+    if _read_fail:
+        return 2
     return 0
 
 

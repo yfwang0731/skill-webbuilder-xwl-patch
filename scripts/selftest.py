@@ -925,21 +925,21 @@ def _check_params_paths(tmp, node, failures, write) -> None:
     _k3pg = os.path.join(_k3wb, "modules", "p.xwl")
     with open(_k3pg, "w", encoding="utf-8") as _f:
         _f.write("{}")
-    _k3base = xwl.builtin_prefixes(_k3pg)
+    _k3base, _k3base_fail = xwl.builtin_prefixes(_k3pg)
     _varp = os.path.join(_k3wb, "system", "var.json")
     with open(_varp, "w", encoding="utf-8") as _f:
         json.dump({"sys": {}, "myapp": {}}, _f)
-    _k3var = xwl.builtin_prefixes(_k3pg)
+    _k3var, _k3var_fail = xwl.builtin_prefixes(_k3pg)
     with open(_varp, "w", encoding="utf-8") as _f:
         _f.write("{ not json")
-    _k3bad = xwl.builtin_prefixes(_k3pg)
+    _k3bad, _k3bad_fail = xwl.builtin_prefixes(_k3pg)
     for name, cond in {
-        "builtin_prefixes 基线：无 var.json 时 = 内置（含 sys. / Str.）":
-            "sys." in _k3base and "Str." in _k3base,
+        "builtin_prefixes 基线：无 var.json 时 = 内置（含 sys. / Str.）且无读失败":
+            "sys." in _k3base and "Str." in _k3base and _k3base_fail is None,
         "builtin_prefixes：认 var.json 的顶层键（工程自定义命名空间）":
-            "myapp." in _k3var and "sys." in _k3var,
-        "builtin_prefixes：var.json 坏掉时退回内置、不崩":
-            _k3bad == _k3base,
+            "myapp." in _k3var and "sys." in _k3var and _k3var_fail is None,
+        "builtin_prefixes：var.json 坏掉时退回内置、**且记录读失败**（不再静默吞）":
+            _k3bad == _k3base and _k3bad_fail is not None and _k3bad_fail[0] == _varp,
         "paths 与 patch 的 @itemId 寻址同源（都按控件树 _iter_controls）":
             "_iter_controls(" in _cp_body and "_iter_controls(" in _fa_body,
         # ⚠️ 内联对象**必须带 `type`**：`_iter_controls` 只 yield 有字符串 `type` 的节点，
@@ -955,6 +955,11 @@ def _check_params_paths(tmp, node, failures, write) -> None:
             print(f"[ok]  {name}")
         else:
             failures.append(f"{name} 失败")
+
+    # F05：读依赖失败不得被吞（可选资源面：`var.json` 三分＋sqlrefs 同源；依赖面在 new_guards 块）
+    failures.extend(_f05_var_cases(tmp))
+    # AV-03：注册表一次加载的 `params` 面（check/itemids 面在 new_guards 块）
+    failures.extend(_av03_params_cases(tmp))
 
 
 def _check_itemids(tmp, node, failures, write) -> None:
@@ -1813,6 +1818,170 @@ def _check_events_and_expand(tmp, failures) -> None:
     _check_subcommands_tail(tmp, failures)
 
 
+def _folders_f12_cases(tmp):
+    """F12：`folders` 的**分层校验与应检枚举面**（挂在 subcommands 第 14 组同一块内）。
+
+    覆盖：坏 JSON／`index` 结构不合法／读不动（＋同夹具正常路径阳性对照）／确认悬空／良性未登记／
+    无 `folder.json` 只读／「只有 `folder.json`、没有 `.xwl`」的子目录必须被枚举／`--register` 前置失败。
+    返回失败文案列表（空 = 通过）；通过时单独打一行 `[ok]`（⛔ 不新增自检块名）。
+    """
+    fail: list[str] = []
+    root = os.path.join(tmp, "f12_folders")
+    _XWL = '{"hidden":false,"children":[],"roles":{},"title":"t","iconCls":""}'
+    _FJ = '{"hidden":false,"index":%s,"title":"t","iconCls":""}'
+
+    def _mkxwl(p):
+        os.makedirs(os.path.dirname(p), exist_ok=True)
+        with open(p, "w", encoding="utf-8", newline="") as f:
+            f.write(_XWL)
+
+    def _mkfj(d, index):
+        os.makedirs(d, exist_ok=True)
+        with open(os.path.join(d, "folder.json"), "w", encoding="utf-8", newline="") as f:
+            f.write(_FJ % json.dumps(index, ensure_ascii=False, separators=(",", ":")))
+
+    def _run_folders(p, register=None):
+        return _run(xwl.cmd_folders, path=p, register=register, dry_run=False)
+
+    # ① JSON 坏 ⇒ rc=1（结构损坏，不是"读不动"、也不是"未登记"）
+    d = os.path.join(root, "bad_json")
+    os.makedirs(d, exist_ok=True)
+    with open(os.path.join(d, "folder.json"), "w", encoding="utf-8", newline="") as f:
+        f.write("{ 坏掉的 json")
+    _mkxwl(os.path.join(d, "a.xwl"))
+    _rc, _out = _run_folders(d)
+    if _rc != 1:
+        fail.append("F12：folder.json 是坏 JSON 应 rc=1，实得 %s\n%s" % (_rc, _out))
+    if "folder.json 损坏" not in _out:
+        fail.append("F12：坏 JSON 未进「folder.json 损坏」明细：%s" % _out)
+
+    # ② index 结构不合法（非数组／元素非字符串／顶层非对象）⇒ rc=1
+    for _tag, _body in (
+        ("index_not_list", '{"hidden":false,"index":{},"title":"t"}'),
+        ("index_elem_not_str", '{"hidden":false,"index":[1],"title":"t"}'),
+        ("top_not_obj", "[]"),
+    ):
+        d = os.path.join(root, _tag)
+        os.makedirs(d, exist_ok=True)
+        with open(os.path.join(d, "folder.json"), "w", encoding="utf-8", newline="") as f:
+            f.write(_body)
+        _mkxwl(os.path.join(d, "a.xwl"))
+        _rc, _out = _run_folders(d)
+        if _rc != 1:
+            fail.append("F12：结构不合法（%s）应 rc=1，实得 %s\n%s" % (_tag, _rc, _out))
+        if "folder.json 损坏" not in _out:
+            fail.append("F12：结构不合法（%s）未报「folder.json 损坏」：%s" % (_tag, _out))
+
+    # ③ 读不动 ⇒ rc=2（**无法判断**，⛔ 不与「损坏」混同）；同一夹具换成正常索引 ⇒ rc=0（阳性对照）
+    d = os.path.join(root, "unreadable")
+    os.makedirs(os.path.join(d, "folder.json"))   # 用同名目录制造读失败（Windows 可构造）
+    _mkxwl(os.path.join(d, "a.xwl"))
+    _rc, _out = _run_folders(d)
+    if _rc != 2:
+        fail.append("F12：索引读不动应 rc=2（无法判断），实得 %s\n%s" % (_rc, _out))
+    if "读不动（无法判断）" not in _out:
+        fail.append("F12：读不动未单独标注（不得与「损坏」混同）：%s" % _out)
+    if "读不动 0" in _out:
+        fail.append("F12：读不动数量未计入结论行：%s" % _out)
+    shutil.rmtree(os.path.join(d, "folder.json"))
+    _mkfj(d, [])
+    _rc, _out = _run_folders(d)
+    if _rc != 0 or "未登记" not in _out:
+        fail.append("F12 阳性对照：同一夹具换成正常索引应 rc=0＋列出未登记，实得 %s\n%s"
+                    % (_rc, _out))
+
+    # ④ 确认悬空（已登记、盘上无）⇒ rc=1，且与「读不动」分列
+    d = os.path.join(root, "dangling")
+    _mkfj(d, ["x.xwl", "gone.xwl"])
+    _mkxwl(os.path.join(d, "x.xwl"))
+    _rc, _out = _run_folders(d)
+    if _rc != 1:
+        fail.append("F12：确认悬空应 rc=1，实得 %s\n%s" % (_rc, _out))
+    if "index 悬空（已登记、盘上无）" not in _out:
+        fail.append("F12：确认悬空未单独标注：%s" % _out)
+    if "index 悬空项 1 个" not in _out or "读不动 0 个" not in _out:
+        fail.append("F12：结论行未把「确认悬空」与「读不动」分列：%s" % _out)
+
+    # ⑤ 良性未登记（盘上有 .xwl、索引没登记）⇒ rc=0，只进明细、不宣称"一致"
+    d = os.path.join(root, "benign")
+    _mkfj(d, [])
+    _mkxwl(os.path.join(d, "y.xwl"))
+    _rc, _out = _run_folders(d)
+    if _rc != 0:
+        fail.append("F12：良性未登记应 rc=0，实得 %s\n%s" % (_rc, _out))
+    if "未登记" not in _out or "index 与实际文件一致" in _out:
+        fail.append("F12：良性未登记应只进明细、且不得宣称「一致」：%s" % _out)
+
+    # ⑥ 无 folder.json（只读）⇒ rc=0 ＋ 明确的"未执行"note，⛔ 不宣称一致
+    d = os.path.join(root, "nofj")
+    _mkxwl(os.path.join(d, "c.xwl"))
+    _rc, _out = _run_folders(os.path.join(d, "c.xwl"))
+    if _rc != 0:
+        fail.append("F12：无 folder.json 的只读检查应 rc=0，实得 %s\n%s" % (_rc, _out))
+    if "[note] 未发现 folder.json，本次未执行索引检查" not in _out:
+        fail.append("F12：无 folder.json 时缺「本次未执行索引检查」note：%s" % _out)
+    if "index 与实际文件一致" in _out:
+        fail.append("F12：无 folder.json 时不得宣称「index 与实际文件一致」：%s" % _out)
+
+    # ⑦ 应检枚举面：**只有 folder.json、没有 .xwl** 的子目录也必须被枚举（否则悬空永远看不见）
+    p = os.path.join(root, "empty_sub")
+    _mkfj(p, ["x.xwl", "leaf"])
+    _mkxwl(os.path.join(p, "x.xwl"))
+    _mkfj(os.path.join(p, "leaf"), ["missing1.xwl", "missing2.xwl"])
+    _rc, _out = _run_folders(p)
+    if _rc != 1:
+        fail.append("F12：空子目录＋悬空应 rc=1（rc=0 即假绿），实得 %s\n%s" % (_rc, _out))
+    if "目录 2 个" not in _out or "leaf/" not in _out:
+        fail.append("F12：无 .xwl 的子目录未被枚举（目录数/路径不对）：%s" % _out)
+    if "index 悬空项 2 个" not in _out:
+        fail.append("F12：子目录里的 2 个悬空项未计入结论：%s" % _out)
+    if "index 与实际文件一致" in _out:
+        fail.append("F12：存在悬空时仍宣称「index 与实际文件一致」（假绿）：%s" % _out)
+
+    # ⑧ `--register` 写入前置：坏／结构不足／读不动 ⇒ rc=2 且**一个字节不动**；正常／幂等 ⇒ rc=0
+    d = os.path.join(root, "reg_bad")
+    os.makedirs(d, exist_ok=True)
+    with open(os.path.join(d, "folder.json"), "w", encoding="utf-8", newline="") as f:
+        f.write("{ 坏")
+    _mkxwl(os.path.join(d, "a.xwl"))
+    _before = open(os.path.join(d, "folder.json"), "rb").read()
+    _rc, _out = _run_folders(os.path.join(d, "a.xwl"), register="a.xwl")
+    if _rc != 2 or open(os.path.join(d, "folder.json"), "rb").read() != _before:
+        fail.append("F12 --register：坏 JSON 应 rc=2 且不动文件，实得 %s\n%s" % (_rc, _out))
+    d = os.path.join(root, "reg_struct")
+    _mkfj(d, [])
+    _mkxwl(os.path.join(d, "a.xwl"))
+    os.remove(os.path.join(d, "folder.json"))
+    with open(os.path.join(d, "folder.json"), "w", encoding="utf-8", newline="") as f:
+        f.write('{"hidden":false,"index":{},"title":"t"}')
+    _before = open(os.path.join(d, "folder.json"), "rb").read()
+    _rc, _out = _run_folders(os.path.join(d, "a.xwl"), register="a.xwl")
+    if _rc != 2 or open(os.path.join(d, "folder.json"), "rb").read() != _before:
+        fail.append("F12 --register：index 结构不足应 rc=2 且不动文件，实得 %s\n%s"
+                    % (_rc, _out))
+    d = os.path.join(root, "reg_unread")
+    os.makedirs(os.path.join(d, "folder.json"))
+    _mkxwl(os.path.join(d, "a.xwl"))
+    _rc, _out = _run_folders(os.path.join(d, "a.xwl"), register="a.xwl")
+    if _rc != 2:
+        fail.append("F12 --register：索引读不动应 rc=2，实得 %s\n%s" % (_rc, _out))
+    d = os.path.join(root, "reg_ok")
+    _mkfj(d, [])
+    _mkxwl(os.path.join(d, "a.xwl"))
+    _rc, _out = _run_folders(os.path.join(d, "a.xwl"), register="a.xwl")
+    if _rc != 0 or json.load(open(os.path.join(d, "folder.json"), encoding="utf-8"))["index"] != ["a.xwl"]:
+        fail.append("F12 --register：正常登记应 rc=0 且写入 index，实得 %s\n%s" % (_rc, _out))
+    _snap = open(os.path.join(d, "folder.json"), "rb").read()
+    _rc, _out = _run_folders(os.path.join(d, "a.xwl"), register="a.xwl")
+    if _rc != 0 or open(os.path.join(d, "folder.json"), "rb").read() != _snap:
+        fail.append("F12 --register：重复登记应幂等 rc=0 且不改文件，实得 %s\n%s" % (_rc, _out))
+
+    if fail:
+        return fail
+    print("[ok]  F12 `folders` 分层校验：读不动/结构损坏/确认悬空/良性未登记/无索引/空子目录枚举/register 前置 全部按码值分开")
+    return []
+
+
 @_cap
 def _check_subcommands_tail(tmp, failures) -> None:
     """`_check_subcommands` 的尾段（有界下沉，判据文本逐字未改）。
@@ -1926,6 +2095,8 @@ def _check_subcommands_tail(tmp, failures) -> None:
     code, out = _run(xwl.cmd_folders, path=os.path.join(fdy, "d.xwl"), register=None, dry_run=False)
     if "登记：xwl.py folders" not in out or "--register" not in out:
         fl_fail.append("`#57`：有 folder.json 时未直接建议 `--register`（误伤正路）: %s" % out)
+    # F12：分层校验 + 应检枚举面（坏 JSON／结构／读不动／悬空／良性／无索引／空子目录／register 前置）
+    fl_fail.extend(_folders_f12_cases(tmp))
     if fl_fail:
         failures.extend(fl_fail)
     else:
@@ -2122,6 +2293,439 @@ def _store(iid, url):
             "expanded": False, "children": []}
 
 
+
+_F05_CARRIER_OK = ('{"children":[{"type":"dataprovider","configs":'
+                   '{"itemId":"dp","sql":"select * from t where a={?p?}"}}]}')
+
+
+def _f05_proj(tmp, case):
+    r = os.path.join(tmp, "f05proj", case)
+    m = os.path.join(r, "modules")
+    os.makedirs(m, exist_ok=True)
+    return r, m
+
+
+def _f05_write_var(r, body=None):
+    vp = os.path.join(r, "wb", "system", "var.json")
+    os.makedirs(os.path.dirname(vp), exist_ok=True)
+    if body is not None:
+        with open(vp, "w", encoding="utf-8", newline="") as f:
+            f.write(body)
+    return vp
+
+
+def _f05_write_carrier(m, body=_F05_CARRIER_OK):
+    p = os.path.join(m, "demo", "carrier.xwl")
+    os.makedirs(os.path.dirname(p), exist_ok=True)
+    with open(p, "w", encoding="utf-8", newline="") as f:
+        f.write(body)
+    return p
+
+
+def _f05_make_page(m, *, provide=True, extra=()):
+    s1 = _store("s1", "m?xwl=demo/carrier")
+    if provide:
+        s1["configs"]["params"] = "{p:1}"
+    _dump({"title": "p", "children": [s1] + list(extra)},
+          os.path.join(m, "demo", "page.xwl"))
+    return os.path.join(m, "demo", "page.xwl")
+
+
+def _f05_run_params(page, m, strict=False, upstream=False):
+    return _run(xwl.cmd_params, file=page, module_root=m, controls=None,
+                list_fields=False, strict=strict, upstream=upstream)
+
+
+def _f05_dep_cases(tmp):
+    """F05 依赖读取面：`params` 的 SQL 载体 ＋ `_scan_upstream`（放在 `new_guards` 块）。
+
+    判据：读失败 **默认与 `--strict` 均 rc=2**（"没检查完"），逐条点名路径与原因；
+    `--strict` 下若另有**已确认内容失败**（确缺参／确悬空）⇒ 汇总 rc=1 并**同时列出**读取失败；
+    默认档原本仅告警的缺参**不因并存而升级**。
+    另核「宽容写法载体」（单引号键）经**公共加载入口**可正确解析并报缺（⛔ 不再当读失败吞掉）。
+    返回失败文案列表（空 = 通过）；通过时单独打一行 `[ok]`。
+    """
+    fail: list = []
+
+    # ① 全依赖失败（载体读不动）⇒ 默认/strict 均 rc=2，逐条点名（旧树：静默 continue ⇒ rc=0）
+    r, m = _f05_proj(tmp, "carrier_bad")
+    page = _f05_make_page(m)
+    _f05_write_carrier(m, "{ 坏掉的 json")
+    for _strict in (False, True):
+        rc, out = _f05_run_params(page, m, strict=_strict)
+        if rc != 2:
+            fail.append("F05：SQL 载体读不动（strict=%s）应 rc=2，实得 %s\n%s"
+                        % (_strict, rc, out))
+        if "读取失败" not in out or "未完成" not in out:
+            fail.append("F05：SQL 载体读不动（strict=%s）没留缺口（缺「读取失败/未完成」）：\n%s"
+                        % (_strict, out))
+
+    # ② 部分失败：一个载体成功 **不抵消** 一个失败 ⇒ 仍 rc=2，且成功那份的 SQL 侧照常打印
+    r, m = _f05_proj(tmp, "carrier_partial")
+    page = _f05_make_page(m)
+    _f05_write_carrier(m)                       # 成功：demo/carrier.xwl
+    with open(os.path.join(m, "demo", "bad2.xwl"), "w", encoding="utf-8", newline="") as f:
+        f.write("{ 另一个坏载体")
+    s1 = _store("s2", "m?xwl=demo/bad2")
+    _dump({"title": "p", "children": [_store("s1", "m?xwl=demo/carrier"), s1]},
+          os.path.join(m, "demo", "page.xwl"))
+    rc, out = _f05_run_params(page, m)
+    if rc != 2:
+        fail.append("F05：部分失败（一成功一失败）应 rc=2（成功不抵消失败），实得 %s\n%s"
+                    % (rc, out))
+    if "SQL 侧: demo/carrier.xwl" not in out:
+        fail.append("F05：部分失败时成功载体的 SQL 侧未照常打印（过早上抛）：\n%s" % out)
+
+    # ③ 宽容写法（单引号键）载体：公共加载入口应正确解析并报缺（⛔ 不计读取失败）
+    r, m = _f05_proj(tmp, "carrier_tolerant")
+    page = _f05_make_page(m, provide=False)
+    _f05_write_carrier(m, "{'children':[{'type':'dataprovider','configs':{'itemId':'dp',"
+                          "'sql':'select * from t where a={?p?}'}}]}")
+    rc, out = _f05_run_params(page, m)
+    if rc != 0:
+        fail.append("F05：宽容写法载体（单引号键）默认档应 rc=0（仅告警缺参），实得 %s\n%s"
+                    % (rc, out))
+    if "SQL 侧: demo/carrier.xwl" not in out or "读取失败" in out:
+        fail.append("F05：宽容写法载体（单引号键）未被公共加载入口解析（仍按读失败）：\n%s" % out)
+    if "缺参" not in out:
+        fail.append("F05：宽容写法载体被解析后应报出确缺参：\n%s" % out)
+    rc, out = _f05_run_params(page, m, strict=True)
+    if rc != 1 or "缺参" not in out:
+        fail.append("F05：宽容写法载体 strict 下应因确缺参 rc=1，实得 %s\n%s" % (rc, out))
+
+    # ④ 读失败 ＋ 已确认悬空（strict）⇒ 汇总 rc=1 且**同时列出**读取失败；默认档读失败仍 2
+    r, m = _f05_proj(tmp, "carrier_bad_dangling")
+    page = _f05_make_page(m, extra=[_store("s2", "m?xwl=demo/missing")])
+    _f05_write_carrier(m, "{ 坏掉的 json")
+    rc1, out1 = _f05_run_params(page, m, strict=True)
+    if rc1 != 1:
+        fail.append("F05：strict 下「读失败＋已确认悬空」应 rc=1（内容失败优先），实得 %s\n%s"
+                    % (rc1, out1))
+    if "读取失败" not in out1:
+        fail.append("F05：strict 内容失败时未同时列出读取失败：\n%s" % out1)
+    rc0, out0 = _f05_run_params(page, m)
+    if rc0 != 2:
+        fail.append("F05：默认档「读失败＋悬空」应 rc=2（读失败本身升级），实得 %s\n%s"
+                    % (rc0, out0))
+
+    # ⑤ 反查扫描读取失败 ⇒ 分桶可见＋「反查覆盖未完成」＋ rc=2（默认/strict）
+    r, m = _f05_proj(tmp, "upstream_bad")
+    page = _f05_make_page(m)
+    _f05_write_carrier(m)
+    with open(os.path.join(m, "caller.xwl"), "w", encoding="utf-8", newline="") as f:
+        f.write("{ 坏掉的 caller")
+    for _strict in (False, True):
+        rc, out = _f05_run_params(page, m, strict=_strict, upstream=True)
+        if rc != 2:
+            fail.append("F05：反查扫描读失败（strict=%s）应 rc=2，实得 %s\n%s"
+                        % (_strict, rc, out))
+        if "扫描范围：本根" not in out or "读取失败 1" not in out:
+            fail.append("F05：反查未给「扫描范围/成功失败分桶」（strict=%s）：\n%s"
+                        % (_strict, out))
+        if "反查覆盖" not in out or "未完成" not in out:
+            fail.append("F05：反查有失败时未标「反查覆盖未完成」（strict=%s）：\n%s"
+                        % (_strict, out))
+
+    if fail:
+        return fail
+    print("[ok]  F05 依赖读取面：SQL 载体/反查扫描 读失败默认与 strict 均留缺口（2）；"
+          "部分失败不抵消；宽容写法载体可解析并报缺；strict 内容失败优先 1 并同列读失败")
+    return []
+
+
+def _f05_var_cases(tmp):
+    """F05 可选资源面：`var.json` 三分 ＋ `sqlrefs` 同源（放在 `params_paths` 块）。
+
+    三分：未发现（可选资源缺席 ⇒ **不算失败**）／合法（含空字典）／存在但读不出或结构不合（**失败**）。
+    返回失败文案列表（空 = 通过）；通过时单独打一行 `[ok]`。
+    """
+    fail: list = []
+    r, m = _f05_proj(tmp, "var_kinds")
+    page = _f05_make_page(m)
+    _f05_write_carrier(m)
+
+    # ① 未发现 ⇒ 用内置兜底、不算失败（rc=0，且不出现「读依赖失败」）
+    rc, out = _f05_run_params(page, m)
+    if rc != 0 or "读依赖失败" in out:
+        fail.append("F05：未发现 var.json 不应算失败（应 rc=0），实得 %s\n%s" % (rc, out))
+    # ② 合法空字典 ⇒ 正常
+    _f05_write_var(r, "{}")
+    rc, out = _f05_run_params(page, m)
+    if rc != 0 or "读依赖失败" in out:
+        fail.append("F05：var.json 合法空字典不应算失败（应 rc=0），实得 %s\n%s" % (rc, out))
+    # ③ 坏 JSON ⇒ 默认/strict 均 rc=2 且点名
+    _f05_write_var(r, "{ not json")
+    for _strict in (False, True):
+        rc, out = _f05_run_params(page, m, strict=_strict)
+        if rc != 2:
+            fail.append("F05：var.json 坏 JSON（strict=%s）应 rc=2，实得 %s\n%s"
+                        % (_strict, rc, out))
+        if "读依赖失败" not in out:
+            fail.append("F05：var.json 坏 JSON（strict=%s）未点名读失败：\n%s" % (_strict, out))
+    # ④ 结构不合（顶层非对象）⇒ rc=2 且点名
+    _f05_write_var(r, "[]")
+    rc, out = _f05_run_params(page, m)
+    if rc != 2 or "读依赖失败" not in out:
+        fail.append("F05：var.json 结构不合（顶层非对象）应 rc=2 且点名，实得 %s\n%s" % (rc, out))
+
+    # ⑤ strict「var 读失败 ＋ 已确认缺参」⇒ rc=1 并同时列读取失败；默认档仅有缺参时读失败才升 2
+    r, m = _f05_proj(tmp, "var_bad_miss")
+    page = _f05_make_page(m, provide=False)
+    _f05_write_carrier(m)
+    _f05_write_var(r, "{ not json")
+    rc1, out1 = _f05_run_params(page, m, strict=True)
+    if rc1 != 1:
+        fail.append("F05：strict「var 读失败＋已确认缺参」应 rc=1，实得 %s\n%s" % (rc1, out1))
+    if "读依赖失败" not in out1:
+        fail.append("F05：strict 缺参时未同时列出 var 读取失败：\n%s" % out1)
+    rc0, out0 = _f05_run_params(page, m)
+    if rc0 != 2:
+        fail.append("F05：默认档「var 读失败＋仅缺参」应 rc=2（读失败本身升级），实得 %s\n%s"
+                    % (rc0, out0))
+
+    # ⑥ 无 needed 的**早返**路径：坏 var ⇒ default/strict 均 rc=2 并点名；无 var ⇒ rc=0（未发现不算失败）
+    #    （复核退回项：早返曾只合并 carrier/反查失败、漏 `_pref_fail`）
+    r, m = _f05_proj(tmp, "noneed_var")
+    _dump({"title": "p", "children": [{"configs": {"itemId": "btn"}, "type": "button",
+                                       "expanded": False, "children": []}]},
+          os.path.join(m, "demo", "empty.xwl"))
+    page = os.path.join(m, "demo", "empty.xwl")
+    rc, out = _f05_run_params(page, m)
+    if rc != 0 or "读依赖失败" in out:
+        fail.append("F05 早返：无 needed＋无 var.json 应 rc=0（未发现不算失败），实得 %s\n%s"
+                    % (rc, out))
+    _f05_write_var(r, "{ not json")
+    for _strict in (False, True):
+        rc, out = _f05_run_params(page, m, strict=_strict)
+        if rc != 2:
+            fail.append("F05 早返：无 needed＋var.json 坏（strict=%s）应 rc=2，实得 %s\n%s"
+                        % (_strict, rc, out))
+        if "读依赖失败" not in out:
+            fail.append("F05 早返：无 needed＋var.json 坏（strict=%s）未点名读失败：\n%s"
+                        % (_strict, out))
+
+    # ⑦ `sqlrefs` 的 `var.json` 同源：未发现 ⇒ rc=0；坏 ⇒ rc=2 且点名
+    r, m = _f05_proj(tmp, "sqlrefs_var")
+    carrier = _f05_write_carrier(m)
+    rc, out = _run(xwl.cmd_sqlrefs, file=carrier)
+    if rc != 0:
+        fail.append("F05：sqlrefs 未发现 var.json 应 rc=0，实得 %s\n%s" % (rc, out))
+    _f05_write_var(r, "{ not json")
+    rc, out = _run(xwl.cmd_sqlrefs, file=carrier)
+    if rc != 2 or "读依赖失败" not in out:
+        fail.append("F05：sqlrefs 的 var.json 坏 JSON 应 rc=2 且点名，实得 %s\n%s" % (rc, out))
+
+    if fail:
+        return fail
+    print("[ok]  F05 可选资源面：var.json 三分（未发现不算失败/空字典正常/坏或结构不合失败）"
+          "＋ sqlrefs 同源；default/strict 与「同时有已确认缺参」组合按码值解释")
+    return []
+
+
+_AV03_REG = [
+    {"id": "onlyinreg", "general": {"type": "Ext.form.field.text"},
+     "configs": {"normalName": "x", "itemId": {"type": "str"}}},
+    {"id": "onlynormal", "configs": {"normalName": "y"}},
+]
+
+
+def _av03_proj(tmp):
+    r = os.path.join(tmp, "av03proj")
+    ctrl = os.path.join(r, "wb", "system", "controls.json")
+    page = os.path.join(r, "wb", "modules", "page.xwl")
+    os.makedirs(os.path.dirname(ctrl), exist_ok=True)
+    os.makedirs(os.path.dirname(page), exist_ok=True)
+    _dump({"title": "t", "children": [{"type": "panel", "configs": {"itemId": "p"}}]}, page)
+    return r, ctrl, page
+
+
+def _av03_write(ctrl, body):
+    with open(ctrl, "w", encoding="utf-8", newline="") as f:
+        f.write(body)
+
+
+def _av03_run_check(ctrl, page):
+    return _run(xwl.cmd_check, files=[page], node=None, no_js=True,
+                no_itemid=False, no_cfgtype=False, controls=ctrl)
+
+
+def _av03_run_itemids(ctrl, page):
+    return _run(xwl.cmd_itemids, file=page, controls=ctrl, name=None,
+                dups_only=False, suggest=False, fix="auto", json=False)
+
+
+def _av03_run_params(ctrl, page, **kw):
+    kw.setdefault("module_root", None)
+    kw.setdefault("list_fields", False)
+    kw.setdefault("upstream", False)
+    kw.setdefault("strict", False)
+    return _run(xwl.cmd_params, file=page, controls=ctrl, **kw)
+
+
+def _av03_registry_cases(tmp):
+    """AV-03：注册表**一次命令上下文只加载一次**（强身份键）＋来源/身份/降级记录＋union 不回退。
+
+    落 `new_guards` 块（含 `check --controls` / `itemids` 两面）；`params` 面另见 `_av03_params_cases`。
+    返回失败文案列表（空 = 通过）；通过时单独打一行 `[ok]`。
+    """
+    fail: list = []
+    r, ctrl, page = _av03_proj(tmp)
+    reg_json = json.dumps(_AV03_REG, ensure_ascii=False)
+
+    def _one(nm):
+        n0 = xwl._REG_LOADS
+        if nm == "check":
+            rc, out = _av03_run_check(ctrl, page)
+        elif nm == "itemids":
+            rc, out = _av03_run_itemids(ctrl, page)
+        else:
+            rc, out = _av03_run_params(ctrl, page)
+        return rc, out, xwl._REG_LOADS - n0
+
+    # ① 正常注册表：三命令各解析 **1 次**、基线码值不变、都打来源行
+    _av03_write(ctrl, reg_json)
+    for nm in ("check", "itemids", "params"):
+        rc, out, n = _one(nm)
+        if n != 1:
+            fail.append("AV-03：正常注册表下 `%s` 应解析 1 次，实得 %d" % (nm, n))
+        if rc != 0:
+            fail.append("AV-03：正常注册表下 `%s` 应 rc=0，实得 %s\n%s" % (nm, rc, out))
+        if "读注册表失败" in out:
+            fail.append("AV-03：正常注册表下 `%s` 误报读失败：\n%s" % (nm, out))
+        if "控件注册表:" not in out:
+            fail.append("AV-03：`%s` 未打「控件注册表:」来源行：\n%s" % (nm, out))
+
+    # ② 坏注册表：三命令**都看得到不可用＋降级**，各自解析 1 次；码值差异按**改前基线**（2/0/0）
+    _av03_write(ctrl, "{ not json")
+    expect = {"check": 2, "itemids": 0, "params": 0}
+    for nm in ("check", "itemids", "params"):
+        rc, out, n = _one(nm)
+        if n != 1:
+            fail.append("AV-03：坏注册表下 `%s` 应解析 1 次（不反复解析），实得 %d" % (nm, n))
+        if rc != expect[nm]:
+            fail.append("AV-03：坏注册表下 `%s` 的 rc 应保持改前基线 %s，实得 %s\n%s"
+                        % (nm, expect[nm], rc, out))
+        if nm == "check":
+            if "取不到控件注册表" not in out:
+                fail.append("AV-03：`check` 未说明「取不到控件注册表」（资源不可用）：\n%s" % out)
+        else:
+            if "[warn] 读注册表失败：" not in out:
+                fail.append("AV-03：`%s` 未打「读注册表失败」：\n%s" % (nm, out))
+            if "已回退内置兜底" not in out:
+                fail.append("AV-03：`%s` 未说明**据此降级**（已回退内置兜底）：\n%s" % (nm, out))
+    st = xwl._registry_state(ctrl)
+    if st["state"] != "failed" or not st["why"] or st["identity"] is None:
+        fail.append("AV-03：坏注册表未记录「来源＋身份＋失败原因」：%r" % (st,))
+    if st["path"] != os.path.abspath(ctrl):
+        fail.append("AV-03：读取记录的来源路径不对：%r" % (st.get("path"),))
+
+    # ③ 一次上下文内多次取用 ⇒ 只解析 1 次；第二次 `_registry_load` 不是新解析
+    xwl._registry_reset()
+    n0 = xwl._REG_LOADS
+    r1 = xwl._registry_load(ctrl)
+    r1_loaded = r1["loaded_now"]          # ⚠️ 记录是**同一对象**，r2 命中缓存会把 loaded_now 置 False
+    xwl._registry_configs(ctrl)
+    xwl.field_types(ctrl)
+    xwl.normalname_types(ctrl)
+    r2 = xwl._registry_load(ctrl)
+    if xwl._REG_LOADS - n0 != 1:
+        fail.append("AV-03：同一上下文内多入口取用应只解析 1 次，实得 %d"
+                    % (xwl._REG_LOADS - n0))
+    if r1_loaded is not True or r2["loaded_now"] is not False:
+        fail.append("AV-03：`_registry_load` 的 loaded_now 语义不对：r1=%r r2=%r"
+                    % (r1_loaded, r2.get("loaded_now")))
+
+    # ④ 文件被改（身份变更）⇒ 新上下文重读，不沿用旧缓存
+    old_ident = st["identity"]
+    _av03_write(ctrl, json.dumps(_AV03_REG + [{"id": "onlynew2", "configs": {"normalName": "z"}}],
+                                 ensure_ascii=False))
+    rc, out, n = _one("itemids")
+    if n != 1:
+        fail.append("AV-03：注册表被改后新上下文应重读 1 次，实得 %d" % n)
+    if "onlynew2" not in xwl.field_types(ctrl) and "onlynew2" not in xwl.normalname_types(ctrl):
+        fail.append("AV-03：注册表被改后的新内容未被读到（onlynew2 缺失）")
+    st2 = xwl._registry_state(ctrl)
+    if st2["identity"] == old_ident:
+        fail.append("AV-03：注册表被改后身份键未变化（mtime_ns/size 未进键）：%r" % (st2,))
+
+    # ⑤ 跨命令不复用旧缓存：连续两次 `itemids` 各解析 1 次（入口 reset）
+    d = []
+    for _ in range(2):
+        _rc, _out, _n = _one("itemids")
+        d.append(_n)
+    if d != [1, 1]:
+        fail.append("AV-03：连续两命令应各解析 1 次（不跨命令复用），实得 %r" % (d,))
+
+    # ⑥ union 回归：注册表里没有任何 Ext.form.field.* 时，`field_types` 仍含**全部内置兜底**；
+    #    `normalname_types` 同理（只取注册表会整类丢 → 假阳 miss）。
+    _av03_write(ctrl, json.dumps([{"id": "onlynormal", "configs": {"normalName": "y"}}],
+                                 ensure_ascii=False))
+    ft = set(xwl.field_types(ctrl))
+    nt = set(xwl.normalname_types(ctrl))
+    if not set(xwl._FIELD_FALLBACK) <= ft:
+        fail.append("AV-03：`field_types` 丢了内置兜底（union 被破坏）：缺 %r"
+                    % sorted(set(xwl._FIELD_FALLBACK) - ft)[:5])
+    if not set(xwl._NORMALNAME_FALLBACK) <= nt:
+        fail.append("AV-03：`normalname_types` 丢了内置兜底（union 被破坏）：缺 %r"
+                    % sorted(set(xwl._NORMALNAME_FALLBACK) - nt)[:5])
+    if "onlynormal" not in nt:
+        fail.append("AV-03：`normalname_types` 未并进注册表里的 `onlynormal`")
+
+    if fail:
+        return fail
+    print("[ok]  AV-03 注册表一次加载：三命令各解析 1 次、坏注册表三处可见「不可用＋降级」"
+          "（rc 基线 2/0/0）、身份变更重读、一次上下文多入口共用、field_types/normalname union 未丢")
+    return []
+
+
+def _av03_params_cases(tmp):
+    """AV-03 的 `params` 面（挂 `params_paths`）：一次上下文只解析 1 次＋坏注册表可见降级＋union 生效。"""
+    fail: list = []
+    r = os.path.join(tmp, "av03params")
+    ctrl = os.path.join(r, "wb", "system", "controls.json")
+    page = os.path.join(r, "wb", "modules", "page.xwl")
+    os.makedirs(os.path.dirname(ctrl), exist_ok=True)
+    os.makedirs(os.path.dirname(page), exist_ok=True)
+    _dump({"title": "t", "children": [{"type": "panel", "configs": {"itemId": "p"}}]}, page)
+
+    # ① 正常注册表：rc=0、解析 1 次、来源行带路径
+    _av03_write(ctrl, json.dumps(_AV03_REG, ensure_ascii=False))
+    n0 = xwl._REG_LOADS
+    rc, out = _av03_run_params(ctrl, page)
+    if rc != 0 or xwl._REG_LOADS - n0 != 1:
+        fail.append("AV-03(params)：正常注册表应 rc=0 且解析 1 次，实得 rc=%s n=%d\n%s"
+                    % (rc, xwl._REG_LOADS - n0, out))
+    if "控件注册表:" not in out or "读注册表失败" in out:
+        fail.append("AV-03(params)：正常注册表下来源行/失败提示不对：\n%s" % out)
+
+    # ② 坏注册表：rc 保持改前基线 0、解析 1 次、**可见「不可用＋据已降级」**
+    _av03_write(ctrl, "{ not json")
+    n0 = xwl._REG_LOADS
+    rc, out = _av03_run_params(ctrl, page)
+    if rc != 0 or xwl._REG_LOADS - n0 != 1:
+        fail.append("AV-03(params)：坏注册表应保持 rc=0（改前基线）且解析 1 次，实得 rc=%s n=%d\n%s"
+                    % (rc, xwl._REG_LOADS - n0, out))
+    for k in ("[warn] 读注册表失败：", "已回退内置兜底"):
+        if k not in out:
+            fail.append("AV-03(params)：坏注册表缺少降级说明 %r：\n%s" % (k, out))
+
+    # ③ `--list-fields` 也走同一事实源：注册表里的类型出现在字段清单、解析 1 次
+    _av03_write(ctrl, json.dumps(_AV03_REG, ensure_ascii=False))
+    n0 = xwl._REG_LOADS
+    rc, out = _av03_run_params(ctrl, page, list_fields=True)
+    if rc != 0 or xwl._REG_LOADS - n0 != 1:
+        fail.append("AV-03(params)：--list-fields 应 rc=0 且解析 1 次，实得 rc=%s n=%d\n%s"
+                    % (rc, xwl._REG_LOADS - n0, out))
+    if "onlyinreg" not in out:
+        fail.append("AV-03(params)：--list-fields 未并入注册表类型（onlyinreg）：\n%s" % out)
+
+    if fail:
+        return fail
+    print("[ok]  AV-03(params) 注册表一次加载：正常/坏注册表均解析 1 次、坏注册表 rc 保持 0"
+          " 且可见「不可用＋已回退内置兜底」、--list-fields 共用同一事实源")
+    return []
+
+
 def _check_new_guards(tmp, node, failures, write) -> None:
     """新近落地、**尚无守卫**的行为点 —— **薄壳**（按判据族拆分，行为逐字未变）。
 
@@ -2135,6 +2739,10 @@ def _check_new_guards(tmp, node, failures, write) -> None:
     _ng_write_overwrite(tmp, node, failures, write)
     _ng_params_defaults(tmp, node, failures, write)
     _ng_platform(tmp, node, failures, write)
+    # F05：读依赖失败不得被吞（依赖面：SQL 载体／反查扫描；`var.json` 三态在 params_paths 块）
+    failures.extend(_f05_dep_cases(tmp))
+    # AV-03：注册表事实源一次加载（check --controls／itemids 两面；params 面在 params_paths 块）
+    failures.extend(_av03_registry_cases(tmp))
 
 
 @_cap
@@ -2311,6 +2919,10 @@ def _ng_cli_readonly(tmp, node, failures, write) -> None:
             fl_fail.append("③ 结论行缺「folder.json 损坏」（真损坏，必须留在结论行）")
         if "未登记" in _concl:
             fl_fail.append("③ 结论行又出现了「未登记」（应只进明细、不上结论行）")
+        if "读不动" not in _concl:
+            fl_fail.append("③ 结论行缺「读不动」分列（确认问题与无法判断必须分开）")
+    if _rc_f != 1:
+        fl_fail.append("③ 悬空＋结构损坏目录应 rc=1（读不动才 2），实得 %s" % _rc_f)
     if "未登记" not in _out_f:
         fl_fail.append("③ 夹具没造出「未登记」—— 「结论行不含它」这条就名不副实")
     if fl_fail:
@@ -3313,101 +3925,11 @@ def _ng_platform(tmp, node, failures, write) -> None:
               "「`url:'m?xwl=…'` 引用的 m?xwl（1 个；**不区分调用方**）」（⛔ 不加任何开关）")
 
 
-# ---- `rules_lint` —— **仓外**规则文件的「候选待办」机检 ----
-#   制度正本 ＝ 开发者规则 `rules/webbuilder-xwl-patch.md` 的 `11.4`（行首自标位 `todo:y` ＋ 登记 id 表）。
-#   ⚠️ 要校的标记在**仓外**（`rules/README.md` 首行逐字「不随任何 skill 包发布」），而本文件在
-#     `git ls-files` 内 ＝ **分发面** ⇒ 发布包／CI 里没有 `rules/` ⇒ 扫描根**只能**由环境变量给。
-#   ⭐ 三态**必须分开**（⛔ 缺根就静默跳过 ＝ 恒绿 —— 「要么假红／要么恒绿」正是本块落不了地的成因）：
-#     已设且目录存在 ⇒ 真校验｜**未设** ⇒ 未执行（`[note]` ＋ 汇总行单列「未执行 N 块」）｜
-#     已设但目录不存在 ⇒ `[FAIL]`（配置错误，⛔ 不许当成"跳过"）。
-RULES_DIR_ENV = "XWL_RULES_DIR"
-
-# `11.4①` 候选行的判定（逐字沿用制度里那条 grep 的语义：行首 ＋ 可选列表符 ＋ 可选人读标记 ＋ `todo:y`）
-_RULES_CANDIDATE_RE = re.compile(
-    r"^[ \t]*(?:[-*+>]|[0-9]+\.)?[ \t]*(?:\*\*(?:待办|TODO|待确认)\*\*[ \t]*)?todo:y\b")
-# `11.4②` 登记 id 表的**首列**（`| **<登记 id>** | … |`）；⚠️ 宽容到不带 `**` —— 表头 `| ID |` 也会命中（无害）
-_RULES_REG_ROW_RE = re.compile(r"^\|[ \t]*\*{0,2}([A-Za-z][A-Za-z0-9_-]*)\*{0,2}[ \t]*\|")
-_RULES_ID_RE = re.compile(r"\bid:([A-Za-z][A-Za-z0-9_-]*)")
-_RULES_DONE_RE = re.compile(r"\bdone_when:(.*)$")
-
-
-def _rules_dir_state():
-    """规则目录三态：`(root|None, 理由|None, 是否配置错误)`。
-
-    返回 `root` ⇒ 可校验；`(None, 理由, False)` ⇒ **未执行**（变量没设，分发面常态）；
-    `(None, 理由, True)` ⇒ **配置错误**（设了但目录不在 ⇒ 判红，⛔ 不许降级成"跳过"）。
-    """
-    _raw = (os.environ.get(RULES_DIR_ENV) or "").strip()
-    if not _raw:
-        return None, "未设置 %s（rules 不随 skill 分发）" % RULES_DIR_ENV, False
-    if not os.path.isdir(_raw):
-        return None, "%s 指向的目录不存在：%s" % (RULES_DIR_ENV, _raw), True
-    return _raw, None, False
-
-
-def _check_rules_lint(tmp, node, failures, write) -> None:
-    """`rules_lint`：仓外规则文件的「候选待办」机检（制度 ＝ 开发者规则 `11.4` 的 ①／②／③）。
-
-    判据三条，全部**逐条列文件:行**（⛔ fail-loud：不许汇总成"有 N 处"）：
-      ① 候选行必须同行带 `id:`；
-      ② 候选行的 `done_when:` 必须**非空**（⚠️ 制度正本只要求"非空"；更严的 `cmd:`／`state:` 起头
-         形态**不在本块射程** —— 现行正本两条候选都不是那个形态，硬加会当场假红）；
-      ③ `11.4③` 弱一致性：候选行引用的 id ⊆ **同一文件**「登记 id 表」首列的 id 集合。
-    ⚠️ **只扫一个目录、不递归**：`rules/` 是扁平结构；递归会把 `archive/` 一类历史件卷进来。
-    """
-    root, why, fatal = _rules_dir_state()
-    if fatal:
-        failures.append("本块配置错误：%s —— 本块**没有执行**（⛔ 不能算通过）" % why)
-        return
-    if root is None:
-        print("[note] 本块未执行：%s" % why)
-        return
-    try:
-        _names = sorted(_n for _n in os.listdir(root) if _n.endswith(".md"))
-    except OSError as exc:
-        failures.append("本块配置错误：读不了规则目录 %s（%s）—— 本块**没有执行**" % (root, exc))
-        return
-    if not _names:
-        # 空扫描面**不许算通过** —— 那与"校验通过"在输出上分不开（本仓「静默无效」判缺陷）
-        failures.append("本块配置错误：%s 下没有任何 `*.md`（⚠️ 目录指错了？）—— 空的扫描面不算通过"
-                        % root)
-        return
-    _bad: list[str] = []
-    _n_cand = 0
-    for _nm in _names:
-        _fp = os.path.join(root, _nm)
-        try:
-            _ls = io.open(_fp, encoding="utf-8", newline="").read().splitlines()
-        except (OSError, UnicodeDecodeError) as exc:   # UnicodeDecodeError 是 ValueError 子类 ⇒ 必须并列
-            _bad.append("%s 读不出 UTF-8 文本（%s）—— 本份**没校验**（⛔ 不算通过）" % (_nm, exc))
-            continue
-        _reg = {_m.group(1) for _l in _ls for _m in [_RULES_REG_ROW_RE.match(_l)] if _m}
-        for _i, _l in enumerate(_ls, 1):
-            if not _RULES_CANDIDATE_RE.match(_l):
-                continue
-            _n_cand += 1
-            _ids = _RULES_ID_RE.findall(_l)
-            if not _ids:
-                _bad.append("%s:%d 候选待办缺 `id:`（`11.4①` 要求同行带登记 id）" % (_nm, _i))
-                continue
-            _done = _RULES_DONE_RE.search(_l)
-            if _done is None or not _done.group(1).strip():
-                _bad.append("%s:%d 候选待办 `%s` 的 `done_when:` 缺失或为空"
-                            "（`11.4①` 要求非空完成判据）" % (_nm, _i, _ids[0]))
-            for _idv in _ids:
-                if _idv not in _reg:
-                    _bad.append("%s:%d 候选待办引用的 id `%s` 在**本文件的登记 id 表**里找不到"
-                                "（`11.4③`：候选 ⊆ 登记）" % (_nm, _i, _idv))
-    if _bad:
-        failures.extend(_bad)
-    else:
-        print("[ok]  rules_lint：%d 份规则文件、%d 条候选待办（`todo:y`）全部带非空 `done_when`"
-              " ＋ **本文件登记表内**的 id" % (len(_names), _n_cand))
-
-
 # 「块 → 未执行前置」：登记在这里的块，前置不满足时打 `[note] 本块未执行：…` 并跳过，
 # 汇总行据此**单列**「未执行 N 块」（⛔ 不许把"没跑"混进"通过"）。配置错误（判红）不进这一桶。
-_BLOCK_PRECONDITIONS = {"rules_lint": _rules_dir_state}
+# ⚠️ 当前为**空表**（原唯一使用方已随目标机制退役而整体移除）；通用机制保留：将来需要
+#    「前置不满足 ⇒ 明确未执行、不算通过」的块（如 profile 契约）直接登记到本表。
+_BLOCK_PRECONDITIONS = {}
 
 
 def _blocks_unexecuted(blocks) -> list:
@@ -4372,7 +4894,7 @@ def _doc_guard_xfile_pt(docs, doc_fail, real_out):
         # 目录完整性（**与 17j-13 同族、⛔ 不新开编号**）：带 `## 目录` 的文件里，每个 `##` 级小节
         #   必须有**至少一条**目录项命中它。
         #   起因（不这么做会漏什么）：`17j-13` 只 `for _t in _toc` 遍历**已存在**的条目 ⇒ 条目被**删掉**
-        #     时没有可遍历对象、无从判红（实测：删掉一条目录项后 `--only docs` 与**全量 14 块**均
+        #     时没有可遍历对象、无从判红（实测：删掉一条目录项后 `--only docs` 与**全量 13 块**均
         #     `rc=0`、`[FAIL] 0`）⇒ 本臂补的正是"条目缺失"这一面。
         #   ⛔ **顺序仍归 17j-13**：此处只判"有没有／重复几条"，不复判单调（重复判会让一处缺陷报两行）。
         #   ⚠️ **本臂无独立守卫编号** ⇒「把这段整块删掉」**不会被块名基线抓到** —— 属**已知盲区**。
@@ -5099,6 +5621,126 @@ def _docs_contract(_S) -> None:
               "（含 frontmatter 余量、description 的触发段与边界句）")
 
 
+# ---- 版本三处机械守卫与仓库根 README 机械守卫（验收缺口的机械收口）----
+#   两条臂都**并进** `--only docs` 的既有文档守卫块（⛔ 不新开 `# 17<字母>` 块名：
+#   新块名会撞 `_DOC_GUARD_BLOCK_BASELINE`）；判定文本只在失败时进 `doc_fail`，
+#   ⛔ 不新增 `[ok]` 行（避免改动文档守卫大绿行的计数口径）。
+#   位置放在函数体外：这两段若塞进 `_docs_numbers_and_tables` 函数体，会把该受管函数推向 400 行上限。
+_VER_HEAD_RE = re.compile(r"^##\s*\[(\d+\.\d+\.\d+)\]\s*-\s*(\d{4}-\d{2}-\d{2})\s*$", re.M)
+# 仓库根 README 的过程词闭集（与分发面编年纪律同一组；用**相邻字面量**写，避免本文件被自扫命中）
+_README_PROCESS_WORDS = ("此" "前", "原" "先", "早" "先", "旧" "实现", "旧" "判据",
+                         "原" "判据", "上" "一轮", "上" "一版", "当" "年", "一" "度")
+# 仓库根 README 不得提供的**仓外**链接前缀（这些对象在工作区维护、不随本仓库分发）
+_README_OUTSIDE_PREFIXES = ("release/", "plans/", "ledger/", "artifacts/")
+_README_LINK_RE = re.compile(r"\[[^\]]*\]\(([^)\s]+)\)")
+
+
+def _doc_guard_version_three(root: str, md: dict) -> list:
+    """版本三处机械对账：CHANGELOG 首段 ↔ `metadata.version` ↔ `update_history[0]`。
+
+    判据（全部进 `doc_fail`，可读文案）：
+      ① `update_history` 必须是非空 list、首条必须是 dict；
+      ② `metadata.update_history[0].version == metadata.version`；
+      ③ `CHANGELOG.md` 首个 `## [x.y.z] - YYYY-MM-DD` 段的版本 == `metadata.version`；
+      ④ 该段日期 == `update_history[0].date`；
+      ⑤ 结构异常（无版本段／`update_history` 非 list／首条非 dict／字段缺失或形态不对）逐项报。
+    起因（不这么做会漏什么）：只改 CHANGELOG 新段标题版本、或只改 `update_history[0]` 的
+    version/date 漂移时 `--only docs` 仍绿 ⇒ 版本三处缺机械臂；本守卫覆盖此面（验收 §2.4/§5-A 的注入面）。
+    返回失败文案列表（空 = 通过）。
+    """
+    fail: list = []
+    hist = md.get("update_history")
+    if not isinstance(hist, list) or not hist:
+        return ["版本三处：metadata.json 的 `update_history` 缺失或不是非空 list"]
+    first = hist[0]
+    if not isinstance(first, dict):
+        return ["版本三处：metadata.json 的 `update_history[0]` 不是对象（{version,date,summary}）"]
+    hver, hdate = first.get("version"), first.get("date")
+    if not isinstance(hver, str) or not hver:
+        fail.append("版本三处：metadata.json 的 `update_history[0].version` 缺失或不是非空字符串")
+    if not isinstance(hdate, str) or not re.match(r"^\d{4}-\d{2}-\d{2}$", hdate):
+        fail.append("版本三处：metadata.json 的 `update_history[0].date` 缺失或不是 YYYY-MM-DD")
+    mdver = md.get("version")
+    if not isinstance(mdver, str) or not mdver:
+        fail.append("版本三处：metadata.json 顶层 `version` 缺失或不是非空字符串")
+    elif isinstance(hver, str) and hver and mdver != hver:
+        fail.append("版本三处：metadata.version=%r 与 update_history[0].version=%r 不一致"
+                    % (mdver, hver))
+    try:
+        with io.open(os.path.join(root, "CHANGELOG.md"), "r", encoding="utf-8", newline="") as _clf:
+            _cl = _clf.read()
+    except (OSError, UnicodeDecodeError) as _exc:
+        return fail + ["版本三处：读不出 CHANGELOG.md（%s: %s）—— 报错，不算通过"
+                       % (type(_exc).__name__, _exc)]
+    _m = _VER_HEAD_RE.search(_cl)
+    if _m is None:
+        return fail + ["版本三处：CHANGELOG.md 里找不到首个 `## [x.y.z] - YYYY-MM-DD` 版本段"]
+    _cver, _cdate = _m.group(1), _m.group(2)
+    if isinstance(mdver, str) and mdver and _cver != mdver:
+        fail.append("版本三处：CHANGELOG 首段版本 %s 与 metadata.version %s 不一致"
+                    % (_cver, mdver))
+    if isinstance(hdate, str) and hdate and _cdate != hdate:
+        fail.append("版本三处：CHANGELOG 首段日期 %s 与 update_history[0].date %s 不一致"
+                    % (_cdate, hdate))
+    return fail
+
+
+def _doc_guard_root_readme() -> list:
+    """仓库根 `README.md` 机械守卫（它**不在** `_check_docs` 的 `root=SKILL_ROOT` 扫描面）。
+
+    判据（全部进 `doc_fail`，可读文案）：
+      ① 文件必须存在；② 全文 `ITEM-\\d{4}` 命中 0；③ 过程词闭集命中 0；
+      ④ 文档内 Markdown 相对链接的目标须是本仓库内**存在**的路径（外链不校验）；
+      ⑤ 不得有指向仓外 `release/`／`plans/`／`ledger/`／`artifacts/` 的链接。
+    起因（不这么做会漏什么）：根 README 只作仓库导航、易被注入计划内部编号或仓外指针，
+    且它不在文档守卫扫描面 ⇒ `--only docs` 对该文件无覆盖；本守卫补此面（验收 §2.4-F/§5-C 的缺口）。
+    返回失败文案列表（空 = 通过）。
+    """
+    fail: list = []
+    repo = os.path.dirname(os.path.abspath(SKILL_ROOT))
+    path = os.path.join(repo, "README.md")
+    if not os.path.isfile(path):
+        return ["仓库根 README：缺少 %s（技能开发仓库的导航入口）" % path]
+    try:
+        with io.open(path, "r", encoding="utf-8", newline="") as _rf:
+            text = _rf.read()
+    except (OSError, UnicodeDecodeError) as _exc:
+        return ["仓库根 README：读不出（%s: %s）—— 报错，不算通过"
+                % (type(_exc).__name__, _exc)]
+    for _i, _l in enumerate(text.splitlines(), 1):
+        if re.search(r"ITEM-\d{4}", _l):
+            fail.append("仓库根 README:%d 出现计划内部编号 ITEM-XXXX：%s"
+                        % (_i, _l.strip()[:60]))
+        for _w in _README_PROCESS_WORDS:
+            if _w in _l:
+                fail.append("仓库根 README:%d 出现过程词「%s」：%s"
+                            % (_i, _w, _l.strip()[:60]))
+    for _m in _README_LINK_RE.finditer(text):
+        _tgt = _m.group(1).strip()
+        if _tgt.startswith("<") and _tgt.endswith(">"):
+            _tgt = _tgt[1:-1]
+        if _tgt.startswith(("http://", "https://", "mailto:", "#")):
+            continue
+        _path = _tgt.split("#", 1)[0]
+        if not _path:
+            continue
+        while _path.startswith("./"):
+            _path = _path[2:]
+        if any(_path.startswith(_bad) for _bad in _README_OUTSIDE_PREFIXES):
+            fail.append("仓库根 README：链接指向仓外对象（不随本仓库分发）：%s" % _tgt)
+            continue
+        try:
+            _abs = os.path.abspath(os.path.join(repo, _path))
+            _inside = os.path.commonpath([_abs, repo]) == repo
+        except (OSError, ValueError):
+            _inside = False
+        if not _inside:
+            fail.append("仓库根 README：链接越出仓库根：%s" % _tgt)
+        elif not os.path.exists(_abs):
+            fail.append("仓库根 README：链接目标不存在：%s" % _tgt)
+    return fail
+
+
 @_cap
 def _check_docs(tmp, node, failures, write) -> None:
     """文档一致性守卫（跨文件）：重复表格 / 引用可解析 / 格式 / 自称数字 / 索引与节号（第 17~18 组）"""
@@ -5420,6 +6062,105 @@ def _docs_xfile_consistency(_S) -> None:
                    if _n in ('_base', '_body', '_chk_m', '_fence', '_fh', '_got', '_i', '_j', '_l', '_lab', '_m', '_miss', '_rm_txt', '_sk_txt', '_txt', 'doc_fail', 'docs', 'i', 'l', 'ls', 'nm', 'root')})
 
 
+# ---- 历史文档「空代码 span 残骸」守卫（DIST-HIST-SPAN：围栏感知、白名单内容锚定）----
+# 白名单（内容锚定，不按行号）：双反引号 delimiter 的 `content.strip()` 逐字属于以下四者才保留 ——
+#   `:N` / `L`+数字 / | `cmd args` / | `cmd`。残骸 run 数 = 围栏外 run=2 总数 − 白名单 run 数。
+_HIST_LEGAL_CONTENT_RE = (
+    re.compile(r"^`:[^`]+`$"),
+    re.compile(r"^`L`\+\S+$"),
+    re.compile(r"^\| `[^`]+`$"),
+)
+# 自校验：白名单命中数（合法 span 会随版本段新增 ⇒ 新增时必须同步这里；不一致即判红提醒重算）
+_HIST_LEGAL_RUNS = {"CHANGELOG": 8, "metadata": 0}
+_HIST_FENCE_RE = re.compile(r"^\s*(```|~~~)")
+
+
+def _hist_span_scan(text):
+    """围栏外扫描：返回 `(run2_total, legal_runs, residue_samples)`；残骸 run 数 = 总数 − legal。"""
+    total = legal = 0
+    samples: list = []
+    fence = 0
+    for no, line in enumerate(text.splitlines(), 1):
+        if _HIST_FENCE_RE.match(line):
+            fence += 1
+            continue
+        if fence % 2 == 1:
+            continue
+        rs = [(m.start(), m.end() - m.start()) for m in re.finditer(r"`+", line)]
+        i = 0
+        while i < len(rs):
+            s, ln = rs[i]
+            if ln != 2:
+                i += 1
+                continue
+            j = i + 1
+            while j < len(rs) and rs[j][1] != 2:
+                j += 1
+            if j >= len(rs):
+                total += 1
+                samples.append((no, line.strip()[:80]))
+                i += 1
+                continue
+            content = line[s + 2:rs[j][0]].strip()
+            total += 2
+            if any(rx.match(content) for rx in _HIST_LEGAL_CONTENT_RE):
+                legal += 2
+            else:
+                samples.append((no, content[:40]))
+            i = j + 1
+    return total, legal, samples
+
+
+def _doc_guard_hist_span_residue(root: str) -> list:
+    """DIST-HIST-SPAN：CHANGELOG 全文 ＋ `metadata.update_history[*].summary` 的围栏感知残骸检查。
+
+    只看**围栏外**、反引号 run 长度恰为 2 的 run；白名单见上（内容锚定）。残骸 run ⇒ 判红并给行例；
+    白名单命中数与 `_HIST_LEGAL_RUNS` 不符也判红（新增合法 span 时须同步白名单与自校验数）。
+    """
+    problems: list = []
+    cl_path = os.path.join(root, "CHANGELOG.md")
+    try:
+        with open(cl_path, encoding="utf-8", newline="") as f:
+            cl = f.read()
+    except OSError as exc:
+        return ["DIST-HIST-SPAN：CHANGELOG.md 读不出（%s）" % exc]
+    total, legal, samples = _hist_span_scan(cl)
+    if legal != _HIST_LEGAL_RUNS["CHANGELOG"]:
+        problems.append(
+            "DIST-HIST-SPAN：CHANGELOG.md 白名单命中 %d 个 run（自校验应为 %d）—— "
+            "新增/删除合法双反引号 span 时须同步白名单与自校验数"
+            % (legal, _HIST_LEGAL_RUNS["CHANGELOG"]))
+    if total - legal:
+        problems.append(
+            "DIST-HIST-SPAN：CHANGELOG.md 有 %d 个空代码 span 残骸 run（围栏外 run=2 总数 %d − "
+            "白名单 %d）；行例：%r" % (total - legal, total, legal, samples[:3]))
+    md_path = os.path.join(root, "metadata.json")
+    try:
+        with open(md_path, encoding="utf-8-sig") as f:
+            md = json.load(f)
+    except (OSError, ValueError) as exc:
+        return problems + ["DIST-HIST-SPAN：metadata.json 读不出/解析失败（%s）" % exc]
+    mtotal = mlegal = 0
+    msamp: list = []
+    for h in md.get("update_history", []):
+        sm = h.get("summary", "")
+        if not isinstance(sm, str):
+            continue
+        t, lg, sp = _hist_span_scan(sm)
+        mtotal += t
+        mlegal += lg
+        msamp += [("summary.version=%s" % h.get("version"), c[1]) for c in sp[:2]]
+    if mlegal != _HIST_LEGAL_RUNS["metadata"]:
+        problems.append(
+            "DIST-HIST-SPAN：metadata.update_history[*].summary 白名单命中 %d 个 run（自校验应为 %d）"
+            % (mlegal, _HIST_LEGAL_RUNS["metadata"]))
+    if mtotal - mlegal:
+        problems.append(
+            "DIST-HIST-SPAN：metadata.update_history[*].summary 有 %d 个空代码 span 残骸 run；例：%r"
+            % (mtotal - mlegal, msamp[:3]))
+    return problems
+
+
 @_cap
 def _docs_numbers_and_tables(_S) -> None:
     """`_check_docs` 的第 2 段（机械切分，判据文本逐字未改）。
@@ -5621,8 +6362,12 @@ def _docs_numbers_and_tables(_S) -> None:
                     print("[note] 17x-note 交付物标识一致性：最新版 summary 出现 %d 个别处没有的标识 %s"
                           " ⇒ 可能是包内无法解析的内部标号，须人工确认（不进 rc）"
                           % (len(_idn_cand), "、".join(_idn_cand)))
+            # ⭐ 版本三处机械对账：CHANGELOG 首段 ↔ metadata.version ↔ update_history[0]
+            doc_fail.extend(_doc_guard_version_three(root, _md))
         except (OSError, ValueError) as _exc:
             doc_fail.append("metadata.json 读不了或不是合法 JSON：%s" % _exc)
+    # DIST-HIST-SPAN：历史文档空代码 span 残骸（围栏感知；白名单自校验 8/0）
+    doc_fail.extend(_doc_guard_hist_span_residue(root))
 
     # 17t 清单的「改已有文件 X + 新建文件 Y」拆分须与参考清单实算一致（SKILL.md 内该形态出现 1 处；`finditer` 会核全部命中）
     #     起因：`SKILL.md` 自称的「改已有文件 X ＋ 新建文件 Y」拆分数字与实际参考清单不一致时**无人守**
@@ -5767,6 +6512,8 @@ def _docs_numbers_and_tables(_S) -> None:
         _on_disk, _on_disk_ok = set(), False
         doc_fail.append("文档守卫：列不出 references/ 目录（%s: %s）—— 报错，不算「没命中」；"
                         "本轮跳过孤儿/缺失两侧比较" % (type(_exc).__name__, _exc))
+    # 仓库根 README 机械守卫（不在本守卫的 root=SKILL_ROOT 扫描面；⛔ 不新开块名）
+    doc_fail.extend(_doc_guard_root_readme())
     _S.update({_n: _v for _n, _v in locals().items()
                    if _n in ('_body', '_fh', '_fm', '_i', '_j', '_l', '_listed', '_ln', '_m', '_md', '_nm', '_on_disk', '_on_disk_ok', '_rel')})
 
@@ -8097,12 +8844,13 @@ def _check_diffguard(tmp, node, failures, write) -> None:
         dg.append("只改组内一行却命中了基线里的既有同文本行 ⇒ 被误报成压平")
     if _rc != 0:
         dg.append("既有同文本行、工作区未多出现时应 rc=0，实得 %s" % _rc)
-    if "多出现" not in _out:
-        dg.append("既有同文本行被排除时应给 [note] 说明「工作区没有多出现」")
+    # 新口径：组内仍有行本次未改 ⇒ 不是新压平；`[note]` 要说明原因（R2 收口后文案）。
+    if not any(k in _out for k in ("仍有行本次未改", "本次未改", "既有同文本行", "多出现")):
+        dg.append("既有同文本行被排除时应给 [note] 说明原因（组内仍有行本次未改/命中既有行）")
     _mk("dg.xwl", BASE)
 
-    # ④j **相似度档同受基线变更行约束**：新行与拼接高度相似（ratio 过阈值），但基线那组续行
-    #     本次未改 ⇒ 不得报（否则"在别处加一行像拼接的内容"也会被当成压平）。
+    # ④j **相似度档同受插入行闸约束**：新行与拼接高度相似（ratio 过阈值），但基线那组续行
+    #     本次未改（或命中位置是既有行）⇒ 不得报（否则"在别处加一行像拼接的内容"也会被当成压平）。
     _sm0 = "SIM_ARG_1" + BS + "\nSIM_ARG_2\nZ"
     _mk("dg.xwl", _sm0)
     _git(*GIT_ID, "commit", "-q", "-am", "sim-changed")
@@ -8115,29 +8863,61 @@ def _check_diffguard(tmp, node, failures, write) -> None:
         dg.append("相似度档 ＋ 基线行未改 --strict 下应 rc=0，实得 %s" % _rc)
     _mk("dg.xwl", BASE)
 
-    # ④k/④l **变更行闸含组尾行（R2 已登记边界的对称两态）**：基线里**已有**一处与拼接相同的行，
-    #     组内**任一行**被改（组尾 / 组首）＋ 工作区又多出一处同文本行 ⇒ 变更行闸放行、
-    #     出现次数闸放行（2 > 1）⇒ **报**。这不是真压平，属 R2 已登记误报面；
-    #     ⛔ 不得把「只改组尾行」说成「基线行本次未改」（闸①区间含组尾行 `j + 1`）。
+    # ④k/④l **R2 边界收口（只改组首/组尾＋别处多出同文本行 ⇒ 不得报）**：基线里已有同文本行，
+    #     组内只有一行被改（组尾 / 组首），工作区又新增一处同文本行 —— 旧口径按"变更行闸＋出现次数
+    #     闸"会放行，属**已登记误报**。新口径：组内**每一行**都须本次改过，且命中位置须是工作区新行
+    #     （`difflib` `insert`/`replace` 产出）⇒ 这两种都不得报。
     _r2a = "AABB" + "\n" + "AA" + BS + "\nBB\nZ"
     _mk("dg.xwl", _r2a)
     _git(*GIT_ID, "commit", "-q", "-am", "r2-group")
     BASE = _r2a
-    for _lbl, _work, _bad in (
-        ("组尾行", "AABB\nAA" + BS + "\nBBX\nAABB", "尾行"),
-        ("组首行", "AABB\nAA2" + BS + "\nBB\nAABB", "首行"),
+    for _lbl, _work in (
+        ("组尾行", "AABB\nAA" + BS + "\nBBX\nAABB"),
+        ("组首行", "AABB\nAA2" + BS + "\nBB\nAABB"),
     ):
         _mk("dg.xwl", _work)
         _rc, _out = _cli("diffguard", "dg.xwl", "--strict")
-        if "[warn]" not in _out or "精确命中" not in _out:
-            dg.append("只改%s＋既有同文本行多出一处：变更行闸漏了组内该行（按 R2 边界应报精确命中）"
-                      % _lbl)
-        if _rc != 1:
-            dg.append("只改%s＋既有同文本行多出一处 --strict 下按 R2 边界应 rc=1，实得 %s"
+        if "[warn]" in _out or "精确命中" in _out:
+            dg.append("只改%s＋别处多出一处同文本行：新口径不得报压平（R2 已登记误报面）\n%s"
+                      % (_lbl, _out))
+        if _rc != 0:
+            dg.append("只改%s＋别处多出一处同文本行 --strict 下应 rc=0，实得 %s"
                       % (_lbl, _rc))
-        if "本次未改" in _out:
-            dg.append("只改%s被误称「基线行本次未改」—— 组内任一行被改都应进变更行闸区间"
-                      % _bad)
+        if not any(k in _out for k in ("仍有行本次未改", "本次未改")):
+            dg.append("只改%s被排除时应说明原因「组内仍有行本次未改」" % _lbl)
+    _mk("dg.xwl", BASE)
+
+    # ④p **R1 漏报收口（真压平 ＋ 同时删掉基线既有同文本行）**：旧口径按出现次数闸（1 == 1）挡下
+    #     ⇒ 漏报；新口径只看「组内每行是否本次改过 ＋ 命中位置是否工作区新行」⇒ 必报。
+    _r1_0 = "AA" + BS + "\nBB\nZ\nAABB"
+    _mk("dg.xwl", _r1_0)
+    _git(*GIT_ID, "commit", "-q", "-am", "r1-flatten")
+    BASE = _r1_0
+    _mk("dg.xwl", "AABB\nZ")
+    _rc, _out = _cli("diffguard", "dg.xwl", "--strict")
+    if "[warn]" not in _out or "精确命中" not in _out:
+        dg.append("R1：真压平＋删掉基线既有同文本行时应报精确命中（旧口径按出现次数闸漏报）")
+    if _rc != 1:
+        dg.append("R1 --strict 下应 rc=1，实得 %s" % _rc)
+    if "工作区第 1 行" not in _out:
+        dg.append("R1：应报出合并后的真实工作区行号 1")
+    _mk("dg.xwl", BASE)
+
+    # ④q **XL 窄误报收口**：组内只改 1 个字符（ratio≈1）＋基线已有与拼接逐字相同的行 —— 旧口径
+    #     相似度档以高 ratio 报；新口径要求窗口每行都本次改过、命中位置须是工作区新行 ⇒ 不得报。
+    _xl_base = "\r\n".join(["AAAA" + "x" * 60 + BS, "BBBB" + "y" * 60, "Z",
+                            "AAAA" + "x" * 60 + "BBBB" + "y" * 60])
+    _xl_work = "\r\n".join(["AAAA" + "x" * 59 + "Q" + BS, "BBBB" + "y" * 60, "Z",
+                            "AAAA" + "x" * 60 + "BBBB" + "y" * 60])
+    _mk("dg.xwl", _xl_base)
+    _git(*GIT_ID, "commit", "-q", "-am", "xl-sim")
+    BASE = _xl_base
+    _mk("dg.xwl", _xl_work)
+    _rc, _out = _cli("diffguard", "dg.xwl", "--strict")
+    if "[warn]" in _out or "相似度命中" in _out:
+        dg.append("XL：组内只改一字＋基线已有逐字同文本行时不得报相似度命中（已登记误报）")
+    if _rc != 0:
+        dg.append("XL --strict 下应 rc=0，实得 %s" % _rc)
     _mk("dg.xwl", BASE)
 
     # ④m/④n/④o **预算触顶三态**（测试进程内 monkeypatch 上限，⛔ 不改产品默认）：
@@ -8220,8 +9000,8 @@ def _check_diffguard(tmp, node, failures, write) -> None:
               "新文件与非仓库干净跳过 / --strict 与 --rev 的退出码正确 / "
               "短名与长名两种 cwd 写法都能比对 / "
               "**补偿式压平必报、基线行未改的极短行拼接与真实移动不误报 / "
-              "多位置逐个列出且有界 / 既有同文本行按「工作区是否多出现」判 / "
-              "相似度档同受基线变更行约束 / 变更行闸含组尾行（组首/组尾被改同判）** / "
+              "多位置逐个列出且有界 / 既有同文本行按「组内每行是否本次改过＋命中位置是否新行」判 / "
+              "相似度档同闸（R2a/R2b 不报、XL 不报、R1 必报）** / "
               "**预算触顶三态：strict 仅未完成 rc=2 / 疑似＋未完成 rc=1 / 完整通过 rc=0，"
               "默认档末行不得 ALL OK** / "
               "**1ms 阈值下超时有界返回且原因显式**")
@@ -9295,9 +10075,6 @@ def _blocks() -> list[tuple[str, object]]:
         ("eol_and_guards", _check_eol_and_guards),
         ("diffguard", _check_diffguard),
         ("bc_contract", _check_bc_contract),
-        # 新增：排在**末位** —— 块序即输出序，插在中间会让既有块的展示行整体后移
-        # （拆分那一序的"拆分前后逐行 diff 为空"对照会因此不可比）。
-        ("rules_lint", _check_rules_lint),
     ]
 
 
@@ -9668,8 +10445,8 @@ def main(argv: list[str] | None = None) -> int:
         if args.result is None:
             # 人工单跑：**不许静默收窄** —— 明写"只跑了哪块／未跑哪些块"（对齐"收窄必显式打印"的既有口径）
             _others = [n for n, _f in _blk_named if n != args.only]
-            # ⚠️ 名单上限**必须 ≥ 块总数**（现 14 块）：封顶 12 时第 13 个只显示「另有 1 块未列」，
-            #    被隐掉的恰是末位新增的 `rules_lint` ⇒ 「收窄必显式」在这条路径上等于失效。
+            # ⚠️ 名单上限**必须 ≥ 块总数**（现 13 块）：上限过小时末尾的块只显示「另有 N 块未列」，
+            #    「收窄必显式」在这条路径上等于失效。
             #    ⚠️ 两个数（切片与下面的判断）必须**同一来源**，否则会既列全又谎报"另有未列"。
             _NAME_CAP = 20
             _shown = "，".join(_others[:_NAME_CAP])
