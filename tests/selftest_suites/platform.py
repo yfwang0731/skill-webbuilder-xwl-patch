@@ -81,8 +81,12 @@ def _check_platform(tmp, node, failures, write) -> None:
         got2 = xwl.node_check_many(node_bin, [])
         if got2 != []:
             failures.append("node_check_many 对空输入应返回空列表")
+        if REQUIRE_ALL:
+            _mark_sub(_SUBCHECKS, "js.node_check_many", "通过", "node_check_many 已执行")
     else:
         print("[note] 未找到 node，跳过 node_check_many 等价性断言")
+        if REQUIRE_ALL:
+            _mark_sub(_SUBCHECKS, "js.node_check_many", "未完成", "未找到 node，JS 等价性断言未跑")
 
     # ---- 20. folders：给目录 + --register 必须显式报错（曾是静默无效）----
     # 起因：cmd_folders 在 isdir 分支里**直接忽略** --register，只做只读扫描并以 0 退出 ——

@@ -66,9 +66,11 @@
 
 改完 xwl.py 先跑它；输出末尾应为 `selftest ALL OK`：
 
-    python scripts/selftest.py              # 全跑（默认；CI 行为不变）
+    python scripts/selftest.py              # 全跑（默认；普通档 rc 只看断言失败）
     python scripts/selftest.py --jobs 4     # 并行跑（默认 min(6, CPU 数)；--jobs 1 = 串行）
     python scripts/selftest.py --fast       # 本地快回路：跳最贵的两块（diffguard / eol_and_guards）
+    python scripts/selftest.py --require-all --profile package
+                                        # 必需范围门禁：package 与 development 同口径
 """
 from __future__ import annotations
 
@@ -223,6 +225,13 @@ def _cap_run(cmd, *, cwd=None, timeout=None, env=None, input=None, binary=False)
             _kw["input"] = input.encode("utf-8") if isinstance(input, str) else input
         try:
             _rc, _to = subprocess.run(cmd, **_kw).returncode, False
+        except OSError as _exc:
+            # Windows 高并发 CreateProcess 会偶发 WinError 1920。同一命令再试一次，
+            # 仍失败才落成错误，不把这一下记成被测断言失败。
+            if getattr(_exc, "winerror", None) != 1920:
+                raise
+            time.sleep(0.2)
+            _rc, _to = subprocess.run(cmd, **_kw).returncode, False
         except subprocess.TimeoutExpired:
             _rc, _to = None, True
         _fo.seek(0)
@@ -313,7 +322,18 @@ def _load_suite(block):
     if spec is None or spec.loader is None:
         raise ImportError("读不到自检套件：%s" % path)
     mod = importlib.util.module_from_spec(spec)
+    # 套件按块 import，读不到本模块的门禁开关。注入的是同一份对象，不是拷贝。
+    mod.REQUIRE_ALL = REQUIRE_ALL
+    mod.REQUIRE_PROFILE = REQUIRE_PROFILE
+    # 绑定当前这份表。套件若先被别的块加载，_activate_block 会再改到本块自己的表。
+    mod._SUBCHECKS = _SUBCHECKS
+    mod._mark_sub = _mark_sub
     spec.loader.exec_module(mod)
+    # 套件加载时会从自检模块抄走全局名。抄完后再钉一次，避免抄到另一份模块的默认值。
+    mod.REQUIRE_ALL = REQUIRE_ALL
+    mod.REQUIRE_PROFILE = REQUIRE_PROFILE
+    mod._SUBCHECKS = _SUBCHECKS
+    mod._mark_sub = _mark_sub
     for _name in getattr(mod, "_CAP_FN_NAMES", ()):
         _obj = getattr(mod, _name, None)
         if callable(_obj):
@@ -437,9 +457,124 @@ def _win_path(p: str, api: str):
 
 # 「块 → 未执行前置」：登记在这里的块，前置不满足时打 `[note] 本块未执行：…` 并跳过，
 # 汇总行据此**单列**「未执行 N 块」（⛔ 不许把"没跑"混进"通过"）。配置错误（判红）不进这一桶。
-# ⚠️ 当前为**空表**（原唯一使用方已随目标机制退役而整体移除）；通用机制保留：将来需要
-#    「前置不满足 ⇒ 明确未执行、不算通过」的块（如 profile 契约）直接登记到本表。
+# ⚠️ 当前为**空表**。profile 门禁不走这张表：三处块内跳过由各块自己记成「未完成」。
 _BLOCK_PRECONDITIONS = {}
+
+# 完成状态闭集。普通档只展示；`--require-all` 才据此定退出码。
+COMPLETION_STATES = ("通过", "失败", "未完成", "不适用", "未选择")
+REQUIRE_PROFILES = ("package", "development")
+
+# 本次门禁上下文。只在顶层进程的 `main` 里赋值；worker 走 `--result` 时由父进程透传。
+REQUIRE_ALL = False
+REQUIRE_PROFILE = None
+_SUBCHECKS = {}
+_SELFTEST_SENTINEL = True
+# 套件按这个名字加载自检。必须是正在执行的这一份，不能再执行出第二份。
+if __name__ in sys.modules:
+    sys.modules["xwl_selftest_runtime"] = sys.modules[__name__]
+
+# 子检查身份。键是稳定 id，值是给人读的名字。
+# 三处块内跳过都在这里：profile 两档都把它们当必需，缺了就是未完成，不得改成不适用。
+_BLOCK_SUBCHECKS = {
+    "basics": (("block", "basics 整块"),),
+    "params_paths": (("block", "params_paths 整块"),),
+    "itemids": (("block", "itemids 整块"),),
+    "patch_contract": (("block", "patch_contract 整块"),),
+    "subcommands": (
+        ("block", "subcommands 整块"),
+        ("chain.tail", "subcommands 尾段"),
+    ),
+    "new_guards": (
+        ("block", "new_guards 整块"),
+        ("js.71", "new_guards 的 #71 JS 档"),
+    ),
+    "docs": (
+        ("block", "docs 整块"),
+        ("git.chron", "docs 编年守卫"),
+        ("git.dist", "docs 分发面自包含"),
+    ),
+    "platform": (
+        ("block", "platform 整块"),
+        ("js.node_check_many", "platform 的 node_check_many"),
+    ),
+    "write_failures": (
+        ("block", "write_failures 整块"),
+        ("js.write_gate", "write_failures 的写前 JS 门禁"),
+        ("js.write_post", "write_failures 的写后 JS 采集"),
+        ("js.write_fault", "write_failures 的写后 node 故障"),
+    ),
+    "edit_eol": (("block", "edit_eol 整块"),),
+    "eol_and_guards": (("block", "eol_and_guards 整块"),),
+    "diffguard": (
+        ("block", "diffguard 整块"),
+        ("repo", "diffguard 临时仓库与压平断言"),
+    ),
+    "bc_contract": (("block", "bc_contract 整块"),),
+}
+
+
+def _fresh_subchecks(block_id: str) -> dict:
+    """按登记表造一份子检查状态。未登记的块不自造子检查。"""
+    return {
+        sid: {"id": sid, "name": name, "state": "未选择", "reason": "尚未执行"}
+        for sid, name in _BLOCK_SUBCHECKS.get(block_id, ())
+    }
+
+
+def _live_selftest():
+    """返回正在执行的自检模块。
+
+    启动器用 spec 加载，模块名不是 selftest。套件若写 import selftest，
+    会另外装入一份，标记就写丢了。
+    """
+    for mod in sys.modules.values():
+        if mod is not None and getattr(mod, "_SELFTEST_SENTINEL", False):
+            return mod
+    return sys.modules.get(__name__)
+
+
+def _mark_sub(checks: dict, sid: str, state: str, reason: str) -> None:
+    """改一条已登记子检查。未登记的 id 直接留下，避免静默丢掉。
+
+    套件里的调用只传它自己的表。嵌套函数可能拿着加载时的空表，
+    所以非空标记一律写到当前块的 `_SUBCHECKS`。
+    """
+    if state not in COMPLETION_STATES:
+        raise ValueError("未知完成状态：%s" % state)
+    target = _SUBCHECKS if _SUBCHECKS else checks
+    if sid not in target and sid in checks:
+        target = checks
+    cur = target.get(sid)
+    if cur is None:
+        target[sid] = {"id": sid, "name": sid, "state": state, "reason": reason}
+        return
+    cur["state"] = state
+    cur["reason"] = reason
+
+
+def _completion_of(failures, checks: dict) -> tuple:
+    """由失败清单和子检查推出块完成状态。失败优先于未完成。"""
+    if failures:
+        return "失败", "断言失败 %d 条" % len(failures)
+    pending = [c for c in checks.values() if c.get("state") in ("未完成", "未选择")]
+    if pending:
+        return "未完成", "；".join("%s：%s" % (c["id"], c.get("reason") or c["state"]) for c in pending)
+    bad = [c for c in checks.values() if c.get("state") not in ("通过", "不适用")]
+    if bad:
+        return "未完成", "；".join("%s：%s" % (c["id"], c.get("state")) for c in bad)
+    return "通过", "必需子检查均已通过"
+
+
+def _block_record(block_id: str, failures, checks: dict) -> dict:
+    state, reason = _completion_of(failures, checks)
+    return {
+        "block_id": block_id,
+        "state": state,
+        "reason": reason,
+        "failures": list(failures),
+        "subchecks": [checks[sid] for sid, _name in _BLOCK_SUBCHECKS.get(block_id, ()) if sid in checks]
+        + [checks[sid] for sid in checks if sid not in dict(_BLOCK_SUBCHECKS.get(block_id, ()))],
+    }
 
 
 def _blocks_unexecuted(blocks) -> list:
@@ -921,6 +1056,27 @@ def _nogit_gate(arm: str, doc_fail: list, nogit_arms: list) -> None:
         doc_fail.append(
             "%s：取不到 `git ls-files` 清单 ⇒ 本次**没扫**（默认判红 —— 静默绿是病根）。"
             "确无 `.git`（如 zip 分发解包后）需降级时，显式加 `--allow-nogit`。" % arm)
+
+
+def _docs_git_arm(arm: str, shipped, doc_fail: list, nogit_arms: list, checks: dict, sid: str) -> bool:
+    """Git 守卫族的统一入口。取不到清单时返回 False，调用方不要再扫。
+
+    普通档维持原口径：默认判红，显式 `--allow-nogit` 才降级成 note。
+    `--require-all` 不接受这次降级：两档 profile 都把该臂记成未完成。
+    """
+    if shipped is not None:
+        _mark_sub(checks, sid, "通过", "%s 已取得 git 清单" % arm)
+        return True
+    if REQUIRE_ALL:
+        _mark_sub(checks, sid, "未完成", "%s 取不到 git 清单，本次没扫" % arm)
+        print("[note] %s：取不到 `git ls-files` 清单 ⇒ 必需范围未完成" % arm)
+        return False
+    _nogit_gate(arm, doc_fail, nogit_arms)
+    if ALLOW_NOGIT:
+        _mark_sub(checks, sid, "不适用", "%s 按 --allow-nogit 降级，本次没扫" % arm)
+    else:
+        _mark_sub(checks, sid, "失败", "%s 取不到 git 清单，默认判红" % arm)
+    return False
 
 
 def _git_scan_scope(root: str):
@@ -3358,8 +3514,8 @@ def _docs_layers_and_distribution(_S) -> None:
     #    把某份的 `layers` 值改回 `spec` ⇒ 该份**立刻失豁免**（可注入验证）。
     _chron_ex = _chron_exempt(root)
     _shipped, _ = _git_scan_scope(root)
-    if _shipped is None:
-        _nogit_gate("编年守卫", doc_fail, _nogit_arms)
+    if not _docs_git_arm("编年守卫", _shipped, doc_fail, _nogit_arms, _SUBCHECKS, "git.chron"):
+        pass
     else:
         for _rel in _shipped:
             if _rel in _chron_ex:
@@ -3763,8 +3919,8 @@ def _docs_tail_scaffold(_S) -> None:
 
     # 有界下沉：`_b17r_mask_strings` / `_b17r_history_skip`（纯助手）已移出函数体 ⇒ 见模块级同名函数。
     _b17r_files, _ = _git_scan_scope(root)
-    if _b17r_files is None:
-        _nogit_gate("17r 分发面自包含", doc_fail, _nogit_arms)
+    if not _docs_git_arm("17r 分发面自包含", _b17r_files, doc_fail, _nogit_arms, _SUBCHECKS, "git.dist"):
+        pass
     else:
         _b17r_fail = []
         for _rel17 in _b17r_files:
@@ -4172,14 +4328,47 @@ def _rmtree_force(path: str) -> None:
         shutil.rmtree(path, onerror=_onerr)   # 3.9–3.11 只有 onerror
 
 
-def _run_block(name: str, fn, node) -> list[str]:
-    """在**独占**临时目录里跑一个块，返回它的 failures 列表。
+def _activate_block(name: str) -> dict:
+    """给即将执行的块挂上一份子检查表，并让已加载套件看见它。"""
+    checks = _fresh_subchecks(name)
+    global _SUBCHECKS
+    _SUBCHECKS = checks
+    mod = _SUITE_MODULES.get(name)
+    if mod is not None:
+        mod.REQUIRE_ALL = REQUIRE_ALL
+        mod.REQUIRE_PROFILE = REQUIRE_PROFILE
+        mod._SUBCHECKS = checks
+        mod._mark_sub = _mark_sub
+    return checks
+
+
+def _close_block(name: str, failures, checks: dict) -> dict:
+    """块函数返回后收口。整块跑完才把 block 收成通过或失败。
+
+    其余仍是「未选择」的子检查表示没执行到，记成未完成。
+    提前 return 因此不能靠块级 rc=0 变成通过。
+    """
+    block = checks.get("block")
+    if block is not None and block.get("state") == "未选择":
+        if failures:
+            _mark_sub(checks, "block", "失败", "断言失败 %d 条" % len(failures))
+        else:
+            _mark_sub(checks, "block", "通过", "已执行")
+    for sid, cur in list(checks.items()):
+        if sid != "block" and cur.get("state") == "未选择":
+            _mark_sub(checks, sid, "未完成", "子检查未执行到")
+    return _block_record(name, failures, checks)
+
+
+def _run_block(name: str, fn, node):
+    """在**独占**临时目录里跑一个块，返回 `(failures, record)`。
 
     每块独占一个 `mkdtemp`（并行时天然隔离；串行档也用它 ⇒ 两档语义一致，
     互不依赖 tmp 中的文件）。跑完删临时目录（失败也不抛）。
     """
     tmp = ""                    # 先占位：`mkdtemp` 进 try 之后，失败路径也拿得到"还没建"这个事实
     failures: list[str] = []
+    checks = _activate_block(name)
 
     def write(nm: str, text: str, bom: bool = False) -> str:
         p = os.path.join(tmp, nm)
@@ -4221,21 +4410,38 @@ def _run_block(name: str, fn, node) -> list[str]:
     finally:
         if tmp:
             _rmtree_force(tmp)      # ⛔ 不留 tmp（直接 return 的写法每跑一次漏一批）
-    return failures
+    return failures, _close_block(name, failures, checks)
 
 
-def _run_serial(blocks, node) -> list[str]:
-    """串行（`--jobs 1`）：按块顺序在**本进程**逐个跑。"""
+def _skipped_record(name: str, why: str) -> dict:
+    """前置不满足、整块没跑。普通档仍叫未执行；门禁下记成未选择。"""
+    checks = _fresh_subchecks(name)
+    state = "未选择" if REQUIRE_ALL else "不适用"
+    for sid in list(checks):
+        _mark_sub(checks, sid, state, why)
+    record = _block_record(name, [], checks)
+    record["state"] = "未选择" if REQUIRE_ALL else "不适用"
+    record["reason"] = why
+    record["skipped"] = True
+    return record
+
+
+def _run_serial(blocks, node):
+    """串行（`--jobs 1`）：按块顺序在**本进程**逐个跑。返回 `(failures, records)`。"""
     failures: list[str] = []
+    records = []
     for name, fn in blocks:
         _pre = _BLOCK_PRECONDITIONS.get(name)
         if _pre is not None:
             _root, _why, _fatal = _pre()
             if _root is None and not _fatal:
                 print("[note] 本块未执行：%s（%s）" % (name, _why))
+                records.append(_skipped_record(name, _why))
                 continue
-        failures.extend(_run_block(name, fn, node))
-    return failures
+        _fails, _rec = _run_block(name, fn, node)
+        failures.extend(_fails)
+        records.append(_rec)
+    return failures, records
 
 
 # ⭐ 并行派发时单块的**兜底超时**（秒）：worker 卡住 ⇒ 杀掉并**显式报失败**（⛔ 不静默跳过／通过）。
@@ -4249,7 +4455,117 @@ except ValueError:
     pass
 
 
-def _run_parallel(blocks, node, jobs: int) -> list[str]:
+def _as_subchecks(raw) -> dict:
+    """把 worker 交回的子检查列表收成字典。形状不对的项丢掉，由上层判协议错。"""
+    out = {}
+    if not isinstance(raw, list):
+        return out
+    for item in raw:
+        if not isinstance(item, dict) or not isinstance(item.get("id"), str):
+            continue
+        out[item["id"]] = {
+            "id": item["id"],
+            "name": item.get("name") or item["id"],
+            "state": item.get("state") or "未选择",
+            "reason": item.get("reason") or "",
+        }
+    return out
+
+
+def _take_worker_record(name: str, payload, proto_fail) -> dict:
+    """校验一份 worker JSON。身份不对、字段缺失、坏形状都记成协议错。"""
+    extra = []
+    if not isinstance(payload, dict):
+        extra.append("块 %s 的 worker JSON 不可用" % name)
+        payload = {}
+    got_id = payload.get("block_id")
+    if got_id != name:
+        extra.append("块 %s 的 worker JSON 身份不符（block_id=%r）" % (name, got_id))
+    fails = payload.get("failures")
+    if not isinstance(fails, list) or any(not isinstance(x, str) for x in fails):
+        extra.append("块 %s 的 failures 不是字符串列表" % name)
+        fails = []
+    checks = _as_subchecks(payload.get("subchecks"))
+    expected = [sid for sid, _nm in _BLOCK_SUBCHECKS.get(name, ())]
+    missing = [sid for sid in expected if sid not in checks]
+    if missing:
+        extra.append("块 %s 缺子检查：%s" % (name, "、".join(missing)))
+        for sid in missing:
+            _mark_sub(checks, sid, "未完成", "worker 未交回该子检查")
+    for sid, cur in checks.items():
+        if cur.get("state") not in COMPLETION_STATES:
+            extra.append("块 %s 的子检查 %s 状态非法：%r" % (name, sid, cur.get("state")))
+            _mark_sub(checks, sid, "未完成", "worker 交回的完成状态非法")
+    if payload.get("state") not in COMPLETION_STATES or not isinstance(payload.get("reason"), str):
+        extra.append("块 %s 缺完成状态或理由" % name)
+    record = _block_record(name, fails, checks)
+    if extra or proto_fail:
+        record["state"] = "未完成"
+        record["reason"] = "；".join([x for x in [proto_fail, *extra, record.get("reason")] if x])
+    record["_parent_failures"] = extra
+    return record
+
+
+def _aggregate_gate(records) -> tuple:
+    """按注册块身份聚合。返回 `(rc, lines)`。
+
+    缺块、重复、坏协议是 2。只有断言失败是 1。失败与未完成同时存在时仍是 1，两类都点名。
+    """
+    lines = []
+    by_id = {}
+    dup = []
+    for rec in records:
+        bid = rec.get("block_id")
+        if bid in by_id:
+            dup.append(bid)
+        by_id.setdefault(bid, []).append(rec)
+    if dup:
+        lines.append("[require-all] 重复块：%s" % "、".join(dup))
+    missing = [bid for bid in _BLOCKS_BASELINE if bid not in by_id]
+    extra = [bid for bid in by_id if bid not in _BLOCKS_BASELINE]
+    if missing:
+        lines.append("[require-all] 缺块：%s" % "、".join(missing))
+    if extra:
+        lines.append("[require-all] 基线外的块：%s" % "、".join(extra))
+    failed, undone, proto = [], [], []
+    ordered = []
+    for bid in list(_BLOCKS_BASELINE) + [bid for bid in by_id if bid not in _BLOCKS_BASELINE]:
+        for rec in by_id.get(bid, []):
+            ordered.append(rec)
+            subs = "，".join("%s=%s" % (s.get("id"), s.get("state")) for s in rec.get("subchecks") or [])
+            lines.append("[block] %s %s：%s%s" % (
+                rec.get("block_id"), rec.get("state"), rec.get("reason"),
+                ("；子检查 " + subs) if subs else ""))
+            if rec.get("_parent_failures") or "worker" in str(rec.get("reason")):
+                proto.append(bid)
+            if rec.get("state") == "失败" or rec.get("failures"):
+                failed.append(bid)
+            elif rec.get("state") != "通过":
+                undone.append(bid)
+            for sub in rec.get("subchecks") or []:
+                if sub.get("state") == "失败" and bid not in failed:
+                    failed.append(bid)
+                elif sub.get("state") in ("未完成", "未选择") and bid not in undone and bid not in failed:
+                    undone.append(bid)
+    if failed:
+        lines.append("[require-all] 失败块：%s" % "、".join(dict.fromkeys(failed)))
+    if undone:
+        lines.append("[require-all] 未完成块：%s" % "、".join(dict.fromkeys(undone)))
+    if failed:
+        if undone:
+            lines.append("[require-all] 同时有断言失败与未完成，按断言失败")
+        return 1, lines
+    if proto or missing or extra or dup:
+        lines.append("[require-all] 门禁未完成：协议、缺块或重复")
+        return 2, lines
+    if undone:
+        lines.append("[require-all] 门禁未完成")
+        return 2, lines
+    lines.append("[require-all] 必需范围已完整执行（profile=%s）" % REQUIRE_PROFILE)
+    return 0, lines
+
+
+def _run_parallel(blocks, node, jobs: int):
     """并发（`--jobs N`）：每块在**独立子进程**里跑（各自 mkdtemp、失败写 JSON）。
 
     ⭐ 子进程的 stdout / stderr **一律落「每块独立临时文件」，不再继承 selftest 自己的句柄**。
@@ -4274,12 +4590,12 @@ def _run_parallel(blocks, node, jobs: int) -> list[str]:
         _rmtree_force(rdir)     # ⛔ 不留结果目录（建完不清理的写法每跑一次漏一批）
 
 
-def _run_parallel_dispatch(rdir: str, blocks, node, jobs: int) -> list[str]:
+def _run_parallel_dispatch(rdir: str, blocks, node, jobs: int):
     """`_run_parallel` 的本体：`rdir` 由调用方创建、由调用方的 `finally` 清理（本体不管生命周期）。"""
     procs: dict[str, tuple] = {}
     started: dict[str, float] = {}      # 各 worker 的启动时刻（monotonic）⇒ 内层兜底超时判据
     timed_out: set = set()              # 被兜底超时杀掉的块名（回放阶段**显式报失败**，⛔ 不静默跳过）
-    _skipped_names = set()
+    _skipped_names = {}
     for name, _fn in blocks:
         _pre = _BLOCK_PRECONDITIONS.get(name)
         if _pre is None:
@@ -4287,17 +4603,22 @@ def _run_parallel_dispatch(rdir: str, blocks, node, jobs: int) -> list[str]:
         _root, _why, _fatal = _pre()
         if _root is None and not _fatal:
             print("[note] 本块未执行：%s（%s）" % (name, _why))
-            _skipped_names.add(name)
+            _skipped_names[name] = _why
     pending = [(n, f) for n, f in blocks if n not in _skipped_names]
     active: list[str] = []
     while pending or active:
         while pending and len(active) < jobs:
             name, _fn = pending.pop(0)
             result = os.path.join(rdir, name + ".json")
-            _cmd = [sys.executable, "-B", os.path.abspath(__file__),
+            # 本机启动器负责临时目录补丁，并让 worker 与父进程是同一份模块。
+            # 没有启动器时仍直接跑本文件，CI 不受影响。
+            _entry = os.environ.get("XWL_SELFTEST_ENTRY") or os.path.abspath(__file__)
+            _cmd = [sys.executable, "-B", _entry,
                     "--only", name, "--result", result, "--node", node or ""]
             if ALLOW_NOGIT:   # 子进程各自解析开关 ⇒ 必须透传
                 _cmd.append("--allow-nogit")
+            if REQUIRE_ALL:
+                _cmd.extend(["--require-all", "--profile", REQUIRE_PROFILE or ""])
             # ⭐ 诱因侧修复：worker 的 stdout/stderr 落**每块独立临时文件**（不继承 selftest 句柄，
             #   切断"worker 的后代持外管道"；详见本函数 docstring）。
             outlog = os.path.join(rdir, name + ".out")
@@ -4335,8 +4656,10 @@ def _run_parallel_dispatch(rdir: str, blocks, node, jobs: int) -> list[str]:
                 active.remove(name)
 
     failures: list[str] = []
+    records = []
     for name, _fn in blocks:
         if name in _skipped_names:
+            records.append(_skipped_record(name, _skipped_names[name]))
             continue
         proc, result, fout, ferr, outlog, errlog = procs[name]
         fout.close()
@@ -4378,25 +4701,28 @@ def _run_parallel_dispatch(rdir: str, blocks, node, jobs: int) -> list[str]:
                 sink.write(text)
             except Exception as exc:  # noqa: BLE001 —— 回放失败不得影响判据（failures 仍据 JSON 定）
                 print("[note] 块 %s 的 %s 展示输出写不到目标流：%s" % (name, _lbl, exc))
+        _proto_fail = None
         if name in timed_out:
             # ⭐ 超时块**显式报出**（⛔ 不静默）：点名块与超时值；worker 已杀 ⇒ **有界返回**。
-            failures.append("块 %s 的子进程超过 %d 秒未退出（worker 卡住）⇒ 已终止"
-                            % (name, _JOB_TIMEOUT))
+            _proto_fail = "块 %s 的子进程超过 %d 秒未退出（worker 卡住）⇒ 已终止" % (name, _JOB_TIMEOUT)
+            failures.append(_proto_fail)
         elif proc.returncode != 0:
-            failures.append("块 %s 的子进程异常退出（rc=%s）" % (name, proc.returncode))
+            _proto_fail = "块 %s 的子进程异常退出（rc=%s）" % (name, proc.returncode)
+            failures.append(_proto_fail)
         # ⭐ 超时块**必然写不出** JSON（worker 被杀在写盘前）⇒ 不再叠加一条误导的
         #   「失败清单读不到：No such file …」——只保留上面那条正确的超时 `[FAIL]`。
+        _payload = None
         if not (name in timed_out and not os.path.exists(result)):
             try:
                 with open(result, encoding="utf-8") as fh:
                     _payload = json.load(fh)
-                # `--result` 现为 dict（`node` ＋ `failures`）。只取 failures，
-                # node 不进 stdout：单块快照的行数不能变。
-                failures.extend(_payload["failures"] if isinstance(_payload, dict)
-                                else _payload)
             except Exception as exc:  # noqa: BLE001
-                failures.append("块 %s 的失败清单读不到：%s" % (name, exc))
-    return failures
+                _proto_fail = "块 %s 的失败清单读不到：%s" % (name, exc)
+                failures.append(_proto_fail)
+        _rec = _take_worker_record(name, _payload, _proto_fail)
+        failures.extend(_rec.pop("_parent_failures", []))
+        records.append(_rec)
+    return failures, records
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -4410,6 +4736,10 @@ def main(argv: list[str] | None = None) -> int:
     # 确无 `.git`（如 zip 分发解包后）时用本开关**显式**降级为"标注继续、rc 按其他项定"。
     ap.add_argument("--allow-nogit", action="store_true",
                     help="允许在无 .git 时降级（不因 3 族 git 门控守卫没跑而判红；默认无此开关即判红）")
+    ap.add_argument("--require-all", action="store_true",
+                    help="启用必需范围门禁。必须同时给 --profile；与 --fast/--only/--list-blocks/--allow-nogit 冲突")
+    ap.add_argument("--profile", choices=REQUIRE_PROFILES, default=None,
+                    help="必需范围口径。package 与 development 都把三处块内跳过当未完成")
     # `--only` / `--list-blocks` 面向人工最小子集回归（进 --help）；`--result` 供并行派发的子进程落 JSON
     # （人工单跑可不给 ⇒ 只跑并打印），`--node` 仍纯内部（不写进 --help）。
     ap.add_argument("--only", default=None, metavar="<块名>",
@@ -4425,8 +4755,26 @@ def main(argv: list[str] | None = None) -> int:
     ap.add_argument("--node", default=None, help=argparse.SUPPRESS)
     args = ap.parse_args(argv)
 
-    global ALLOW_NOGIT
+    global ALLOW_NOGIT, REQUIRE_ALL, REQUIRE_PROFILE
     ALLOW_NOGIT = bool(args.allow_nogit)
+    REQUIRE_ALL = bool(args.require_all)
+    REQUIRE_PROFILE = args.profile
+    _usage_conflicts = []
+    if args.require_all and not args.profile:
+        _usage_conflicts.append("--require-all 必须同时给 --profile package|development")
+    if args.profile and not args.require_all:
+        _usage_conflicts.append("--profile 必须与 --require-all 同时给")
+    # `--result` 是父进程派发的内部 worker。它必须带着本块的 --only 与门禁开关，
+    # 这个组合不是人工用法，不能按冲突拒绝。
+    _worker = args.result is not None
+    if args.require_all and not _worker and (args.fast or args.only or args.list_blocks or args.allow_nogit):
+        _hit = [n for n, on in ((" --fast", args.fast), (" --only", args.only),
+                                (" --list-blocks", args.list_blocks), (" --allow-nogit", args.allow_nogit)) if on]
+        _usage_conflicts.append("--require-all 与%s 冲突" % "、".join(x.strip() for x in _hit))
+    if _usage_conflicts:
+        for _msg in _usage_conflicts:
+            sys.stderr.write("[usage] %s\n" % _msg)
+        return 2
 
     xwl.ensure_utf8_stdio()     # 输出全是中文；Windows 控制台默认非 UTF-8 会直接 UnicodeEncodeError
     try:
@@ -4494,9 +4842,10 @@ def main(argv: list[str] | None = None) -> int:
             if _root is None and not _fatal:
                 _only_skip = _why
         if _only_skip is None:
-            failures = _run_block(args.only, fn, args.node or None)
+            failures, _only_record = _run_block(args.only, fn, args.node or None)
         else:
             failures = []
+            _only_record = _skipped_record(args.only, _only_skip)
             if args.result is None:
                 print("[note] 本块未执行：%s（%s）" % (args.only, _only_skip))
         if args.result is None:
@@ -4523,8 +4872,14 @@ def main(argv: list[str] | None = None) -> int:
         # 内容是 dict，不是 list：带上 node，跨机复跑时才看得出差异从哪来。
         # ⚠️ 取值在本分支内就地调，⛔ 不把下面那行 `node:` 的 print 提前到这里。
         with open(args.result, "w", encoding="utf-8") as fh:
-            json.dump({"node": xwl.find_node() or "", "failures": failures}, fh,
-                      ensure_ascii=False)
+            json.dump({
+                "block_id": _only_record.get("block_id"),
+                "state": _only_record.get("state"),
+                "reason": _only_record.get("reason"),
+                "subchecks": _only_record.get("subchecks") or [],
+                "node": xwl.find_node() or "",
+                "failures": failures,
+            }, fh, ensure_ascii=False)
         return 0
 
     node = xwl.find_node()
@@ -4540,7 +4895,8 @@ def main(argv: list[str] | None = None) -> int:
         _fast_skipped = []
 
     jobs = args.jobs if args.jobs is not None else min(6, os.cpu_count() or 4)
-    failures = _run_serial(blocks, node) if jobs <= 1 else _run_parallel(blocks, node, jobs)
+    failures, _records = (_run_serial(blocks, node) if jobs <= 1
+                          else _run_parallel(blocks, node, jobs))
     # 块名基线：**与 `--only` 选哪块无关**地生效（删块正是"没跑到"的那种失败，
     # 只挂进某个块里就永远抓不到它自己）⇒ 在汇总前统一并入 failures。
     _blk_prob = _blocks_baseline_problem()
@@ -4558,7 +4914,15 @@ def main(argv: list[str] | None = None) -> int:
     _unrun = _blocks_unexecuted(_registered)
     _ran_names = [n for n, _fn in blocks if n not in dict(_unrun)]
     print(_summary_line(_registered, _ran_names, failures, _unrun))
-    return 1 if failures else 0
+    if not args.require_all:
+        return 1 if failures else 0
+    if args.fast:
+        for _name in _fast_skipped:
+            _records.append(_skipped_record(_name, "--fast 未选择"))
+    _rc, _lines = _aggregate_gate(_records)
+    for _line in _lines:
+        print(_line)
+    return _rc
 
 
 if __name__ == "__main__":

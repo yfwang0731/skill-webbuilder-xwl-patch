@@ -146,10 +146,15 @@ def _check_diffguard(tmp, node, failures, write) -> None:
         print("[note] 无法建立临时 git 仓库，跳过 diffguard 断言")
         # ⚠️ 这条 `return` 是"整块跳过"的**出口**：⑩ 超时臂不依赖仓库，它的结论必须在这里带走，
         #   否则"建库失败 ＋ 超时判据真的坏了"会表现成一句无害的 [note]（静默降级）。
+        # 门禁两档都把建仓失败当未完成，不得改成不适用。普通档仍只留 note，不因此改退出码。
+        if REQUIRE_ALL:
+            _mark_sub(_SUBCHECKS, "repo", "未完成", "临时 git 仓库建立失败，压平断言未跑")
         if dg:
             failures.extend(dg)
         return
     BASE = SRC                                  # dg.xwl 的当前基线（= 最近一次提交的内容）
+    if REQUIRE_ALL:
+        _mark_sub(_SUBCHECKS, "repo", "通过", "临时仓库已建立，压平断言继续执行")
 
     # `dg` 已在函数开头初始化（⑩ 超时臂先跑）—— ⛔ 别在这里再 `dg = []`，那会把 ⑩ 的结论清掉。
 

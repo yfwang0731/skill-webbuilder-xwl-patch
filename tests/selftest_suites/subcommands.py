@@ -275,6 +275,9 @@ def _check_subcommands(tmp, node, failures, write) -> None:
     _check_events_and_expand(tmp, failures)
     # 跳链护栏：三跳里任一跳被删，下游断言会整段静默消失（行为面查不出来）⇒ 只能守形状。
     failures.extend(_block_chain_fails())
+    # 尾段能执行到这里，才算这一跳完成。中途 return 时父进程会保持「未选择」，门禁下不得当通过。
+    if REQUIRE_ALL:
+        _mark_sub(_SUBCHECKS, "chain.tail", "通过", "subcommands 尾段已执行")
 
 def _block_chain_fails() -> list[str]:
     """三跳调用链的**形状断言**：`_check_subcommands` → `_check_events_and_expand` → `_check_subcommands_tail`。

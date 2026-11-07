@@ -160,6 +160,8 @@ def _check_write_gate(tmp, node, failures, write) -> None:
 
     if not node:
         print("[note] 未执行：Node 不可用，依赖真 node 的写前抽查跳过")
+        if REQUIRE_ALL:
+            _mark_sub(_SUBCHECKS, "js.write_gate", "未完成", "Node 不可用，写前 JS 门禁未跑")
 
     p = write("wg_g1.xwl", _page({"click": "void 0;"}))
     before = _bytes(p)
@@ -498,6 +500,8 @@ def _check_write_gate(tmp, node, failures, write) -> None:
     if not node:
         print("[note] 未执行 %d 条写前门禁断言（Node 不可用）：%s"
               % (len(_JS_GATED_WRITE), "、".join(_JS_GATED_WRITE)))
+    elif REQUIRE_ALL:
+        _mark_sub(_SUBCHECKS, "js.write_gate", "通过", "写前 JS 门禁已执行")
     _check_write_gate_rest(tmp, node, failures, write, _cli, _ops, _bytes, _page, xwl_py)
 
 @_cap
@@ -625,8 +629,12 @@ def _check_write_gate_rest(tmp, node, failures, write, _cli, _ops, _bytes, _page
               and "box.a.b.c#click#2 " in joined
               and "box.a.b.c#click#3 " in joined,
               "同渲染撞名未加后缀：%r" % (evs2,))
+        if REQUIRE_ALL:
+            _mark_sub(_SUBCHECKS, "js.write_post", "通过", "写后 JS 采集已执行")
     else:
         print("[note] 未执行 1 条（Node 不可用）：G20a-前置（--no-js 已写入）")
+        if REQUIRE_ALL:
+            _mark_sub(_SUBCHECKS, "js.write_post", "未完成", "Node 不可用，写后 JS 采集未跑")
 
     # 备份目录不可写：chmod 之后先探测，目录真写不进去才算环境成立。
     try:
@@ -683,8 +691,12 @@ def _check_write_gate_rest(tmp, node, failures, write, _cli, _ops, _bytes, _page
         wrote = _bytes(p) != before
         _need(rc == 1 and wrote and "已写入" in text and "写后" in text and "未写入" not in text,
               "写后 node 故障未按已写入回报 rc=%s wrote=%s" % (rc, wrote))
+        if REQUIRE_ALL:
+            _mark_sub(_SUBCHECKS, "js.write_fault", "通过", "写后 node 故障断言已执行")
     else:
         print("[note] 未执行：Node 不可用")
+        if REQUIRE_ALL:
+            _mark_sub(_SUBCHECKS, "js.write_fault", "未完成", "Node 不可用，写后 node 故障断言未跑")
 
     p = write("wg_ro.xwl", _page())
     before = _bytes(p)

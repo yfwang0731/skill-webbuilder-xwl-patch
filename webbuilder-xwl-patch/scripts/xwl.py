@@ -1491,6 +1491,102 @@ def _js_err_head(err: str) -> str:
     return "语法错误"
 
 
+_EXEC_STATES = ("通过", "失败", "未完成", "不适用", "未选择")
+
+
+def artifact_assess(items, *, call_ok, object_ok):
+    """把一次成果物检查拆成调用、对象、覆盖三个维度。
+
+    执行状态仍用通过／失败／未完成／不适用／未选择。三个维度可同时成立。
+    必需项上的「未选择」是缺口，保持原词，不改成不适用。
+    """
+    rows = []
+    gaps = []
+    failed = False
+    for it in items:
+        state = it["state"]
+        if state not in _EXEC_STATES:
+            raise ValueError("未知执行状态：%s" % state)
+        required = bool(it.get("required"))
+        rows.append({"id": it["id"], "state": state, "required": required})
+        if state == "失败":
+            failed = True
+        if required and state != "通过":
+            gaps.append(it["id"])
+    coverage = "完成" if not gaps else "未完成"
+    qualified = _artifact_qualified(bool(call_ok), bool(object_ok), coverage, failed)
+    return {
+        "call_ok": bool(call_ok),
+        "object_ok": bool(object_ok),
+        "coverage": coverage,
+        "qualified": qualified,
+        "items": rows,
+        "gaps": gaps,
+    }
+
+
+def _artifact_qualified(call_ok, object_ok, coverage, failed):
+    """覆盖未完成时结论不是合格。对象合格不能代替覆盖完成。"""
+    if coverage != "完成":
+        return False
+    return bool(call_ok and object_ok and not failed)
+
+
+def format_artifact(view) -> str:
+    """三个维度各占一行，结论单独一行。"""
+    lines = [
+        "调用成功：%s" % ("是" if view["call_ok"] else "否"),
+        "对象合格：%s" % ("是" if view["object_ok"] else "否"),
+        "覆盖完成：%s" % view["coverage"],
+        "结论：%s" % ("合格" if view["qualified"] else "不合格"),
+    ]
+    for row in view["items"]:
+        lines.append("执行状态 %s：%s" % (row["id"], row["state"]))
+    if view["gaps"]:
+        lines.append("必需范围缺口：%s" % "、".join(view["gaps"]))
+    return "\n".join(lines)
+
+
+class ArtifactSnapshots:
+    """同一快照只采用一份证据。摘要不变则复用；变了则旧证据作废。"""
+
+    def __init__(self):
+        self._saved = {}
+
+    def run(self, key, digest, producer):
+        prev = self._saved.get(key)
+        if prev is not None and prev[0] == digest:
+            view = dict(prev[1])
+            view["reuse"] = True
+            view["note"] = "同一快照，复用既有证据"
+            return view
+        view = dict(producer())
+        if prev is not None:
+            view["reuse"] = False
+            view["stale"] = True
+            view["note"] = "文件或依赖已变，旧证据失效"
+        else:
+            view["reuse"] = False
+            view["note"] = "本次执行"
+        self._saved[key] = (digest, dict(view))
+        return view
+
+
+def js_artifact(*, node_found, js_required, object_ok, call_ok=True):
+    """未声明 JS 必需时返回 None，调用方保持原有 check 结论。
+
+    声明必需且 node 缺失时，覆盖为未完成，结论不是合格。
+    """
+    if not js_required:
+        return None
+    state = "通过" if node_found else "未完成"
+    return artifact_assess(
+        [{"id": "js", "state": state, "required": True}],
+        call_ok=call_ok,
+        object_ok=object_ok,
+    )
+
+
 def cmd_check(args) -> int:
     # 注册表事实源：一次命令上下文只加载一次 —— 入口清身份缓存（跨命令不复用旧缓存）。
     _registry_reset()
@@ -1828,6 +1924,15 @@ def cmd_check(args) -> int:
         failed = True
         print("=== 结果:", "FAIL")
         return 2
+    _js_view = js_artifact(
+        node_found=node is not None,
+        js_required=bool(getattr(args, "js_required", False)),
+        object_ok=not failed,
+    )
+    if _js_view is not None and _js_view["coverage"] != "完成":
+        print(format_artifact(_js_view))
+        print("=== 结论: 不合格")
+        return 1 if failed else 0
     print("=== 结果:", "FAIL" if failed else "ALL OK")
     return 1 if failed else 0
 

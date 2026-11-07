@@ -897,6 +897,8 @@ def _ng_check_controls(tmp, node, failures, write) -> None:
             1, CRLF))
     if node is None:
         print("[note] ⑤ `#71` 行序确定：无 node ⇒ 跳过（⑥-ext 需真跑 node；`--only` 不自动找 node ⇒ 加 `--node`）")
+        if REQUIRE_ALL:
+            _mark_sub(_SUBCHECKS, "js.71", "未完成", "未找到 node，#71 JS 档未跑")
     else:
         _o71 = []
         for _sd in ("0", "1", "2", "3", "4"):
@@ -916,6 +918,8 @@ def _ng_check_controls(tmp, node, failures, write) -> None:
             failures.extend(hash_fail)
         else:
             print("[ok]  ⑤ `#71` ⑥-ext：同节点 ≥2 个坏 `[js]` 键时，换 5 个 `PYTHONHASHSEED` 输出规范化后逐字节一致")
+        if REQUIRE_ALL:
+            _mark_sub(_SUBCHECKS, "js.71", "通过", "#71 JS 档已执行")
 
 @_cap
 def _ng_contract_and_unit(tmp, node, failures, write) -> None:

@@ -3,7 +3,7 @@
   "name_en": "webbuilder-xwl-patch",
   "displayName": "webbuilder-xwl-patch",
   "author": "yfwang0731",
-  "version": "1.7.15",
+  "version": "1.8.0",
   "schema_version": "1.0",
   "description": "WebBuilder（wb）平台 .xwl 定义文件的处理与安全编辑：结构级 patch（只给值 / 子树，工具按设计器自己的算法重建整份文件）+ 格式校验 + 相对 git 基线的压平检测。",
   "core_capabilities": [
@@ -161,6 +161,11 @@
     "references/workflow-notes-guards-maintenance.md": "evidence"
   },
   "update_history": [
+    {
+      "version": "1.8.0",
+      "date": "2026-11-07",
+      "summary": "自检必需范围与成果物覆盖（minor）：新增自检契约，不是新的 xwl 子命令。① `selftest` 增加 `--require-all` 与 `--profile package|development`，二者必须同时给出；与 `--fast`、`--only`、`--list-blocks`、`--allow-nogit` 同用为用法错。每块给出完成状态：通过、失败、未完成、不适用、未选择，并带理由和子检查状态。`package` 与 `development` 都把 diffguard 建临时仓库失败、Node 缺失下的 JS 档、`docs` 的 Git 守卫族降级记为未完成。门禁未完成、缺配置、协议错误为退出码 2，断言失败为 1。普通档不加该开关时，退出码仍只看断言失败。② 成果物检测另记三个维度：调用成功、对象合格、覆盖完成，三者可同时成立；同一结果可以是对象合格且覆盖未完成。同一快照未变更时复用并说明，文件或依赖变更后旧证据失效。调用方声明该次 JS 必需且未跑时，覆盖为未完成，最终结论不得写合格。不声明必需时，`check` 缺 `node` 仍只提示，退出码不变。"
+    },
     {
       "version": "1.7.15",
       "date": "2026-11-06",

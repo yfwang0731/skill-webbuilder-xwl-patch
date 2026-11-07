@@ -38,7 +38,7 @@ jobs:
       # 本工具输出全是中文，所以这个 job 同时也在守"非 UTF-8 控制台下不崩"。
       # **不要**在这里设 PYTHONUTF8/PYTHONIOENCODING —— 那会把这个问题盖住，CI 就白跑了。
       - name: Run selftest
-        run: python scripts/selftest.py
+        run: python scripts/selftest.py --require-all --profile package
 
       - name: Smoke test CLI
         run: |
@@ -56,7 +56,8 @@ jobs:
         run: python scripts/privacy_scan.py
 
   # 非 git 布局（模拟平台把 skill 打成 zip、解包后没有 .git）：
-  #   默认必须**判红**（静默绿是病根）；显式 `--allow-nogit` 才降级为"打印没扫、rc 按其他项定"。
+  #   带 `--require-all --profile package` 时 docs 的 Git 守卫族记为未完成，rc 恰为 2。
+  #   不带门禁的 `--allow-nogit` 仍是普通档降级：rc=0 并打印未执行清单。
   no-git-layout:
     name: no-git layout（无 .git）
     runs-on: ubuntu-24.04
@@ -74,38 +75,39 @@ jobs:
       - name: Remove .git（造非 git 布局）
         run: rm -rf .git
 
-      # 三判缺一不可 —— 只判「退出码非零」等于把默认路径**独有**的故障（traceback / ImportError /
-      #   语法错）也当成"符合预期"：
-      #   ① `rc` **恰为 1**（不是任意非零）；
-      #   ② 失败原因必须是 git 门控 —— 那句「默认判红 —— 静默绿是病根」只在**非** `--allow-nogit`
-      #     分支 `doc_fail` 里生成，所以它能证明"红的是该红的那条"，而不是别的什么先炸了；
-      #   ③ 不许出现 traceback（属"红得不对"，不是预期路径）。
-      #   ⚠️ `grep` 扫**整份输出**（⛔ 不能只看 failures 段就下结论）。⚠️ 已知限度：`doc_fail` 只展开
-      #     前 12 条、其余打「另有 N 条未展开」⇒ 若已存在 ≥12 条**其它** doc 守卫失败把原因串挤出
-      #     前 12，本步会报「原因不是 git 门控」。那属**误报原因**、不是漏检（CI 本来就是红的）。
-      #   ⚠️ 输出落 `$RUNNER_TEMP`（⛔ 不往仓根写，本 job 已 `rm -rf .git`、写进去没人管）。
-      - name: Default must fail（无 .git 默认判红：rc 恰为 1 ＋ 原因串 ＋ 无 traceback）
+      # 三判缺一不可 —— 只判「退出码非零」等于把 traceback / ImportError / 语法错也当成符合预期：
+      #   ① `rc` **恰为 2**（门禁未完成；不是断言失败的 1，也不是任意非零）；
+      #   ② 输出含「[require-all] 未完成块：docs」和「取不到 git 清单」；
+      #   ③ 不许出现 traceback。
+      #   ⚠️ `grep -F` 扫整份输出。方括号是字面，不当正则字符类。
+      #   ⚠️ 输出落 `$RUNNER_TEMP`（不往仓根写，本 job 已 `rm -rf .git`）。
+      - name: Require-all must be incomplete（无 .git：rc 恰为 2 ＋ 未完成块 docs ＋ 无 traceback）
         run: |
           set +e
-          python scripts/selftest.py > "$RUNNER_TEMP/nogit_default.txt" 2>&1
+          python scripts/selftest.py --require-all --profile package > "$RUNNER_TEMP/nogit_default.txt" 2>&1
           rc=$?
           set -e
-          [ "$rc" -eq 1 ] || {
-            echo "::error::期望 rc 恰为 1，实得 $rc（任意非零会把 traceback／ImportError／语法错也放进来）"
+          [ "$rc" -eq 2 ] || {
+            echo "::error::期望 rc 恰为 2，实得 $rc（门禁未完成不是断言失败，也不是任意非零）"
             tail -40 "$RUNNER_TEMP/nogit_default.txt"
             exit 1
           }
-          grep -q "默认判红 —— 静默绿是病根" "$RUNNER_TEMP/nogit_default.txt" || {
-            echo "::error::失败原因不是 git 门控（没打印「默认判红 —— 静默绿是病根」）"
+          grep -F -q "[require-all] 未完成块：docs" "$RUNNER_TEMP/nogit_default.txt" || {
+            echo "::error::没有点名未完成块 docs"
+            tail -40 "$RUNNER_TEMP/nogit_default.txt"
+            exit 1
+          }
+          grep -F -q "取不到 git 清单" "$RUNNER_TEMP/nogit_default.txt" || {
+            echo "::error::没有说明取不到 git 清单"
             tail -40 "$RUNNER_TEMP/nogit_default.txt"
             exit 1
           }
           ! grep -q "Traceback (most recent call last)" "$RUNNER_TEMP/nogit_default.txt" || {
-            echo "::error::出现 traceback，属默认路径独有异常（不是预期的 git 门控红）"
+            echo "::error::出现 traceback，不是预期的未完成路径"
             tail -40 "$RUNNER_TEMP/nogit_default.txt"
             exit 1
           }
-          echo "OK：无 .git 默认判红 —— rc=1、原因串在、无 traceback"
+          echo "OK：无 .git 且 --require-all --profile package —— rc=2、未完成块 docs、无 traceback"
 
       # 断言**两个面**：① 降级路径本身必须 rc=0；② 必须**打印**那句降级清单。
       #   ⚠️ 断的是**那一句**「本次 … 未执行：无 git」：只 grep "未执行" 会被其它同类字样蒙过
