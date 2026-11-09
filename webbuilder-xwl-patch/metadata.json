@@ -3,7 +3,7 @@
   "name_en": "webbuilder-xwl-patch",
   "displayName": "webbuilder-xwl-patch",
   "author": "yfwang0731",
-  "version": "1.8.0",
+  "version": "1.8.1",
   "schema_version": "1.0",
   "description": "WebBuilder（wb）平台 .xwl 定义文件的处理与安全编辑：结构级 patch（只给值 / 子树，工具按设计器自己的算法重建整份文件）+ 格式校验 + 相对 git 基线的压平检测。",
   "core_capabilities": [
@@ -161,6 +161,11 @@
     "references/workflow-notes-guards-maintenance.md": "evidence"
   },
   "update_history": [
+    {
+      "version": "1.8.1",
+      "date": "2026-11-09",
+      "summary": "检查正确性与说明收口（patch）：无新子命令或参数；params 与 sqlrefs 的供给算法和既有码值不扩张。① 数字形态估算只统计有效对象正文中的数字值 token，按方向性多重集差显示，0 仅表示本方向无差异。② params --upstream 的早返与正常汇总出口直接消费扫描失败路径，不再重复追加 .xwl。③ SKILL/FAQ/CLI 与测量说明对齐 upstream 默认/strict 码值矩阵：读取失败、内容失败并存和未核对分别按真实结果汇总；上游候选不加入已证明供给，未定位模块根明确跳过。④ sqlrefs 说明统一为本文件内静态集合近似，已提供不证明执行、时序、分支或跨 module 生命周期有效。⑤ sqlrefs 对有适用内容的 OK、FAIL 和依赖读取失败恰输出一次证明边界提示；主输入坏或无适用内容不输出，剔除提示后原 stdout 不变。⑥ checklist 增加给定对象上的保护区结构比较与事件生命周期独立验收指引，不改变关联范围与调度口径。"
+    },
     {
       "version": "1.8.0",
       "date": "2026-11-07",

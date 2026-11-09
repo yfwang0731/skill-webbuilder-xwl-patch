@@ -157,28 +157,105 @@ def _f05_dep_cases(tmp):
         fail.append("F05：默认档「读失败＋悬空」应 rc=2（读失败本身升级），实得 %s\n%s"
                     % (rc0, out0))
 
-    # ⑤ 反查扫描读取失败 ⇒ 分桶可见＋「反查覆盖未完成」＋ rc=2（默认/strict）
-    r, m = _f05_proj(tmp, "upstream_bad")
-    page = _f05_make_page(m)
-    _f05_write_carrier(m)
-    with open(os.path.join(m, "caller.xwl"), "w", encoding="utf-8", newline="") as f:
+    # ⑤ 反查扫描读取失败 ⇒ 两个汇总出口直接消费 `_scan_upstream.failed` 的原始相对路径。
+    #    早返出口用“SQL 无占位符”使 `needed` 为空；末行出口仍保留一个真实占位符。
+    #    路径夹具同时覆盖根文件、子目录普通 `.xwl` 和合法 `.xwl.xwl`。
+    _upstream_paths = ("caller.xwl", "sub/caller.xwl", "double/name.xwl.xwl")
+
+    def _exercise_upstream_failure_paths(case, carrier_body):
+        _r5, _m5 = _f05_proj(tmp, case)
+        _page5 = _f05_make_page(_m5)
+        _f05_write_carrier(_m5, carrier_body)
+        for _rel5 in _upstream_paths:
+            _bad5 = os.path.join(_m5, *(_rel5.split("/")))
+            os.makedirs(os.path.dirname(_bad5), exist_ok=True)
+            with open(_bad5, "w", encoding="utf-8", newline="") as _fh5:
+                _fh5.write("{ 坏掉的 caller")
+        for _strict in (False, True):
+            _rc5, _out5 = _f05_run_params(_page5, _m5, strict=_strict, upstream=True)
+            _where5 = "%s strict=%s" % (case, _strict)
+            if _rc5 != 2:
+                fail.append("F05：反查扫描读失败（%s）应 rc=2，实得 %s\n%s"
+                            % (_where5, _rc5, _out5))
+            if "扫描范围：本根" not in _out5 or "读取失败 3" not in _out5:
+                fail.append("F05：反查未给「扫描范围/读取失败 3 处分桶」（%s）：\n%s"
+                            % (_where5, _out5))
+            if "反查覆盖" not in _out5 or "未完成" not in _out5:
+                fail.append("F05：反查有失败时未标「反查覆盖未完成」（%s）：\n%s"
+                            % (_where5, _out5))
+            _listed5 = []
+            for _line5 in _out5.splitlines():
+                _m5path = re.search(r"·\s+([^：]+)：", _line5)
+                if _m5path:
+                    _listed5.append(_m5path.group(1))
+            if set(_upstream_paths) - set(_listed5):
+                fail.append("F05：反查失败清单未按真实相对路径逐字列出（%s）：%r\n%s"
+                            % (_where5, _listed5, _out5))
+            for _wrong5 in ("caller.xwl.xwl", "sub/caller.xwl.xwl",
+                            "double/name.xwl.xwl.xwl"):
+                if _wrong5 in _out5:
+                    fail.append("F05：反查失败路径被重复追加 `.xwl`（%s，出现 %r）：\n%s"
+                                % (_where5, _wrong5, _out5))
+            if "[FAIL] 依赖读取失败 3 处" not in _out5:
+                fail.append("F05：汇总失败行未准确保留 3 个反查读取失败（%s）：\n%s"
+                            % (_where5, _out5))
+
+    _exercise_upstream_failure_paths(
+        "upstream_bad_early", '{"children":[{"type":"dataprovider","configs":'
+                             '{"itemId":"dp","sql":"select 1 from dual"}}]}')
+    _exercise_upstream_failure_paths("upstream_bad_final", _F05_CARRIER_OK)
+
+    # ⑥ 早返出口的「strict 悬空 ＋ 反查读取失败」仍是 rc=1，并同列读取失败。
+    r, m = _f05_proj(tmp, "upstream_bad_early_dangling")
+    page = os.path.join(m, "demo", "page.xwl")
+    _dump({"title": "p", "children": [_store("s1", "m?xwl=demo/missing")]}, page)
+    with open(os.path.join(m, "bad_caller.xwl"), "w", encoding="utf-8", newline="") as f:
         f.write("{ 坏掉的 caller")
-    for _strict in (False, True):
+    for _strict, _want in ((False, 2), (True, 1)):
         rc, out = _f05_run_params(page, m, strict=_strict, upstream=True)
-        if rc != 2:
-            fail.append("F05：反查扫描读失败（strict=%s）应 rc=2，实得 %s\n%s"
-                        % (_strict, rc, out))
-        if "扫描范围：本根" not in out or "读取失败 1" not in out:
-            fail.append("F05：反查未给「扫描范围/成功失败分桶」（strict=%s）：\n%s"
+        if rc != _want:
+            fail.append("F05：早返「悬空＋反查读失败」strict=%s 应 rc=%s，实得 %s\n%s"
+                        % (_strict, _want, rc, out))
+        if "反查覆盖" not in out or "读取失败" not in out:
+            fail.append("F05：早返「悬空＋反查读失败」strict=%s 未同列读取失败：\n%s"
                         % (_strict, out))
-        if "反查覆盖" not in out or "未完成" not in out:
-            fail.append("F05：反查有失败时未标「反查覆盖未完成」（strict=%s）：\n%s"
-                        % (_strict, out))
+        if _strict and not any(l.strip().startswith("[warn]") and "#36" in l
+                               for l in out.splitlines()):
+            fail.append("F05：早返 strict 未报告 >0 处悬空：\n%s" % out)
+
+    # ⑦ 上游候选不加入 `provided`；关闭 --upstream 的既有诊断保持。
+    r, m = _f05_proj(tmp, "upstream_candidate")
+    page = _f05_make_page(m, provide=False)
+    _f05_write_carrier(m)
+    _dump({"title": "caller", "children": [{
+        "type": "button", "configs": {"itemId": "open"},
+        "expanded": False, "children": [],
+        "events": {"click": "Wb.open({url:'m?xwl=demo/page', params:{p:1}});"},
+    }]}, os.path.join(m, "caller.xwl"))
+    rc, out = _f05_run_params(page, m, strict=True, upstream=True)
+    if rc != 1 or "外部可传入" not in out or "确缺参" not in out or "p" not in out:
+        fail.append("F05：上游候选不得抵消本页确缺参（应 rc=1 且同时出现候选与缺参）：\n%s" % out)
+    rc_off, out_off = _f05_run_params(page, m)
+    if (rc_off != 0 or "确缺参" not in out_off or "外部可传入" in out_off
+            or "扫描范围：本根" in out_off):
+        fail.append("F05：关闭 --upstream 的既有 params 输出发生漂移：rc=%s\n%s"
+                    % (rc_off, out_off))
+
+    # ⑧ 未定位模块根必须明确提示跳过，不能把未执行反查说成成功。
+    _r8 = os.path.join(tmp, "f05proj", "upstream_no_root")
+    _p8 = os.path.join(_r8, "page.xwl")
+    _dump({"title": "no-root", "children": []}, _p8)
+    rc8, out8 = _f05_run_params(_p8, None, upstream=True)
+    if (rc8 != 0 or "未找到模块根" not in out8 or "跳过跨页反查" not in out8
+            or "反查成功" in out8):
+        fail.append("F05：未定位模块根未明确跳过（rc=%s）：\n%s" % (rc8, out8))
 
     if fail:
         return fail
     print("[ok]  F05 依赖读取面：SQL 载体/反查扫描 读失败默认与 strict 均留缺口（2）；"
-          "部分失败不抵消；宽容写法载体可解析并报缺；strict 内容失败优先 1 并同列读失败")
+          "反查早返/末行出口均保留普通及双后缀文件的真实相对路径；"
+          "早返悬空与读取失败按 2/1 汇总；上游候选不抵消缺参；"
+          "未定位模块根明确跳过；部分失败不抵消；宽容写法载体可解析并报缺")
     return []
 
 _AV03_REG = [
@@ -482,6 +559,13 @@ def _ng_cli_readonly(tmp, node, failures, write) -> None:
     if "载入侧未纳入核对" in _out_off:
         up_fail.append("② 不开 `--upstream` 时仍打印了汇总行（这是「不开时输出与冻结基线逐字一致」"
                        "的必要条件；该口径只对**无 miss 页面**成立）")
+    _params_help_flat = re.sub(r"\s+", " ", _params_help)
+    for _need_help in ("候选不并入已证明供给", "缺参/悬空 0/1", "读取失败 2/2",
+                       "读取失败并存 2/1", "仅未核对 0/2", "未定位模块根"):
+        if _need_help not in _params_help_flat:
+            up_fail.append("② `params --upstream --help` 缺少真实码值说明：%r" % _need_help)
+    if "不改退出码" in _params_help:
+        up_fail.append("② `params --upstream --help` 仍保留误导旧句「不改退出码」")
     if up_fail:
         failures.extend(up_fail)
     else:

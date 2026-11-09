@@ -56,6 +56,22 @@ def _s1s3_named_cases(tmp) -> list:
     fail: list[str] = []
     d = os.path.join(tmp, "s1s3")
     os.makedirs(d, exist_ok=True)
+    boundary_note = (
+        "[note] 本检查仅作文件内静态供给集合核对；不证明供给调用必经执行、消费前时序、分支或"
+        "跨 module 生命周期有效。"
+    )
+
+    def _check_boundary(out, where, expected):
+        count = out.splitlines().count(boundary_note)
+        if count != (1 if expected else 0):
+            fail.append("%s 证明边界 note 次数=%d（应%r）" % (
+                where, count, 1 if expected else 0))
+            return
+        if expected:
+            lines = out.splitlines()
+            pos = lines.index(boundary_note)
+            if pos + 1 >= len(lines) or not lines[pos + 1].startswith("=== 结果:"):
+                fail.append("%s 证明边界 note 不在统一结果行之前" % where)
 
     def _w(path, obj):
         with open(path, "w", encoding="utf-8", newline="") as fh:
@@ -126,34 +142,45 @@ def _s1s3_named_cases(tmp) -> list:
         rc, o = _run(xwl.cmd_sqlrefs, file=p)
         if rc != want:
             fail.append("序2-供给[%s] rc=%r(应%r)" % (nm, rc, want))
+        _check_boundary(o, "序2-供给[%s]" % nm, True)
     p = _carrier("sr_dyn", sql="select {#x#} from t", ss="request.setAttribute(name, 1);")
     rc, o = _run(xwl.cmd_sqlrefs, file=p)
     if rc != 1 or "可能提供" not in o:
         fail.append("序2-动态可能提供 rc=%r" % rc)
+    _check_boundary(o, "序2-动态可能提供", True)
 
     # 序3：无适用内容 rc1；空dataprovider rc1；select 1 rc0；serverScript含禁止逐项 rc1；加载失败 rc2
     p = os.path.join(d, "e0.xwl"); _w(p, {"title": "e", "children": []})
     rc, o = _run(xwl.cmd_sqlrefs, file=p)
     if rc != 1 or "无适用检查内容" not in o:
         fail.append("序3-无适用内容 rc=%r" % rc)
+    _check_boundary(o, "序3-无适用内容", False)
     p = os.path.join(d, "e1.xwl"); _w(p, {"title": "e", "children": [
         {"configs": {"itemId": "d", "sql": "select 1"}, "type": "dataprovider",
          "expanded": False, "children": []}]})
     rc, o = _run(xwl.cmd_sqlrefs, file=p)
     if rc != 0:
         fail.append("序3-select1 rc=%r(应0)" % rc)
+    _check_boundary(o, "序3-select1", True)
     p = os.path.join(d, "e2.xwl"); _w(p, {"title": "e", "children": [
         {"configs": {"itemId": "m", "serverScript": "var a='{#bad#}';"}, "type": "module",
          "expanded": False, "children": []}]})
     rc, o = _run(xwl.cmd_sqlrefs, file=p)
     if rc != 1 or "{#…#}" not in o:
         fail.append("序3-serverScript禁止引用逐项 rc=%r" % rc)
+    _check_boundary(o, "序3-serverScript禁止引用", True)
+    if boundary_note in o:
+        problem_pos = o.find("{#…#}")
+        note_pos = o.find(boundary_note)
+        if problem_pos < 0 or note_pos < problem_pos:
+            fail.append("序3-serverScript禁止引用：note 盖在具体 [FAIL] 诊断之前")
     p = os.path.join(d, "e3.xwl")
     with open(p, "w", encoding="utf-8", newline="") as fh:
         fh.write("{not json")
     rc, o = _run(xwl.cmd_sqlrefs, file=p)
     if rc != 2:
         fail.append("序3-加载失败 rc=%r(应2)" % rc)
+    _check_boundary(o, "序3-加载失败", False)
     return fail
 
 @_cap

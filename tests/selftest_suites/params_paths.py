@@ -170,6 +170,8 @@ def _check_params_paths(tmp, node, failures, write) -> None:
 
     # F05：读依赖失败不得被吞（可选资源面：`var.json` 三分＋sqlrefs 同源；依赖面在 new_guards 块）
     failures.extend(_f05_var_cases(tmp))
+    # params --upstream 五类默认/strict 真实 rc 矩阵
+    failures.extend(_f05_upstream_matrix_cases(tmp))
     # AV-03：注册表一次加载的 `params` 面（check/itemids 面在 new_guards 块）
     failures.extend(_av03_params_cases(tmp))
 
@@ -297,15 +299,64 @@ def _f05_var_cases(tmp):
     rc, out = _run(xwl.cmd_sqlrefs, file=carrier)
     if rc != 0:
         fail.append("F05：sqlrefs 未发现 var.json 应 rc=0，实得 %s\n%s" % (rc, out))
+    _note = ("[note] 本检查仅作文件内静态供给集合核对；不证明供给调用必经执行、消费前时序、"
+             "分支或跨 module 生命周期有效。")
+    if out.splitlines().count(_note) != 1:
+        fail.append("F05：sqlrefs 未发现 var.json 时证明边界 note 不是恰一次：\n%s" % out)
     _f05_write_var(r, "{ not json")
     rc, out = _run(xwl.cmd_sqlrefs, file=carrier)
     if rc != 2 or "读依赖失败" not in out:
         fail.append("F05：sqlrefs 的 var.json 坏 JSON 应 rc=2 且点名，实得 %s\n%s" % (rc, out))
+    if out.splitlines().count(_note) != 1:
+        fail.append("F05：sqlrefs 依赖读失败时证明边界 note 不是恰一次：\n%s" % out)
+    _lines = out.splitlines()
+    if _note in _lines:
+        _pos = _lines.index(_note)
+        if _pos + 1 >= len(_lines) or not _lines[_pos + 1].startswith("=== 结果:"):
+            fail.append("F05：sqlrefs 依赖读失败时证明边界 note 不在统一结果行之前：\n%s" % out)
 
     if fail:
         return fail
     print("[ok]  F05 可选资源面：var.json 三分（未发现不算失败/空字典正常/坏或结构不合失败）"
           "＋ sqlrefs 同源；default/strict 与「同时有已确认缺参」组合按码值解释")
+    return []
+
+def _f05_upstream_matrix_cases(tmp):
+    """`params --upstream` 五类场景的默认/strict rc 矩阵。"""
+    fail: list = []
+    cases = (
+        ("normal", True, False, False, (0, 0)),
+        ("confirmed_content_issue", False, False, False, (0, 1)),
+        ("read_failure_only", True, True, False, (2, 2)),
+        ("read_failure_and_content", False, True, False, (2, 1)),
+        ("unknown_only", False, False, True, (0, 2)),
+    )
+    no_need_carrier = ('{"children":[{"type":"dataprovider","configs":'
+                       '{"itemId":"dp","sql":"select 1 from dual"}}]}')
+    for name, provide, reads_bad, unknown, expected in cases:
+        r, m = _f05_proj(tmp, "upstream_matrix_" + name)
+        extra = []
+        if unknown:
+            extra.append({
+                "type": "button", "configs": {"itemId": "dyn"},
+                "expanded": False, "children": [],
+                "events": {"click": "Wb.request({url:dynUrl, params:{p:1}});"},
+            })
+        page = _f05_make_page(m, provide=provide, extra=extra)
+        _f05_write_carrier(m, no_need_carrier if name == "read_failure_only"
+                           else _F05_CARRIER_OK)
+        if reads_bad:
+            with open(os.path.join(m, "bad_caller.xwl"), "w",
+                      encoding="utf-8", newline="") as f:
+                f.write("{ broken caller")
+        actual = tuple(_f05_run_params(page, m, strict=strict, upstream=True)[0]
+                       for strict in (False, True))
+        if actual != expected:
+            fail.append("upstream 五类矩阵 %s 默认/strict 应 %r，实得 %r"
+                        % (name, expected, actual))
+    if fail:
+        return fail
+    print("[ok]  params --upstream 默认/strict rc 矩阵五类齐全")
     return []
 
 _AV03_REG = [

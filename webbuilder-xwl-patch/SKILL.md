@@ -2,7 +2,7 @@
 name: webbuilder-xwl-patch
 slug: skill-webbuilder-xwl-patch
 displayName: webbuilder-xwl-patch
-version: 1.8.0
+version: 1.8.1
 license: MIT
 metadata:
   category: development-tools
@@ -219,7 +219,7 @@ hidden, children, roles, title, iconCls, inframe, pageLink
    └─ type="dataprovider"  configs{ itemId, sql, totalSql?, … }  ← 执行 SQL、出数据
 ```
 
-`serverScript` 只产**条件片段**（`{#x#}` 是**文本替换**，⛔ 别在 `dataprovider` 再写一遍完整 SELECT），其余见 [`references/sql-fragments.md`](references/sql-fragments.md)。`params --upstream` **默认关**：开时单根全扫、多两段分组、**不并入 `provided`、不改退出码**；零成本与那条 `[note]` 见 [`references/faq.md`](references/faq.md)，口径见 [`references/measured-data-criteria.md`](references/measured-data-criteria.md) 的 `11.3`／`11.4`。
+`serverScript` 只产**条件片段**（`{#x#}` 是**文本替换**，⛔ 别在 `dataprovider` 再写一遍完整 SELECT），其余见 [`references/sql-fragments.md`](references/sql-fragments.md)。`params --upstream` **默认关**：开时单根全扫、多两段分组；上游候选不加入已证明供给，不能抵消本页缺参。退出码按默认/strict 为：无问题 `0/0`、确缺参或确悬空 `0/1`、读取失败 `2/2`、读取失败与内容失败并存 `2/1`、仅未核对 `0/2`。strict 为 `1` 时读取未完成仍并列报告；未定位模块根明确提示跳过。零成本与那条 `[note]` 见 [`references/faq.md`](references/faq.md)，口径见 [`references/measured-data-criteria.md`](references/measured-data-criteria.md) 的 `11.3`／`11.4`。
 
 ## 三、处理流程
 
@@ -399,8 +399,8 @@ python <skill根>/scripts/xwl.py diffguard <改过的文件或目录> --strict  
 | `diffguard` | **相对 git 基线**检测「多行内容被压平」 |
 | `itemids` | 注册键重名报告 + 建议改名（只读） |
 | `paths` | 列出 `sql` / `totalSql` / `serverScript` / `url` 四类字段的位置 |
-| `params` | 核对「页面 → store → SQL」传参链路（**请求级归属**：一笔供给只给它自己那次请求背书，跨请求不互相顶替；缺来源**默认只告警**、`--strict` 才判失败；`--strict` 下**仅「未核对」**判 `rc=2`、**确缺参/悬空**判 `rc=1`；`--upstream` 追加「谁在调用本页 / 谁引用本载体」的上游扫描） |
-| `sqlrefs` | 校验 `{#名字#}` ↔ `serverScript` 是否自洽（`serverScript` 供给只认代码层、接收者为 `request`、首参为字面量的 `request.setAttribute(…)`；首参非字面量只算「可能提供」、不计已提供。**无适用检查内容**——无 `module.serverScript` 且无非空 `sql/totalSql`——判 `rc=1`） |
+| `params` | 核对「页面 → store → SQL」传参链路（**请求级归属**：一笔供给只给它自己那次请求背书，跨请求不互相顶替；缺来源**默认只告警**、`--strict` 才判失败；`--strict` 下**仅「未核对」**判 `rc=2`、**确缺参/悬空**判 `rc=1`；`--upstream` 追加「谁在调用本页 / 谁引用本载体」扫描，候选不并入已证明供给，反查读取失败按本命令矩阵计入） |
+| `sqlrefs` | 按**本文件内集合近似**核对 `{#名字#}` ↔ `serverScript` 字面量调用（只收代码层、接收者为 `request`、首参为字面量的 `request.setAttribute(…)`；首参非字面量只算「可能提供」。`已提供` 表示名字命中本文件静态集合，不证明调用必经执行、先后、分支或跨 module 生命周期有效。**无适用检查内容**——无 `module.serverScript` 且无非空 `sql/totalSql`——判 `rc=1`） |
 | `folders` | `folder.json`（设计器导航树索引）一致性检查 / 登记 |
 | `schema` | 查设计器控件注册表（合法 `configs` / `events` / 骨架） |
 | `dump` | 按加载器规则解析后美化输出 |
@@ -434,7 +434,7 @@ python <skill根>/scripts/xwl.py diffguard <改过的文件或目录> --strict  
 
 ## 五、常见问题（FAQ）
 
-**24 条**高频问题在 [`references/faq.md`](references/faq.md)，按四组归类：① 格式与解析 / ② 命名与引用 /
+**25 条**高频问题在 [`references/faq.md`](references/faq.md)，按四组归类：① 格式与解析 / ② 命名与引用 /
 ③ 能不能这么改 / ④ 命令行为（设计器看不到新文件、SQL 抽取报 `1064`、`check` 慢或没装 `node`、脚本 / CI 怎么判断成败等）。
 
 > 出问题**第一站是那份 FAQ**（按症状查）；**动手前**想避开已知的坑，看

@@ -432,6 +432,45 @@ def _check_patch_contract(tmp, node, failures, write) -> None:
         f13.append("cmd_patch 报错未走 **统一模板**（缺合法区间）:\n%s" % o13)
     _ok("5-13", f13, "set 末段数组下标越界 ⇒ ValueError + rc=2，走 **统一模板**（非裸 IndexError）")
 
+    # ---- 数字形态估算只读有效对象正文的数字值 token，expand/patch 共用同一口径 ----
+    numeric_source = (
+        "999, 1e2; loader prefix\n"
+        "{\n"
+        '    "hidden": false,\n'
+        '    "children": [],\n'
+        '    "roles": {},\n'
+        '    "title": "99 1.5 SELECT 2.0",\n'
+        '    "iconCls": "1e2",\n'
+        '    "inframe": "a (1.0) b",\n'
+        '    "pageLink": "",\n'
+        '    "numberForms": [1.00, -2.50, 1e2, 3, 3]\n'
+        "}\n"
+    )
+    p14e = write("pc_5_14_expand.xwl", numeric_source)
+    rc14e, o14e = _run(xwl.cmd_expand, file=p14e, eol="auto", indent=1, safe=False,
+                       dry_run=False, out=None, backup=False, node=None, no_js=True)
+    p14p = write("pc_5_14_patch.xwl", numeric_source)
+    rc14p, o14p = _patch(p14p, "pc_5_14_ops.json",
+                         [{"op": "set", "path": ["title"], "value": "changed"}], dry_run=True)
+    f14: list[str] = []
+    pat14 = re.compile(
+        r"数字形态 (\d+) 处（估算；0 仅表示本方向多重集无差异）")
+    for who14, rc14, out14 in (("expand", rc14e, o14e), ("patch", rc14p, o14p)):
+        m14 = pat14.search(out14)
+        if rc14 != 0:
+            f14.append("%s rc=%d（应 0）" % (who14, rc14))
+        if not m14:
+            f14.append("%s 未给出数字形态估算边界说明" % who14)
+        elif int(m14.group(1)) != 3:
+            f14.append("%s 数字形态估算 = %s（应 3；字符串与前导文本不得污染）"
+                       % (who14, m14.group(1)))
+    _ci14, _cu14, _cn14 = xwl.rewrite_counts(
+        '{"first": 1, "second": 2}', '{"first": 2, "second": 1}')
+    if (_ci14, _cu14, _cn14) != (0, 0, 0):
+        f14.append("位置互换的多重集差应为 (0,0,0)，实得 %r" % ((_ci14, _cu14, _cn14),))
+    _ok("5-14", f14,
+        "expand/patch 数字形态=3：字符串、SQL/JS、转义及前导文本不计数；位置互换方向差=0")
+
     if pc_fail:
         failures.extend(pc_fail)
 

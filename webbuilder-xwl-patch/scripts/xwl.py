@@ -725,7 +725,40 @@ def dumps_designer(obj, indent_factor: int = 1, eol: str = CRLF, safe: bool = Fa
 
 
 _UESC_RE = re.compile(r"\\u[0-9a-fA-F]{4}")
-_NUMTOK_RE = re.compile(r"-?\d+(?:\.\d+)?(?:[eE][+-]?\d+)?")
+
+
+def _numeric_value_tokens(text: str) -> list[str]:
+    """返回有效 xwl 对象正文中的数字值 token，保留原始字面量。
+
+    `parse_xwl` 先按加载器口径确认整份文本有效，再复用同一份
+    `loader_text`／`_strip_trailing_commas` 口径读取第一个对象。第二次解码只收集
+    `parse_int`／`parse_float` 回调收到的正文 token；字符串键与字符串值不进入回调，
+    加载器忽略的前导文本也在对象起点之前排除。
+    """
+    parse_xwl(text)
+    normalized = loader_text(text)
+    start = normalized.find("{")
+    payload = _strip_trailing_commas(normalized[start:])
+    tokens: list[str] = []
+
+    def _keep_int(token: str) -> int:
+        int(token)
+        tokens.append(token)
+        return 0
+
+    def _keep_float(token: str) -> float:
+        value = _finite_float(token)
+        tokens.append(token)
+        return value
+
+    decoder = json.JSONDecoder(
+        strict=False,
+        parse_constant=_reject_nonfinite,
+        parse_int=_keep_int,
+        parse_float=_keep_float,
+    )
+    decoder.raw_decode(payload)
+    return tokens
 
 
 def rewrite_counts(text: str, out: str) -> tuple:
@@ -735,14 +768,16 @@ def rewrite_counts(text: str, out: str) -> tuple:
     **不追求逐字节等价、也不进任何判定**（`equivalent` 才是判定）。三类各返回一个整数：
       · 缩进   = 两版**行首空白长度不同**的行数（按行号对齐，够用）；
       · `\\uXXXX` = 两版里 `\\uXXXX` 转义**个数之差的绝对值**（被展开或反过来收拢）；
-      · 数字形态 = 两版里数字 token 的**多重集之差**（如 `1.0`→`1` 算 1 处）。
+      · 数字形态 = 两版有效对象正文里数字值 token 的**方向性多重集之差**
+        （如 `1.0`→`1` 算 1 处）；字符串键/值、字符串内 SQL/JS/转义及前导文本不计。
+        结果只是估算，0 仅表示本方向多重集无差异，不证明数字写法或位置未变化。
     """
     la, lb = text.splitlines(), out.splitlines()
     indent = sum(1 for x, y in zip(la, lb)
                  if (len(x) - len(x.lstrip())) != (len(y) - len(y.lstrip())))
     uesc = abs(len(_UESC_RE.findall(text)) - len(_UESC_RE.findall(out)))
-    numdiff = sum((collections.Counter(_NUMTOK_RE.findall(text))
-                   - collections.Counter(_NUMTOK_RE.findall(out))).values())
+    numdiff = sum((collections.Counter(_numeric_value_tokens(text))
+                   - collections.Counter(_numeric_value_tokens(out))).values())
     return indent, uesc, numdiff
 
 
@@ -2663,8 +2698,9 @@ def cmd_expand(args) -> int:
     # 把「非原样排版」具体化（只提示、不改行为）—— 三类改写各给一个整数处数。
     if out != text and ANY_EOL_RE.search(text):
         _ci, _cu, _cn = rewrite_counts(text, out)
-        print("[note] 本次还会顺带改写：缩进 %d 处 / \\uXXXX 转义 %d 处 / 数字形态 %d 处 "
-              "—— 都无语义影响；建议先 --dry-run 看 diff" % (_ci, _cu, _cn))
+        print("[note] 本次还会顺带改写：缩进 %d 处 / \\uXXXX 转义 %d 处 / 数字形态 %d 处"
+              "（估算；0 仅表示本方向多重集无差异）；建议先 --dry-run 看 diff"
+              % (_ci, _cu, _cn))
 
     # 语义等价比对（**规范化文本**，必须过，否则不写）
     try:
@@ -3773,8 +3809,9 @@ def cmd_patch(args) -> int:
     if not canonical:
         # 把「非原样排版」具体化 —— 三类改写各给一个整数处数（只提示、不改行为）。
         _ci, _cu, _cn = rewrite_counts(text, _out0)
-        print("[note] 本次还会顺带改写：缩进 %d 处 / \\uXXXX 转义 %d 处 / 数字形态 %d 处 "
-              "—— 都无语义影响；建议先 --dry-run 看 diff" % (_ci, _cu, _cn))
+        print("[note] 本次还会顺带改写：缩进 %d 处 / \\uXXXX 转义 %d 处 / 数字形态 %d 处"
+              "（估算；0 仅表示本方向多重集无差异）；建议先 --dry-run 看 diff"
+              % (_ci, _cu, _cn))
     if len(styles) > 1:
         # 与 `edit` 对齐：混用换行在源文件里是既有的格式问题，patch 会**静默统一**成一种，
         # 所以这里必须报出来（否则用户只能靠 diff 发现换行被动了）。
@@ -5471,10 +5508,14 @@ def cmd_diffguard(args) -> int:
 # --------------------------------------------------------------------------- #
 _HASH_RE = re.compile(r"\{#([^}]{1,64})#\}")
 _PARAM_RE = re.compile(r"\{\?([^}]{1,64})\?\}")
-# `request.setAttribute('名', …)` 的**真实供给**识别。
+_SQLREFS_BOUNDARY_NOTE = (
+    "[note] 本检查仅作文件内静态供给集合核对；不证明供给调用必经执行、消费前时序、分支或"
+    "跨 module 生命周期有效。"
+)
+# `request.setAttribute('名', …)` 的**本文件内静态集合**识别。
 # 判据（四条，均由 `_scan_setattr_supply` 词法级落实）：①只认代码层调用（注释与字符串内容里的
 # 伪调用不算）；②接收者须为 `request`（`foo.setAttribute`、裸 `setAttribute` 不算）；
-# ③首参为字符串字面量才算**已证明供给**，其余只算「可能提供」；④方法与括号之间允许空白。
+# ③首参为字符串字面量才进入本文件集合，其余只算「可能提供」；④方法与括号之间允许空白。
 _SETATTR_METHOD = "setAttribute"
 # 框架内置变量前缀的**内置兜底**。有文件来源的那部分由 `builtin_prefixes()` 从
 # `wb/system/var.json` 顶层键推导后并进来 —— **必须取并集**：
@@ -5564,10 +5605,10 @@ def iter_nodes(obj):
 
 
 def _scan_setattr_supply(js: str) -> tuple:
-    """从一段 serverScript 里识别 `request.setAttribute('名', …)` 的**真实供给**。
+    """从一段 serverScript 里识别字面量 `request.setAttribute('名', …)` 的集合项。
 
     返回 `(proven, possible)` —— 两个 `set[str]` 形态的集合：
-      · `proven`   —— 首参是**字符串字面量**的调用 ⇒ 已证明提供该名字；
+      · `proven`   —— 首参是**字符串字面量**的调用名字集合；
       · `possible` —— 首参**不是字面量**（运行时才定，如 `request.setAttribute(name, …)`）⇒ 只算
                      「可能提供」，**不加入已提供集合**、不抵消外部引用（序2 用户裁定口径）。
 
@@ -5579,8 +5620,8 @@ def _scan_setattr_supply(js: str) -> tuple:
          裸 `setAttribute(...)` 都不算）；
       ④ **允许方法与括号间空白**：`request.setAttribute ('名',…)` 也算真实调用。
 
-    ⚠️ 只做**本文件内**集合近似识别；跨 module 的 `request`／module 生命周期语义未验证
-    （docstring 与实现同口径，见 `cmd_sqlrefs`）。
+    ⚠️ 这是**本文件内**集合近似：只识别代码层字面量调用，不证明调用必经执行、消费前时序、
+    分支或跨 module 生命周期有效（docstring 与实现同口径，见 `cmd_sqlrefs`）。
     """
     s = strip_js_comments(js)
     proven: set = set()
@@ -5635,10 +5676,11 @@ def _scan_setattr_supply(js: str) -> tuple:
 
 
 def cmd_sqlrefs(args) -> int:
-    """检查 SQL 文件里 serverScript 与 dataprovider 的引用是否自洽。
+    """按本文件内集合近似核对 SQL 引用与 serverScript 的字面量调用。
 
-    - dataprovider.sql / totalSql 里的 `{#name#}` 必须由 **同一个 module 的 serverScript**
-      用 `request.setAttribute("name", …)` 提供（`{#sys.*#}` / `{#Str.*#}` 是框架内置，不用提供）；
+    - dataprovider.sql / totalSql 里的 `{#name#}` 只与**本文件各 module serverScript** 中字面量
+      `request.setAttribute("name", …)` 的名字集合近似比对；这些调用不证明必经执行、先后、
+      分支或跨 module 生命周期有效（`{#sys.*#}` / `{#Str.*#}` 是框架内置，不用提供）；
     - `{?name?}` 是绑定参数（由 Query 解析成 PreparedStatement 参数），只做清点；
     - **serverScript 里不允许出现 `{#…#}`**（ServerScript 会直接报错）。
     """
@@ -5659,8 +5701,8 @@ def cmd_sqlrefs(args) -> int:
     warnings: list[str] = []
 
     # serverScript 侧
-    #   只认**代码层**、接收者为 `request`、首参为**字面量**的
-    #   `request.setAttribute('名', …)` 为**已证明供给**（`provided`）；首参非字面量的调用只算
+    #   只把**代码层**、接收者为 `request`、首参为**字面量**的
+    #   `request.setAttribute('名', …)` 收进本文件静态集合（`provided`）；首参非字面量的调用只算
     #   **可能提供**（`possible`），不进 `provided`、不抵消外部引用。注释／纯字符串里的伪调用、
     #   其他接收者的调用都**不算**供给。
     provided: set[str] = set()
@@ -5710,6 +5752,7 @@ def cmd_sqlrefs(args) -> int:
     missing = []
     for name, cnt in sorted(used.items(), key=lambda kv: -kv[1]):
         if name in provided:
+            # 输出保留既有稳定文案；其含义是本文件静态集合中命中了该名字，不是运行时证明。
             print(f"  [ok]   {{#{name}#}} × {cnt}  ← serverScript 已提供")
         elif name.startswith(prefixes):
             print(f"  [ok]   {{#{name}#}} × {cnt}  ← 框架内置变量")
@@ -5750,6 +5793,11 @@ def cmd_sqlrefs(args) -> int:
         # 序3：problems 必须**逐条**具体打印（不只汇总 FAIL）。
         for p in problems:
             print(f"  [FAIL] {p}")
+
+    # 适用内容与可用诊断均已输出；在统一结果汇总前只提示一次。
+    print(_SQLREFS_BOUNDARY_NOTE)
+
+    if problems:
         print("=== 结果: FAIL")
         return 1
     if missing:
@@ -6972,7 +7020,7 @@ def cmd_params(args) -> int:
         if _pref_fail is not None:
             _read_fail.append((_pref_fail[0], _pref_fail[1]))
         if _tail and _tail.get("n_failed"):
-            _read_fail += [("%s.xwl" % _r, _w) for _r, _w in _tail["failed"]]
+            _read_fail += list(_tail["failed"])
         if _read_fail:
             print("  [FAIL] 依赖读取失败 %d 处 ⇒ 本次核对**未完成**（缺参/未核对结论不完整）：%s"
                   % (len(_read_fail), "、".join(str(_p) for _p, _w in _read_fail[:8])))
@@ -7059,7 +7107,7 @@ def cmd_params(args) -> int:
     if _pref_fail is not None:
         _read_fail.append((_pref_fail[0], _pref_fail[1]))
     if _tail and _tail.get("n_failed"):
-        _read_fail += [("%s.xwl" % _r, _w) for _r, _w in _tail["failed"]]
+        _read_fail += list(_tail["failed"])
     if _read_fail:
         print("  [FAIL] 依赖读取失败 %d 处 ⇒ 本次核对**未完成**（缺参/未核对结论不完整）：%s"
               % (len(_read_fail), "、".join(str(_p) for _p, _w in _read_fail[:8])))
@@ -7291,9 +7339,9 @@ def build_parser() -> argparse.ArgumentParser:
     pm.add_argument("--controls", help="wb/system/controls.json；给了就从注册表推导「取值控件」类型")
     pm.add_argument("--list-fields", action="store_true", help="只打印取值控件类型清单后退出")
     pm.add_argument("--upstream", action="store_true",
-                    help="跨页反查（默认关）：扫一遍 --module-root，列出以 `m?xwl=` 打开本页的调用方"
-                         "及其 `params` 键，末尾加独立分组 `[外部可传入]`（不并入核对、不改退出码）。"
-                         "代价：要全扫模块根（约 3000 个 .xwl、约 5 秒量级）；不开则零成本")
+                    help="跨页反查（默认关）：扫模块根；候选不并入已证明供给。缺参/悬空 0/1，"
+                         "读取失败 2/2，读取失败并存 2/1，仅未核对 0/2（默认/strict）；"
+                         "未定位模块根则跳过；上游候选仅供展示。代价约 3000 文件/5 秒")
     pm.add_argument("--strict", action="store_true",
                     help="这是逃生开关：缺来源时判失败（rc=1）—— 与 `diffguard --strict` 同名同义"
                          "（默认只告警、rc=0）")
