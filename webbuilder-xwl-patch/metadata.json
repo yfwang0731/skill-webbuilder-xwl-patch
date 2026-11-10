@@ -3,7 +3,7 @@
   "name_en": "webbuilder-xwl-patch",
   "displayName": "webbuilder-xwl-patch",
   "author": "yfwang0731",
-  "version": "1.8.1",
+  "version": "1.8.2",
   "schema_version": "1.0",
   "description": "WebBuilder（wb）平台 .xwl 定义文件的处理与安全编辑：结构级 patch（只给值 / 子树，工具按设计器自己的算法重建整份文件）+ 格式校验 + 相对 git 基线的压平检测。",
   "core_capabilities": [
@@ -161,6 +161,11 @@
     "references/workflow-notes-guards-maintenance.md": "evidence"
   },
   "update_history": [
+    {
+      "version": "1.8.2",
+      "date": "2026-11-10",
+      "summary": "params 供给判定：请求身份隔离与直属 beforeload 有效键（patch）：无新子命令或参数，默认/strict 码值沿用既有矩阵。① 供给结论按请求身份（页面结构位置、事件或配置字段、静态调用位置；store 以节点身份）分别判定，SQL 物理路径只读取需求、不再充当身份；同 SQL 不同 store、同 store 不同 load、同 SQL 不同 Wb.request 互不补齐，同一请求内 out、params 与所属 store 配置仍按既有规则组合；歧义或附着未知记未核对，无关请求动态供给不掩盖本请求确定缺参；#56 仍按物理载体合并打印一次并保留（同载体 ×N）。② store 静态 params 仅在直属 beforeload 之后仍保留才算已证明供给；按已核实平台语义（Ext.apply 的 defaults 先写、config 后写覆盖；Store.load 的 beforeload 第二形参为当前 operation，其后 proxy 读取同一 operation.params）计算整体赋值、固定键追加、Ext.apply/Wb.apply 合并与连续操作顺序。③ 动态整体覆盖、条件追加、未核实辅助函数与别名记未核对；跨事件可达性、外部触发、reload 历史参数推理、值合法性不在范围；结论来自静态源码核对，不声称运行期或全工程有效。"
+    },
     {
       "version": "1.8.1",
       "date": "2026-11-09",

@@ -5820,12 +5820,16 @@ def cmd_sqlrefs(args) -> int:
 #               容器内所有「取值控件」的值由框架自动整包送出，**不用枚举控件**。
 #   ② params —— store.load({params:{名:值}}) / params: Wb.getValue(app.tbar)
 #               显式写出「参数名 → 值」。
-# 同名参数的合并优先级（框架源码实测，两条通路**方向相反**）：
-#   store.load ：store 自身配置的 params > 调用时传入的 params > out
-#   Wb.request ：out > params
+# 同名参数的合并优先级（框架源码实测，均为第二实参 config 覆盖第三实参 defaults）：
+#   store.load ：调用时 params > out > store 自身配置的 params
+#   Wb.request ：params > out
 _OUT_KEY_RE = re.compile(r"\bout\s*:")
 _PARAMS_KEY_RE = re.compile(r"\bparams\s*:")
 _GETVALUE_RE = re.compile(r"Wb\.getValue\s*\(")
+_CALL_EXPR_RE = re.compile(
+    r"(?<![.\w$])((?:Wb\.(?:request|upload|open)|app\.[A-Za-z_$][\w$]*\."
+    r"(?:load|reload))|[A-Za-z_$][\w$]*(?:\.[A-Za-z_$][\w$]*)*\.(?:load|reload))\s*\(")
+_REGISTRY_NAME_FIELDS = ("normalName", "itemId")
 # ⚠️ app-ref 正则**不在本段另立副本** —— 直接用 `js_refs_of` 侧共享的
 #   `_APP_REF_BARE` / `_APP_REF_GET` / `_APP_REF_BRACKET`（同源化：三处复用同一批符号）。
 #   曾因这里各存一份，导致 `app['名']` 在 `params` 下认不出、与 `itemids` 判定漂移。
@@ -6056,17 +6060,158 @@ def find_transfers(js: str, field_set) -> list[tuple]:
     通路 ∈ {"out", "params=Wb.getValue", "params=对象"}。
     （无目标的兼容包装：丢弃 `find_transfers_with_target` 的第 5 元「请求目标」。）
     """
-    return [(k, c, ks, raw) for (k, c, ks, raw, _tgt, _own) in find_transfers_with_target(js, field_set)]
+    return [(k, c, ks, raw) for (k, c, ks, raw, *_rest)
+            in find_transfers_with_target(js, field_set)]
 
 
-def _enclosing_object_span(js: str, pos: int):
-    """定位 `js` 中 `pos` 处所处分属的**最内层对象字面量** `{ … }` 的 `(start, end)`。
+def _top_level_fields(js: str, span) -> list[tuple[str, str, int]]:
+    """列出对象字面量 `span` 顶层的 `(键, 表达式, 键偏移)`，不进入嵌套对象或函数体。"""
+    if not span:
+        return []
+    start, end = span
+    fields: list[tuple[str, str, int]] = []
+    depth = 0
+    i = start + 1
+    while i < end:
+        ch = js[i]
+        if ch in ("'", '"', "`"):
+            quote = ch
+            i += 1
+            while i < end:
+                if js[i] == "\\":
+                    i += 2
+                    continue
+                if js[i] == quote:
+                    i += 1
+                    break
+                i += 1
+            continue
+        if ch == "{":
+            depth += 1
+        elif ch == "}":
+            depth -= 1
+        elif depth == 0:
+            match = _OBJ_KEY_RE.match(js, i)
+            if match:
+                key = match.group(1)
+                fields.append((key, read_expr(js, match.end()).strip(), match.start()))
+                i = match.end()
+                continue
+        i += 1
+    return fields
 
-    `start` 指向开 `{`，`end` 指向配对的收 `}`（不含）。`pos` 必须在该对象体内部（depth≥1）。
-    跳过字符串字面量里的花括号。找不到（不在任何对象内 / 括号不配平）返回 `None`。
+
+def _object_target(js: str, span) -> str | None:
+    """从一个对象字面量顶层的 `url:` 取 `m?xwl=` 目标（去首尾空白；空目标返回 `None`）。"""
+    for key, expr, _pos in _top_level_fields(js, span):
+        if key != "url":
+            continue
+        if len(expr) < 2 or expr[0] not in ("'", '"') or expr[-1] != expr[0]:
+            return None
+        raw = expr[1:-1]
+        if "m?xwl=" not in raw:
+            return None
+        target = raw.split("m?xwl=")[-1].split("&")[0].strip()
+        return target or None
+    return None
+
+
+def _call_object_span(js: str, pos: int):
+    """取静态调用 `pos`（`(` 之后）的第一个对象字面量实参 `(start, end)`。"""
+    index = pos
+    while index < len(js) and js[index] in " \t\r\n":
+        index += 1
+    if index >= len(js) or js[index] != "{":
+        return None
+    end = _matching_brace(js, index)
+    return (index, end) if end is not None else None
+
+
+def _js_call_kind(js: str, obj_start: int) -> tuple[str | None, str | None]:
+    """取静态调用主体的形态与静态目标名；找不到调用主体时返回 ``(None, None)``。"""
+    index = obj_start - 1
+    while index >= 0 and js[index] in " \t\r\n":
+        index -= 1
+    if index >= 0 and js[index] == "(":
+        index -= 1
+        while index >= 0 and js[index] in " \t\r\n":
+            index -= 1
+    end = index + 1
+    while index >= 0 and (js[index].isalnum() or js[index] in "_.$"):
+        index -= 1
+    chain = js[index + 1:end]
+    parts = chain.split(".")
+    if len(parts) >= 3 and parts[-3] == "app":
+        return ("store.load", parts[-2])
+    if len(parts) >= 2 and parts[-2] == "Wb" and parts[-1] in ("request", "upload", "open"):
+        return ("Wb." + parts[-1], None)
+    return (None, None)
+
+
+def _js_call_markers(js: str) -> list[tuple[int, str | None, str | None]]:
+    """标记一段 JS 内每个静态调用点，供 ``out`` / ``params`` 按源码位置归请求。"""
+    markers = []
+    for match in _CALL_EXPR_RE.finditer(js):
+        kind, owner = _js_call_kind(js, match.end())
+        markers.append((match.end(), kind, owner))
+    return markers
+
+
+def find_transfers_with_target(js: str, field_set) -> list[tuple]:
+    """同 `find_transfers`，但第 5 元起附**请求目标与静态调用位置**。
+
+    返回 [(通路, 容器列表, 键列表, 原文, 目标键或 None, 接收者名或 None,
+           传参点偏移, 调用形态, 字段位置, 动态 params, 静态调用身份, 调用对象是否写了 url)]。
+    供给只从静态调用第一个对象实参的顶层字段解析；嵌套对象、回调体与嵌套函数体不附着外层。
+    静态目标明确的空参调用仍产生独立身份，嵌套函数内的真实静态调用也独立列出。
+    字符串/模板字面量里的调用标记只当数据，不产生请求身份或供给。
     """
-    stack: list[int] = []
-    i, n = 0, len(js)
+    js = strip_js_comments(js)
+    masked = _js_mask_strings(js)
+    found: list[tuple] = []
+    for marker_pos, call_kind, call_owner in _js_call_markers(js):
+        if masked[marker_pos] == " ":
+            continue  # 起点在字符串/模板字面量内：数据不是调用
+        span = _call_object_span(js, marker_pos)
+        if span is None:
+            continue
+        call_target = _object_target(js, span)
+        has_url = any(key == "url" for key, _expr, _pos in _top_level_fields(js, span))
+        ck_label = call_kind or "静态调用"
+        call_identity = (span[0], ck_label, call_owner or None, call_target)
+        rows = 0
+        for field, expr, _pos in _top_level_fields(js, span):
+            if field not in ("out", "params"):
+                continue
+            dynamic_params = field == "params" and not (
+                _GETVALUE_RE.match(expr) or expr.startswith("{"))
+            transfer_kind = field if field == "out" else (
+                "params=Wb.getValue" if _GETVALUE_RE.match(expr) else
+                ("params=对象" if expr.startswith("{") else "params=动态"))
+            conts = (_app_refs_in(expr)
+                     if field == "out" or _GETVALUE_RE.match(expr) else [])
+            keys = obj_keys(expr[1:-1]) if transfer_kind == "params=对象" else []
+            if not conts and not keys and not dynamic_params:
+                continue
+            found.append((transfer_kind, conts, keys, expr, call_target,
+                          call_owner or None, span[0], call_kind, None,
+                          dynamic_params, call_identity, has_url))
+            rows += 1
+        if not rows and (call_target is not None or call_owner is not None):
+            found.append(("无传参", [], [], "", call_target, call_owner or None,
+                          span[0], call_kind, None, False, call_identity, has_url))
+    return found
+
+
+def _matching_brace(js: str, open_pos: int) -> int | None:
+    """从 `js[open_pos]`（须为 `{`）起配平括号，返回配对的闭合 `}` 偏移；不配平返回 ``None``。
+
+    跳过字符串字面量里的括号；供"对象开 `{` 已知、只需找闭合 `}`"的场景（如空参调用建占位请求）。
+    """
+    if open_pos >= len(js) or js[open_pos] != "{":
+        return None
+    depth = 0
+    i, n = open_pos, len(js)
     while i < n:
         ch = js[i]
         if ch in ("'", '"', "`"):
@@ -6082,90 +6227,13 @@ def _enclosing_object_span(js: str, pos: int):
                 i += 1
             continue
         if ch == "{":
-            stack.append(i)
+            depth += 1
         elif ch == "}":
-            if stack:
-                start = stack.pop()
-                if start < pos <= i:
-                    # 先遇到的、覆盖 pos 的收括号所配对的 `{` 即**最内层**对象（更深的嵌套对象
-                    # 必在本层之前先闭合）。
-                    return (start, i)
+            depth -= 1
+            if depth == 0:
+                return i
         i += 1
     return None
-
-
-def _object_target(js: str, span) -> str | None:
-    """从一个对象字面量 `span` 内的 `url:` 取 `m?xwl=` 目标（去首尾空白；空目标返回 `None`）。"""
-    if not span:
-        return None
-    start, end = span
-    body = js[start:end + 1]
-    m = _REQ_URL_RE.search(body)
-    if not m:
-        return None
-    tgt = m.group(1).split("m?xwl=")[-1].split("&")[0].strip()
-    return tgt or None
-
-
-def _call_receiver(js: str, obj_start: int) -> str | None:
-    """从对象字面量开 `{`（`obj_start`）**向前**回溯调用形态，取 `app.<名>` 的 `<名>`。
-
-    例：`app.storeA.load({ … })` → `storeA`；`Wb.request({ … })` / `Wb.upload({ … })` → `None`
-    （调用主体非 `app.<store>`，无法据以定位 store 的配置 url）。
-    回溯跳过 `(` 与空白，读到标识符链 `app.<名>.<方法>`。
-    """
-    i = obj_start - 1
-    while i >= 0 and js[i] in " \t\r\n":
-        i -= 1
-    if i >= 0 and js[i] == "(":
-        i -= 1
-        while i >= 0 and js[i] in " \t\r\n":
-            i -= 1
-    # 读方法名（如 load / reload）
-    j = i
-    while j >= 0 and (js[j].isalnum() or js[j] in "_.$"):
-        j -= 1
-    chain = js[j + 1:i + 1]
-    parts = chain.split(".")
-    # 期望形态 app.<名>.<方法>
-    if len(parts) >= 3 and parts[-3] == "app":
-        return parts[-2]
-    return None
-
-
-def find_transfers_with_target(js: str, field_set) -> list[tuple]:
-    """同 `find_transfers`，但第 5 元附**请求目标**、第 6 元附**调用接收者 store 名**。
-
-    返回 [(通路, 容器 itemId 列表, 显式参数名列表, 原文片段, 目标键或 None, 接收者名或 None)]。
-    · 第 5 元「目标键」＝该 `out:`/`params:` 所在对象字面量里 `url:` 的 `m?xwl=` 目标（可静态关联时）；
-    · 第 6 元「接收者名」＝形如 `app.<名>.load(...)` 的 `<名>`，用于对象无 `url:` 时回退到该 store
-      自身配置的 `url` 作为请求目标（`Wb.request`/`Wb.upload` 等不为 `app.<store>` 时为 `None`）。
-    二者共同支撑**请求级归属**：一笔供给只给它自己那次请求背书。
-    """
-    js = strip_js_comments(js)
-    found: list[tuple] = []
-    for m in _OUT_KEY_RE.finditer(js):
-        expr = read_expr(js, m.end()).strip()
-        conts = _app_refs_in(expr)
-        if conts:
-            span = _enclosing_object_span(js, m.start())
-            found.append(("out", conts, [], expr, _object_target(js, span),
-                          _call_receiver(js, span[0]) if span else None))
-    for m in _PARAMS_KEY_RE.finditer(js):
-        expr = read_expr(js, m.end()).strip()
-        if _GETVALUE_RE.match(expr):
-            conts = _app_refs_in(expr)
-            if conts:
-                span = _enclosing_object_span(js, m.start())
-                found.append(("params=Wb.getValue", conts, [], expr, _object_target(js, span),
-                              _call_receiver(js, span[0]) if span else None))
-        elif expr.startswith("{"):
-            keys = obj_keys(expr[1:-1])
-            if keys:
-                span = _enclosing_object_span(js, m.start())
-                found.append(("params=对象", [], keys, expr, _object_target(js, span),
-                              _call_receiver(js, span[0]) if span else None))
-    return found
 
 
 def _js_of(node):
@@ -6180,6 +6248,22 @@ def _js_of(node):
     return out
 
 
+def _js_fields(node):
+    """按页面结构列出 JS 文本及其配置/事件字段身份。"""
+    fields = []
+    configs = node.get("configs")
+    if isinstance(configs, dict):
+        for key, value in configs.items():
+            if isinstance(value, str):
+                fields.append(("configs.%s" % key, value))
+    events = node.get("events")
+    if isinstance(events, dict):
+        for key, value in events.items():
+            if isinstance(value, str):
+                fields.append(("events.%s" % key, value))
+    return fields
+
+
 def _collect_name_islands(obj, container, field_set):
     """容器内所有「取值控件」的 itemId（`out:` 收集时它们就是参数名）。"""
     ids = []
@@ -6187,6 +6271,891 @@ def _collect_name_islands(obj, container, field_set):
         if t in field_set and isinstance(cfg.get("itemId"), str):
             ids.append(cfg["itemId"])
     return ids
+
+
+# --------------------------------------------------------------------------- #
+# params · 直属 beforeload 的有效键
+#
+# 平台取证（seq2/平台语义.md，ext-all-debug.js SHA256
+# 61634a4a…081d6e）：Store.load 先合并 store 静态 params，再以
+# `fireEvent('beforeload', me, operation)` 传入当前 operation；事件后
+# `proxy.read(operation)` 消费同一个 operation.params。Ext.apply 的第三参数
+# defaults 先写、第二参数 config 后写覆盖。
+#
+# 本组函数只回答「事件后哪些键仍确定存在」，不判断值、业务合法性或请求是否
+# 实际发出；条件、动态整体赋值、别名与未建语义的辅助函数一律不给确定键集合。
+# --------------------------------------------------------------------------- #
+
+def _js_mask_strings(js: str) -> str:
+    """把 JS 字符串/模板字面量内容替换为空格（保持长度），供词法定位。"""
+    out = list(js)
+    i, n = 0, len(js)
+    while i < n:
+        ch = js[i]
+        if ch not in ("'", '"', "`"):
+            i += 1
+            continue
+        quote = ch
+        out[i] = " "
+        i += 1
+        while i < n:
+            if js[i] == "\\":
+                out[i] = " "
+                if i + 1 < n:
+                    out[i + 1] = " "
+                i += 2
+                continue
+            if js[i] == quote:
+                out[i] = " "
+                i += 1
+                break
+            if js[i] not in "\r\n":
+                out[i] = " "
+            i += 1
+    return "".join(out)
+
+
+def _matching_paren_back(text: str, close_pos: int) -> int | None:
+    """从 `text[close_pos]`（须为 `)`）向前找配对 `(`；不配平返回 None。"""
+    if close_pos < 0 or close_pos >= len(text) or text[close_pos] != ")":
+        return None
+    depth = 0
+    for i in range(close_pos, -1, -1):
+        ch = text[i]
+        if ch == ")":
+            depth += 1
+        elif ch == "(":
+            depth -= 1
+            if depth == 0:
+                return i
+    return None
+
+
+def _nested_function_bodies(masked: str) -> list[tuple[int, int]]:
+    """列出未执行嵌套函数（含箭头函数）的函数体范围；IIFE 与整体包装函数除外。"""
+    bodies: list[tuple[int, int]] = []
+    first = len(masked) - len(masked.lstrip())
+    wrapper = None
+    _fn = re.match(r"function\s*([A-Za-z_$][\w$]*)?\s*\(", masked[first:])
+    _anon_fn = _fn is not None and not _fn.group(1)
+    if _anon_fn or re.match(r"\([^)]*\)\s*=>", masked[first:]):
+        body = masked.find("{", first)
+        if body >= 0:
+            end = _matching_brace(masked, body)
+            if end is not None and not masked[end + 1:].strip(" \t\r\n;"):
+                wrapper = (body, end)
+
+    for match in re.finditer(r"\bfunction\b", masked):
+        body = masked.find("{", match.end())
+        if body < 0:
+            continue
+        end = _matching_brace(masked, body)
+        if end is None:
+            continue
+        if wrapper is not None and body == wrapper[0]:
+            continue
+        if _executed_iife(masked, end):
+            continue  # 立即执行的函数体会执行，不按未执行嵌套函数处理
+        bodies.append((body, end))
+
+    for match in re.finditer(r"=>\s*\{", masked):
+        body = masked.find("{", match.start())
+        if body < 0:
+            continue
+        end = _matching_brace(masked, body)
+        if end is None:
+            continue
+        if wrapper is not None and body == wrapper[0]:
+            continue
+        if _executed_iife(masked, end):
+            continue
+        bodies.append((body, end))
+    return bodies
+
+
+def _js_mask_nested_functions(masked: str) -> str:
+    """屏蔽未执行的嵌套函数体；整个事件串本身就是函数表达式时保留其函数体。"""
+    chars = list(masked)
+    for body, end in _nested_function_bodies(masked):
+        for k in range(body, end + 1):
+            if chars[k] not in "\r\n":
+                chars[k] = " "
+    return "".join(chars)
+
+
+def _nested_body_mutates_params(body: str) -> bool:
+    """嵌套函数体是否可能出现对 operation.params 的改写（读取不算）。"""
+    return bool(
+        re.search(r"operation\s*\.\s*params\s*=(?!=|>)", body)
+        or re.search(r"operation\s*\.\s*params\s*\.\s*[A-Za-z_$][\w$]*\s*"
+                     r"(?:\+|-|\*|/|%|\|\||&&|\?\?)?=(?!=|>)", body)
+        or re.search(r"operation\s*\.\s*params\s*\[\s*[^\]]+\]\s*"
+                     r"(?:\+|-|\*|/|%|\|\||&&|\?\?)?=(?!=|>)", body)
+        or re.search(r"(?:Wb|Ext)\.apply\s*\(\s*operation\s*\.\s*params\b", body)
+        or re.search(r"\bdelete\s+operation\s*\.\s*params\b", body)
+        or re.search(r"=\s*operation\s*\.\s*params\b(?!\s*[.\[])", body)
+    )
+
+
+def _nearest_open_brace(text: str, pos: int) -> int | None:
+    depth = 0
+    for i in range(pos - 1, -1, -1):
+        ch = text[i]
+        if ch == "}":
+            depth += 1
+        elif ch == "{":
+            if depth == 0:
+                return i
+            depth -= 1
+    return None
+
+
+def _statement_condition(masked: str, pos: int) -> str | None:
+    """返回包住 `pos` 的最近 `if/for/while/switch/catch/else` 条件文本。"""
+    i = pos - 1
+    while i >= 0 and masked[i] in " \t\r\n":
+        i -= 1
+    if i >= 0 and masked[i] == ")":
+        open_pos = _matching_paren_back(masked, i)
+        if open_pos is not None:
+            pre = masked[:open_pos].rstrip()
+            if re.search(r"\b(?:if|for|while|switch|catch)\s*$", pre):
+                return masked[open_pos + 1:i].strip()
+
+    block = _nearest_open_brace(masked, pos)
+    if block is not None:
+        pre = masked[:block].rstrip()
+        if re.search(r"\belse\s*$", pre):
+            return "else"
+        if pre.endswith(")"):
+            open_pos = _matching_paren_back(pre, len(pre) - 1)
+            if open_pos is not None:
+                head = pre[:open_pos].rstrip()
+                if re.search(r"\b(?:if|for|while|switch|catch)\s*$", head):
+                    return pre[open_pos + 1:-1].strip()
+
+    start = max(masked.rfind(";", 0, pos), masked.rfind("{", 0, pos),
+                masked.rfind("}", 0, pos))
+    segment = masked[start + 1:pos].strip()
+    match = re.match(r"^if\s*\((.*)\)\s*$", segment, re.S)
+    if match:
+        return match.group(1).strip()
+    if re.match(r"^else\b", segment):
+        return "else"
+    return None
+
+
+def _guard_never(condition: str | None) -> bool:
+    """`operation.params` 在 beforeload 时已由 Store.load 置为 `{}`，假值守卫恒不执行。"""
+    if not condition:
+        return False
+    compact = re.sub(r"\s+", "", condition)
+    return compact in {
+        "!operation.params",
+        "operation.params==null",
+        "operation.params===null",
+        "operation.params==undefined",
+        "operation.params===undefined",
+    }
+
+
+def _read_stmt_expr(js: str, i: int) -> str:
+    """从 `js[i]` 读一个赋值右侧表达式：括号配平，遇顶层 `;` / `,` / `}` 停。"""
+    depth = 0
+    buf: list[str] = []
+    while i < len(js):
+        ch = js[i]
+        if ch in "([{":
+            depth += 1
+            buf.append(ch)
+        elif ch in ")]}":
+            if depth == 0:
+                break
+            depth -= 1
+            buf.append(ch)
+        elif depth == 0 and ch in ";,":
+            break
+        else:
+            buf.append(ch)
+        i += 1
+    return "".join(buf)
+
+
+def _split_call_args(text: str, open_pos: int) -> tuple[list[str], int | None]:
+    """拆分 `text[open_pos]`（须为 `(`）起的调用实参，返回 (实参文本, 闭合 `)` 偏移)。"""
+    if open_pos < 0 or open_pos >= len(text) or text[open_pos] != "(":
+        return [], None
+    args: list[str] = []
+    start = open_pos + 1
+    depth = 0
+    quote = None
+    i = start
+    while i < len(text):
+        ch = text[i]
+        if quote:
+            if ch == "\\":
+                i += 2
+                continue
+            if ch == quote:
+                quote = None
+            i += 1
+            continue
+        if ch in ("'", '"', "`"):
+            quote = ch
+        elif ch in "([{":
+            depth += 1
+        elif ch in ")]}":
+            if ch == ")" and depth == 0:
+                args.append(text[start:i].strip())
+                return args, i
+            depth -= 1
+        elif ch == "," and depth == 0:
+            args.append(text[start:i].strip())
+            start = i + 1
+        i += 1
+    return args, None
+
+
+def _params_names(aliases=()) -> tuple:
+    """possibly-aliased receiver names that refer to `operation`（`operation` 恒在）。"""
+    return tuple(["operation"] + sorted(set(aliases) - {"operation"}))
+
+
+def _params_ref_pattern(aliases=()) -> str:
+    names = "|".join(re.escape(name) for name in _params_names(aliases))
+    return r"(?<![.\w$])(?:%s)\s*\.\s*params\b" % names
+
+
+def _is_params_ref(expr: str, aliases=()) -> bool:
+    text = expr.strip().rstrip(";").strip()
+    names = "|".join(re.escape(name) for name in _params_names(aliases))
+    return re.fullmatch(r"(?<![.\w$])(?:%s)\s*\.\s*params" % names, text) is not None
+
+
+def _collect_operation_aliases(masked: str) -> set[str]:
+    """按源码顺序收集整对象接收者别名，支持括号右值与已知简单别名链。"""
+    aliases: set[str] = set()
+    pattern = (
+        r"(?:(?:var|let|const)\s+)?(?<![.\w$])"
+        r"([A-Za-z_$][\w$]*)\s*=\s*(\(*)\s*"
+        r"([A-Za-z_$][\w$]*)\s*(\)*)\s*(?=[;,\n]|$)")
+    for match in re.finditer(pattern, masked):
+        name, opens, rhs, closes = match.groups()
+        if len(opens) != len(closes) or name == rhs:
+            continue
+        if name != "operation":
+            if rhs == "operation" or rhs in aliases:
+                aliases.add(name)
+            else:
+                aliases.discard(name)
+    return aliases
+
+
+_RECEIVER_SCALAR_RE = re.compile(
+    r"(?:true|false|null|undefined|NaN|[-+]?(?:\d+(?:\.\d*)?|\.\d+)"
+    r"(?:[eE][-+]?\d+)?)\Z")
+
+
+def _strip_wrapping_parens(text: str) -> str:
+    """去掉完整包住整个表达式的成对圆括号。"""
+    text = text.strip()
+    while len(text) >= 2 and text[0] == "(" and text[-1] == ")":
+        depth = 0
+        wrapped = False
+        for index, char in enumerate(text):
+            if char == "(":
+                depth += 1
+            elif char == ")":
+                depth -= 1
+                if depth == 0:
+                    wrapped = index == len(text) - 1
+                    break
+            if depth < 0:
+                break
+        if not wrapped:
+            break
+        text = text[1:-1].strip()
+    return text
+
+
+def _skip_rhs_leading_space(masked: str, start: int) -> int:
+    """跳过赋值号后的空白（含换行，右值换行书写仍属同一表达式）。"""
+    pos = start
+    while pos < len(masked) and masked[pos] in " \t\r\n":
+        pos += 1
+    return pos
+
+
+def _read_receiver_rhs(masked: str, start: int) -> int:
+    """返回赋值右值在 `masked` 中的结束位置（深度 0 的逗号、分号或换行）。"""
+    depth = 0
+    index = start
+    limit = len(masked)
+    while index < limit:
+        char = masked[index]
+        if char in "([{":
+            depth += 1
+        elif char in ")]}":
+            if depth == 0:
+                break
+            depth -= 1
+        elif depth == 0 and char in ",;\n":
+            break
+        index += 1
+    return index
+
+
+def _classify_receiver_rhs(rhs: str, state: dict) -> str:
+    """把右值判定为 operation 别名、明确独立对象或来源未知。"""
+    text = _strip_wrapping_parens(rhs)
+    if not text:
+        return "independent"
+    if text[0] in "'\"`":
+        return "independent"
+    if text[0] in "{[":
+        return "independent"
+    if _RECEIVER_SCALAR_RE.match(text):
+        return "independent"
+    if re.fullmatch(r"[A-Za-z_$][\w$]*", text):
+        if text == "operation" or state.get(text) == "operation":
+            return "operation"
+        if state.get(text) == "independent":
+            return "independent"
+    return "unknown"
+
+
+def _receiver_state_events(masked: str, code: str) -> list:
+    """按源码顺序给出局部接收者状态：`operation` / `independent` / `unknown`。
+
+    `masked` 用于定位声明与赋值，`code` 用于判定右值形态（字符串仍可见）。
+    无初始化的声明只在名字尚未建立状态时记为未知，后续赋值按源码顺序覆盖。
+    """
+    raw: list = []
+    declared_init_pos: set[int] = set()
+    for decl in re.finditer(r"\b(?:var|let|const)\s+", masked):
+        pos = decl.end()
+        while pos < len(masked):
+            name_match = re.match(r"([A-Za-z_$][\w$]*)", masked[pos:])
+            if name_match is None:
+                break
+            name = name_match.group(1)
+            name_pos = pos
+            pos += len(name)
+            while pos < len(masked) and masked[pos] in " \t":
+                pos += 1
+            if (pos < len(masked) and masked[pos] == "="
+                    and masked[pos:pos + 2] not in ("==", "=>")):
+                rhs_start = _skip_rhs_leading_space(masked, pos + 1)
+                rhs_end = _read_receiver_rhs(masked, rhs_start)
+                raw.append((name_pos, name, rhs_start, rhs_end))
+                declared_init_pos.add(name_pos)
+                pos = rhs_end
+                while pos < len(masked) and masked[pos] in " \t":
+                    pos += 1
+            else:
+                raw.append((name_pos, name, None, None))
+            if pos < len(masked) and masked[pos] == ",":
+                pos += 1
+                while pos < len(masked) and masked[pos] in " \t":
+                    pos += 1
+                continue
+            break
+    for match in re.finditer(
+            r"(?<![.\w$])([A-Za-z_$][\w$]*)\s*=(?!=|>)", masked):
+        if match.start() in declared_init_pos:
+            continue
+        name = match.group(1)
+        if name == "operation":
+            continue
+        rhs_start = _skip_rhs_leading_space(masked, match.end())
+        rhs_end = _read_receiver_rhs(masked, rhs_start)
+        raw.append((match.start(), name, rhs_start, rhs_end))
+    state: dict = {}
+    timeline: list = []
+    for pos, name, rhs_start, rhs_end in sorted(raw, key=lambda item: item[0]):
+        if name == "operation":
+            continue
+        if rhs_start is None:
+            state.setdefault(name, "unknown")
+        else:
+            state[name] = _classify_receiver_rhs(
+                code[rhs_start:rhs_end], state)
+        timeline.append((pos, name, state[name]))
+    return timeline
+
+
+def _receiver_state_at(timeline, name: str, pos: int) -> str | None:
+    """返回 `pos` 之前最近一次赋给 `name` 的状态；从未局部赋值时为 None。"""
+    current = None
+    for event_pos, event_name, event_state in timeline:
+        if event_pos >= pos:
+            break
+        if event_name == name:
+            current = event_state
+    return current
+
+
+def _uncertain_params_writes(masked: str, code: str,
+                             timeline) -> list[tuple[int, str, int]]:
+    """未知来源局部接收者整体改写 params 的位置（点式/括号式）。"""
+    found: list[tuple[int, str, int]] = []
+    patterns = (
+        r"(?<![.\w$])([A-Za-z_$][\w$]*)\s*\.\s*params\s*=(?!=|>)",
+        r"(?<![.\w$])([A-Za-z_$][\w$]*)\s*\[\s*(['\"])params\2\s*\]\s*=(?!=|>)",
+    )
+    for pattern in patterns:
+        for match in re.finditer(pattern, code):
+            name = match.group(1)
+            if masked[match.start()] == " ":
+                continue
+            if _receiver_state_at(timeline, name, match.start()) != "unknown":
+                continue
+            found.append((match.start(), name, match.end()))
+    return sorted(set(found))
+
+
+def _beforeload_status(present: set[str], unknown_keys: set[str],
+                       residual_unknown: bool, key: str) -> str:
+    if key in present:
+        return "present"
+    if key in unknown_keys or residual_unknown:
+        return "unknown"
+    return "absent"
+
+
+def _beforeload_merge(base: tuple[set[str], set[str], bool],
+                      branch: tuple[set[str], set[str], bool],
+                      ) -> tuple[set[str], set[str], bool]:
+    """合并“分支可能执行/不执行”两套逐键状态。"""
+    base_present, base_unknown, base_residual = base
+    branch_present, branch_unknown, branch_residual = branch
+    present = set(base_present) & set(branch_present)
+    unknown: set[str] = set()
+    for key in (set(base_present) | set(branch_present)
+                | set(base_unknown) | set(branch_unknown)):
+        if key in present:
+            continue
+        if (_beforeload_status(base_present, base_unknown, base_residual, key)
+                == "absent"
+                and _beforeload_status(branch_present, branch_unknown,
+                                       branch_residual, key) == "absent"):
+            continue
+        unknown.add(key)
+    return present, unknown, bool(base_residual or branch_residual)
+
+
+def _canon_params_brackets(code: str, aliases=()) -> str:
+    """把 `operation['params']` / `op["params"]` 等长改写为 `operation.params` + 空格。"""
+    names = "|".join(re.escape(name) for name in _params_names(aliases))
+    pattern = re.compile(
+        r"(?<![.\w$])((?:%s))\s*\[\s*(['\"])params\2\s*\]" % names)
+
+    def _repl(match):
+        base = match.group(1) + ".params"
+        return base + " " * (len(match.group(0)) - len(base))
+
+    return pattern.sub(_repl, code)
+
+
+def _executed_iife(masked: str, body_end: int) -> bool:
+    """函数体后直接 `(` 调用，或 `(function(){…})()` / `(()=>{…})()` 形态。"""
+    tail = masked[body_end + 1:].lstrip(" \t\r\n")
+    if tail.startswith("("):
+        return True
+    if tail.startswith(")"):
+        return tail[1:].lstrip(" \t\r\n").startswith("(")
+    return False
+
+
+def _object_literal_keys(inner: str) -> list[str]:
+    """对象字面量顶层键（支持标识符键与带引号键；跳过嵌套对象/数组/函数体）。"""
+    keys: list[str] = []
+    i, depth, quote = 0, 0, None
+    while i < len(inner):
+        ch = inner[i]
+        if quote:
+            if ch == "\\":
+                i += 2
+                continue
+            if ch == quote:
+                quote = None
+            i += 1
+            continue
+        prev = i - 1
+        while prev >= 0 and inner[prev] in " \t\r\n":
+            prev -= 1
+        at_member_start = depth == 0 and (prev < 0 or inner[prev] in "{,")
+        if at_member_start:
+            quoted = re.match(r"(['\"])(.*?)\1\s*:", inner[i:], re.S)
+            if quoted:
+                keys.append(quoted.group(2))
+                i += quoted.end()
+                continue
+            bare = re.match(r"([A-Za-z_$][\w$]*)\s*:", inner[i:])
+            if bare:
+                keys.append(bare.group(1))
+                i += bare.end()
+                continue
+        if ch in ("'", '"', "`"):
+            quote = ch
+        elif ch in "([{":
+            depth += 1
+        elif ch in ")]}":
+            depth -= 1
+        i += 1
+    return keys
+
+
+def _js_literal_keys(expr: str) -> set[str] | None:
+    """对象字面量的顶层键集合；非纯字面量或含未知展开返回 None。"""
+    text = expr.strip().rstrip(";").strip()
+    if not text.startswith("{"):
+        return None
+    end = _matching_brace(text, 0)
+    if end is None or text[end + 1:].strip():
+        return None
+    inner = text[1:end]
+    if "..." in inner:
+        return None
+    if re.search(r"\[\s*[^\]]+\s*\]\s*:", inner):
+        return None  # 计算键：键名不是静态字面量
+    return set(_object_literal_keys(inner))
+
+
+def _js_apply_result(expr: str, present: set[str],
+                     aliases=()) -> tuple[set[str], bool] | None:
+    """`Ext.apply/Wb.apply(...)` 的确定键集合与「旧键是否可能整体丢失」；非 apply 返回 None。
+
+    apply 只写入 object：结果键集合是全部实参键的并集，实参里的未知对象只会追加
+    未知键，不会删除已知键。只有结果对象本身不含 `operation.params` 时，旧键才可能
+    在整体替换中丢失（此时未知实参才置 unknown）。
+    """
+    text = expr.strip().rstrip(";").strip()
+    match = re.match(r"(?:Ext|Wb)\.apply\s*\(", text)
+    if not match:
+        return None
+    open_pos = text.find("(", match.start())
+    args, close_pos = _split_call_args(text, open_pos)
+    if close_pos is None:
+        return set(), True
+
+    def _arg_keys(arg: str) -> tuple[set[str], bool]:
+        literal = _js_literal_keys(arg)
+        if literal is not None:
+            return literal, False
+        if _is_params_ref(arg, aliases):
+            return set(present), False
+        return set(), True
+
+    if not args:
+        return set(), True
+    base, base_unknown = _arg_keys(args[0])
+    keys = set(base)
+    includes_old = _is_params_ref(args[0], aliases)
+    has_unknown_arg = base_unknown
+    for idx in (1, 2):
+        if idx >= len(args):
+            continue
+        part, part_unknown = _arg_keys(args[idx])
+        keys |= part
+        has_unknown_arg = has_unknown_arg or part_unknown
+        includes_old = includes_old or _is_params_ref(args[idx], aliases)
+    if len(args) > 3:
+        has_unknown_arg = True
+    return keys, bool(has_unknown_arg and not includes_old)
+
+
+def _eval_beforeload_rhs(rhs: str, present: set[str],
+                         aliases=()) -> tuple[set[str], bool, str]:
+    """整体赋值右侧的键集合与原因；未知时返回空集合 + unknown。"""
+    literal = _js_literal_keys(rhs)
+    if literal is not None:
+        return set(literal), False, "整体替换 operation.params"
+    if _is_params_ref(rhs, aliases):
+        return set(present), False, "保留 operation.params 原键"
+    if re.match(r"^%s\s*\|\|" % _params_ref_pattern(aliases), rhs):
+        return set(present), False, "保留 operation.params 原键（假值回退不执行）"
+    applied = _js_apply_result(rhs, present, aliases)
+    if applied is not None:
+        keys, unknown = applied
+        return set(keys), unknown, "按 Ext.apply 方向合并 operation.params"
+    return set(), True, "动态整体赋值 operation.params"
+
+
+def _whole_object_use_mutates(masked: str, start: int, end: int) -> bool:
+    """判断整对象 `operation.params` 是否被别名保存或传给未建语义的辅助函数。"""
+    before = masked[:start].rstrip()
+    after = masked[end:].lstrip()
+    if not after:
+        return False
+    prev = before[-1:] if before else ""
+    nxt = after[:1]
+    if prev == "=" and nxt in ";,)":
+        if len(before) >= 2 and before[-2] in "=!<>":
+            return False
+        return True
+    if prev in "(," and nxt in "),;":
+        match = re.search(r"([A-Za-z_$][\w$]*)\s*\($", before)
+        if match and match.group(1) in {"if", "while", "switch", "for", "catch", "with"}:
+            return False
+        return True
+    return False
+
+
+def _covering_apply_call(masked: str, code: str, pos: int):
+    """返回包住 `pos` 的最近 `Ext.apply/Wb.apply(...)`：`(起点, 实参, 闭合括号)`。"""
+    last = None
+    for cand in re.finditer(r"(?<![.\w$])(?:Ext|Wb)\.apply\s*\(", masked[:pos]):
+        last = cand
+    if last is None:
+        return None
+    open_pos = masked.find("(", last.start())
+    args, close_pos = _split_call_args(code, open_pos)
+    if close_pos is None or close_pos < pos:
+        return None
+    return last.start(), args, close_pos
+
+
+def _beforeload_param_effect(js: str, initial: set[str]) -> tuple[set[str], set[str], bool, list[str]]:
+    """按源码顺序计算直属 beforeload 后的逐键状态。
+
+    返回 `(确定保留的键, 确定未核对的键, 其余键是否未知, 原因)`：
+    不在前两项的键，第三项为假时是确定缺失，为真时是未核对。
+    `initial` 是事件前由 store 静态 params、调用 params 与 out 已证明的键。
+    """
+    code = strip_js_comments(js or "")
+    aliases = _collect_operation_aliases(_js_mask_strings(code))
+    code = _canon_params_brackets(code, aliases)
+    strings_masked = _js_mask_strings(code)
+    nested_mutates = any(
+        _nested_body_mutates_params(strings_masked[start:end + 1])
+        for start, end in _nested_function_bodies(strings_masked))
+    masked = _js_mask_nested_functions(strings_masked)
+    timeline = _receiver_state_events(masked, _js_mask_nested_functions(code))
+    present = set(initial)
+    unknown_keys: set[str] = set()
+    residual_unknown = False
+    notes: list[str] = []
+    skip_until = -1
+    events: list[tuple[int, str, object]] = [
+        (match.start(), "ref", match)
+        for match in re.finditer(_params_ref_pattern(aliases), masked)
+    ]
+    events += [(pos, "uncertain", (name, rhs_start))
+               for pos, name, rhs_start in _uncertain_params_writes(
+                   masked, _js_mask_nested_functions(code), timeline)]
+    events.sort(key=lambda item: item[0])
+
+    for pos, kind, payload in events:
+        if pos < skip_until:
+            continue
+        if kind == "uncertain":
+            name, rhs_start = payload
+            rhs = _read_stmt_expr(code, rhs_start).strip()
+            present = set()
+            unknown_keys = set()
+            residual_unknown = True
+            notes.append(
+                "直属 beforeload 对未识别接收者 %s 整体改写 params，键集合未核对"
+                % name)
+            skip_until = rhs_start + len(rhs)
+            continue
+        match = payload
+        receiver_match = re.match(
+            r"([A-Za-z_$][\w$]*)\s*\.\s*params\b", masked[pos:])
+        receiver = receiver_match.group(1) if receiver_match else "operation"
+        if receiver != "operation":
+            receiver_state = _receiver_state_at(timeline, receiver, pos)
+            if receiver_state != "operation":
+                if receiver_state == "unknown":
+                    present = set()
+                    unknown_keys = set()
+                    residual_unknown = True
+                    notes.append(
+                        "直属 beforeload 出现未识别接收者 %s 的 params 引用，"
+                        "键集合未核对" % receiver)
+                continue
+        rest = masked[match.end():]
+        rest_code = code[match.end():]
+
+        # delete operation.params.K / operation.params['K']：确定性移除
+        if re.search(r"\bdelete\s*$", masked[:pos]):
+            condition = _statement_condition(masked, pos)
+            del_dot = re.match(r"\s*\.\s*([A-Za-z_$][\w$]*)", rest)
+            del_bracket = re.match(r"\s*\[\s*(['\"])(.*?)\1\s*\]", rest_code, re.S)
+            del_key = del_dot.group(1) if del_dot else (del_bracket.group(2) if del_bracket else None)
+            if del_key is None:
+                # 动态 delete 只能删除键，不能新增；已存在的键都可能被删。
+                unknown_keys |= present
+                present = set()
+                notes.append("直属 beforeload 的动态 delete，键集合未核对")
+            elif condition is not None and not _guard_never(condition):
+                present, unknown_keys, residual_unknown = _beforeload_merge(
+                    (present, unknown_keys, residual_unknown),
+                    (present - {del_key}, unknown_keys - {del_key},
+                     residual_unknown))
+                notes.append("直属 beforeload 的条件删除固定键 %s，未核对" % del_key)
+            else:
+                present.discard(del_key)
+                unknown_keys.discard(del_key)
+                notes.append("直属 beforeload 删除固定键 %s" % del_key)
+            semi = masked.find(";", match.end())
+            skip_until = semi + 1 if semi >= 0 else len(masked)
+            continue
+
+        # 独立调用 Wb.apply(operation.params, ...) / Ext.apply(...)：
+        # 只有第一实参是 params 时才原地合并；结果丢弃的 `Ext.apply({}, ...)` 不改键。
+        covering = _covering_apply_call(masked, code, pos)
+        if covering is not None:
+            _call_start, args, close_pos = covering
+            if close_pos is None:
+                present = set()
+                unknown_keys = set()
+                residual_unknown = True
+                notes.append("直属 beforeload 的 Ext.apply 调用不完整，键集合未核对")
+                continue
+            condition = _statement_condition(masked, pos)
+            if condition is not None and _guard_never(condition):
+                notes.append("直属 beforeload 的 !operation.params 守卫分支不执行")
+            else:
+                target_is_params = bool(args) and _is_params_ref(args[0], aliases)
+                if target_is_params:
+                    new_present = set(present)
+                    unknown_arg = False
+                    for idx in (1, 2):
+                        if idx >= len(args):
+                            continue
+                        literal = _js_literal_keys(args[idx])
+                        if literal is not None:
+                            new_present |= literal
+                        elif _is_params_ref(args[idx], aliases):
+                            continue
+                        else:
+                            # apply 只追加/覆盖键，不删除已有键；未知实参追加的键未核对。
+                            unknown_arg = True
+                    applied = (new_present, unknown_keys - new_present,
+                               residual_unknown or unknown_arg)
+                    if condition is not None:
+                        present, unknown_keys, residual_unknown = _beforeload_merge(
+                            (present, unknown_keys, residual_unknown), applied)
+                        notes.append("直属 beforeload 的条件 Ext.apply 合并，键集合未核对")
+                    else:
+                        present, unknown_keys, residual_unknown = applied
+                        notes.append("直属 beforeload 按 Ext.apply 方向合并固定键")
+                        if unknown_arg:
+                            notes.append("直属 beforeload 的未知实参只追加未知键，已有键保留")
+                else:
+                    notes.append("直属 beforeload 的 Ext.apply 结果未写回 operation.params")
+            skip_until = close_pos + 1
+            continue
+
+        # 整体赋值 operation.params = ...
+        assign = re.match(r"\s*=(?!=|>)", rest)
+        if assign:
+            rhs_start = match.end() + assign.end()
+            rhs = _read_stmt_expr(code, rhs_start).strip()
+            condition = _statement_condition(masked, pos)
+            if condition is not None and _guard_never(condition):
+                notes.append("直属 beforeload 的 !operation.params 守卫分支不执行")
+                skip_until = rhs_start + len(rhs)
+                continue
+            new_present, rhs_unknown, reason = _eval_beforeload_rhs(rhs, present, aliases)
+            if reason.startswith("整体替换"):
+                applied = (set(new_present), set(), False)
+            elif reason.startswith("保留 operation.params 原键"):
+                applied = (set(present), set(unknown_keys), residual_unknown)
+            elif reason.startswith("按 Ext.apply"):
+                applied = (set(new_present), set(unknown_keys) - set(new_present),
+                           residual_unknown or rhs_unknown)
+            else:
+                applied = (set(), set(), True)
+            if condition is not None:
+                present, unknown_keys, residual_unknown = _beforeload_merge(
+                    (present, unknown_keys, residual_unknown), applied)
+                notes.append("直属 beforeload 的条件整体/动态赋值，键集合未核对")
+            else:
+                present, unknown_keys, residual_unknown = applied
+                notes.append("直属 beforeload %s" % reason)
+            skip_until = rhs_start + len(rhs)
+            continue
+
+        # 固定键：operation.params.K = ... / operation.params['K'] = ...
+        dot_key = re.match(
+            r"\s*\.\s*([A-Za-z_$][\w$]*)\s*(?:\+|-|\*|/|%|\|\||&&|\?\?)?=(?!=|>)", rest)
+        if dot_key:
+            key = dot_key.group(1)
+            condition = _statement_condition(masked, pos)
+            if condition is not None and _guard_never(condition):
+                notes.append("直属 beforeload 的 !operation.params 守卫分支不执行")
+            elif condition is not None:
+                present, unknown_keys, residual_unknown = _beforeload_merge(
+                    (present, unknown_keys, residual_unknown),
+                    (present | {key}, unknown_keys - {key}, residual_unknown))
+                notes.append("直属 beforeload 的条件固定键 %s，未核对" % key)
+            else:
+                present.add(key)
+                unknown_keys.discard(key)
+                notes.append("直属 beforeload 追加固定键 %s" % key)
+            rhs_start = match.end() + dot_key.end()
+            rhs = _read_stmt_expr(code, rhs_start).strip()
+            skip_until = rhs_start + len(rhs)
+            continue
+
+        bracket_key = re.match(
+            r"\s*\[\s*(['\"])(.*?)\1\s*\]\s*(?:\+|-|\*|/|%|\|\||&&|\?\?)?=(?!=|>)",
+            rest_code, re.S)
+        if bracket_key:
+            key = bracket_key.group(2)
+            condition = _statement_condition(masked, pos)
+            if condition is not None and _guard_never(condition):
+                notes.append("直属 beforeload 的 !operation.params 守卫分支不执行")
+            elif condition is not None:
+                present, unknown_keys, residual_unknown = _beforeload_merge(
+                    (present, unknown_keys, residual_unknown),
+                    (present | {key}, unknown_keys - {key}, residual_unknown))
+                notes.append("直属 beforeload 的条件固定键 %s，未核对" % key)
+            else:
+                present.add(key)
+                unknown_keys.discard(key)
+                notes.append("直属 beforeload 追加固定键 %s" % key)
+            rhs_start = match.end() + bracket_key.end()
+            rhs = _read_stmt_expr(code, rhs_start).strip()
+            skip_until = rhs_start + len(rhs)
+            continue
+
+        dynamic_key = re.match(r"\s*\[\s*[^'\"\]]+\s*\]\s*=(?!=|>)", rest)
+        if dynamic_key:
+            # 动态键赋值只能新增/覆盖键，不能删除已有键。
+            residual_unknown = True
+            notes.append("直属 beforeload 的动态键赋值，键集合未核对")
+            rhs_start = match.end() + dynamic_key.end()
+            rhs = _read_stmt_expr(code, rhs_start).strip()
+            skip_until = rhs_start + len(rhs)
+            continue
+
+        compound = re.match(r"\s*(?:\+|-|\*|/|%|\|\||&&|\?\?)=(?!=|>)", rest)
+        if compound:
+            present = set()
+            unknown_keys = set()
+            residual_unknown = True
+            notes.append("直属 beforeload 对 operation.params 的整体复合赋值，键集合未核对")
+            continue
+
+        if _whole_object_use_mutates(masked, pos, match.end()):
+            present = set()
+            unknown_keys = set()
+            residual_unknown = True
+            notes.append("直属 beforeload 将 operation.params 传给未建语义的辅助函数/别名，键集合未核对")
+
+    # 去重但保持首次出现顺序
+    seen: set[str] = set()
+    unique_notes = [note for note in notes if not (note in seen or seen.add(note))]
+    if nested_mutates:
+        present = set()
+        unknown_keys = set()
+        residual_unknown = True
+        unique_notes.append("直属 beforeload 的嵌套函数可能改写 operation.params，键集合未核对")
+    return present, unknown_keys, residual_unknown, unique_notes
 
 
 # --------------------------------------------------------------------------- #
@@ -6615,9 +7584,9 @@ def cmd_params(args) -> int:
     ② `params` —— `store.load({params: {名: 值}})` / `params: Wb.getValue(app.tbar)`
        显式写出参数名；适合值不来自控件（如取当前行 `record.data.X`）或只需少数几个参数。
 
-    同名参数的合并优先级（框架源码实测，两条通路方向相反）：
-      · `store.load`  ：store 自身配置的 `params` > 调用时 `params` > `out`
-      · `Wb.request`  ：`out` > `params`
+    同名参数的合并优先级（框架源码实测，均为第二实参 config 覆盖第三实参 defaults）：
+      · `store.load`  ：调用时 `params` > `out` > store 自身配置的 `params`
+      · `Wb.request`  ：`params` > `out`
 
     SQL 侧需求：`{?名字?}`（sql / totalSql / serverScript 里都算）与 `app.get('名字')`。
     """
@@ -6676,20 +7645,40 @@ def cmd_params(args) -> int:
         _p_ctl = None
     print(controls_source_line(_p_ctl))
 
-    stores: list[dict] = []
-    # (通路, 容器列表, 键列表, 原文, 来源文件相对路径, 目标键或None, 调用接收者store名或None)
+    stores: list[tuple] = []           # (configs, 页面结构位置, store 节点身份)
+    # (通路, 容器列表, 键列表, 原文, 来源页面位置, 目标键或None, 调用接收者名或None,
+    #  传参点偏移, 调用形态, 字段身份, 动态params, 静态调用身份, 调用对象是否写了url)
     transfers: list[tuple] = []
+    store_nodes_by_identity: dict[tuple, dict] = {}
+    store_beforeload_by_cfg: dict[int, str] = {}
     direct: list[str] = []        # Wb.request({url:'m?xwl=…'}) 直接调用的 SQL 文件
 
     def scan(node, path=()):
         if isinstance(node, dict):
             c = node.get("configs")
             if isinstance(c, dict) and node.get("type") == "store":
-                stores.append(c)
-            for js in _js_of(node):
-                for kind, conts, keys, raw, tgt, owner in find_transfers_with_target(js, field_set):
-                    transfers.append((kind, conts, keys, raw, "/".join(str(x) for x in path), tgt, owner))
+                store_identity = ("/".join(str(x) for x in path), id(node))
+                node_label = "store[%s]" % (registry_key(c) or "?")
+                stores.append((c, node_label, store_identity))
+                store_nodes_by_identity[store_identity] = c
+                events = node.get("events")
+                if (isinstance(events, dict)
+                        and isinstance(events.get("beforeload"), str)
+                        and events["beforeload"].strip()):
+                    store_beforeload_by_cfg[id(c)] = events["beforeload"]
+            for field, js in _js_fields(node):
+                location = "/".join(str(x) for x in path) + "#" + field
+                for (kind, conts, keys, raw, tgt, owner, pos,
+                     call_kind, _unused_field,
+                     dynamic_params, call_identity,
+                     has_url) in find_transfers_with_target(js, field_set):
+                    transfers.append((kind, conts, keys, raw, location, tgt, owner,
+                                      pos, call_kind, field, dynamic_params, call_identity,
+                                      has_url))
+                _masked_js = _js_mask_strings(js)
                 for m in _REQ_URL_RE.finditer(js):
+                    if _masked_js[m.start()] == " ":
+                        continue  # 字符串/模板字面量里的 url 键不是真实请求
                     tgt = m.group(1).split("m?xwl=")[-1].split("&")[0].strip()   # `#36`：去首尾空白（空目标视为无引用）
                     if tgt and tgt not in direct:
                         direct.append(tgt)
@@ -6738,7 +7727,7 @@ def cmd_params(args) -> int:
 
     # `#75`：模块根状态**只算一次**（`missing` / `suspect` / `ok`）—— `suspect` 时下面两处改「未核对」。
     _root_state36 = _module_root_state(root)
-    for cfg in stores:
+    for cfg, _store_label, _store_identity in stores:
         url, iid = cfg.get("url"), cfg.get("itemId")
         line = f"  itemId={iid!r} autoLoad={cfg.get('autoLoad')!r}"
         if isinstance(cfg.get("params"), (dict, list)) and cfg.get("params"):
@@ -6842,7 +7831,8 @@ def cmd_params(args) -> int:
     # ---- 请求级归属基础：把每个 store 的**注册键**映射到它自身配置的 url 目标物理键 ----
     # 供 `app.<store>.load({…})`（对象内无 `url:`）回退到「该 store 自身 url」作请求目标。
     store_url_by_name: dict[str, str] = {}
-    for cfg in stores:
+    store_url_candidates: dict[str, list[str]] = {}
+    for cfg, _store_label, _store_identity in stores:
         _u = cfg.get("url")
         if isinstance(_u, str) and "m?xwl=" in _u:
             _t = _u.split("m?xwl=")[-1].split("&")[0].strip()
@@ -6852,34 +7842,131 @@ def cmd_params(args) -> int:
             if os.path.exists(_fp):
                 _rk = registry_key(cfg)
                 if _rk:
-                    store_url_by_name[_rk] = _phys(_fp)
+                    store_url_candidates.setdefault(_rk, []).append(_phys(_fp))
+    for _name, _targets in store_url_candidates.items():
+        if len(set(_targets)) == 1:
+            store_url_by_name[_name] = _targets[0]
 
-    def _resolve_transfer_target(tgt, owner) -> str | None:
+    def _store_url(cfg) -> str | None:
+        _u = cfg.get("url")
+        if not (isinstance(_u, str) and "m?xwl=" in _u and root):
+            return None
+        _t = _u.split("m?xwl=")[-1].split("&")[0].strip()
+        if not _t:
+            return None
+        _fp = os.path.join(root, _t.replace("/", os.sep) + ".xwl")
+        return _phys(_fp) if os.path.exists(_fp) else None
+
+    class _Request:
+        def __init__(self, identity, label, location, carrier, kind, store_node=None):
+            self.identity = identity
+            self.label = label
+            self.location = location
+            self.carrier = carrier
+            self.kind = kind
+            self.store_node = store_node
+            self.supplies: set = set()
+            self.unknown: set = set()
+            self.notes: list[str] = []
+            self.calls: list[int] = []
+            self.incomplete = False
+
+    requests: list[_Request] = []
+    requests_by_identity: dict[tuple, _Request] = {}
+    ambiguous_store_names: set[str] = set()
+    ambiguous_store_configs: list[dict] = []
+    unattrib: set[str] = set()
+
+    def _request(identity, label, location, carrier, kind, store_node=None):
+        found = requests_by_identity.get(identity)
+        if found is None:
+            found = _Request(identity, label, location, carrier, kind, store_node)
+            found.calls = [] if store_node is not None else [-1]
+            requests.append(found)
+            requests_by_identity[identity] = found
+        return found
+
+    store_requests: dict[tuple, _Request] = {}
+    for cfg, store_label, store_identity in stores:
+        carrier_key = _store_url(cfg)
+        auto_load = cfg.get("autoLoad")
+        auto_load_on = isinstance(auto_load, str) and auto_load.strip().lower() in ("true", "1")
+        if auto_load_on or carrier_key is not None:
+            request_kind = "初始化 autoLoad" if auto_load_on else "条件性 store 配置契约"
+            store_label = "%s#%s" % (store_label, "/".join(str(part)
+                                                             for part in store_identity[0]))
+            request = _request(store_identity, store_label + " · " + request_kind,
+                               store_label, carrier_key, request_kind, cfg)
+            request.calls = []
+            store_requests[store_identity] = request
+            if auto_load is None or (isinstance(auto_load, str)
+                                     and not auto_load.strip().lower() in ("true", "1")):
+                request.notes.append("autoLoad 未配置或为 false：不证明请求已发生，也不证明永不加载")
+
+    def _store_request(owner, location, pos, call_kind, carrier, has_url):
+        """把 `app.<store>.load` 关联到唯一 store 节点；注册名歧义时记未核对。"""
+        if owner is None:
+            return (None, None)
+        matches = [(label, identity, cfg)
+                   for cfg, label, identity in stores if registry_key(cfg) == owner]
+        if len(matches) == 1:
+            label, identity, cfg = matches[0]
+            req_carrier = carrier if (carrier is not None or has_url) else _store_url(cfg)
+            request = _request((location, pos, call_kind, identity),
+                               label + " · 显式调用 #" + str(pos), location,
+                               req_carrier, "显式调用", cfg)
+            request.calls.append(pos)
+            return (request, cfg)
+        if len(matches) > 1:
+            ambiguous_store_names.add(owner)
+        return (None, None)
+
+    def _resolve_transfer_target(tgt, owner, has_url=False) -> str | None:
         """把一笔传参点的**请求目标**解析成载体物理键；解析不到返回 `None`（⇒ 该供给「未核对」）。"""
         if tgt is not None and root:
             _fp = os.path.join(root, tgt.replace("/", os.sep) + ".xwl")
             if os.path.exists(_fp):
                 return _phys(_fp)
             return None
+        if has_url:
+            return None  # 调用对象写了 url 但目标解析不到：不静默回退 store 自身 url
         if owner is not None and owner in store_url_by_name:
             return store_url_by_name[owner]
         return None
+
+    def _carrier_display(carrier_key):
+        return _phys_display.get(carrier_key, carrier_key or "（目标未核对）")
+
+    def _request_location(request, location, pos):
+        return "%s @%s#%d" % (request.label, location, pos)
+
+    def _add_names(request, names, location, pos):
+        if names:
+            request.supplies.update(names)
+            provided.update(names)
+            print("      %16s → 请求: %s  供给键 %s"
+                  % ("", _request_location(request, location, pos), sorted(names)))
+
+    def _add_unknown(request, names, location, pos, reason):
+        request.unknown.update(names)
+        request.notes.append(reason)
+        print("      %16s → 请求: %s  [未核对] %s（%s）"
+              % ("", _request_location(request, location, pos), sorted(names), reason))
 
     n_out = sum(1 for t in transfers if t[0] == "out")
     n_pm = len(transfers) - n_out
     print(f"\n=== 传参点（{len(transfers)} 处）: out {n_out} 处 / params {n_pm} 处 ===")
 
-    # 请求级供给分桶：
-    #   · `req_supplies`：phys 载体键 → 该载体**自己那次请求**已证明送出的名字集合；
-    #   · `unattrib`：无法静态关联到具体请求目标的供给名字（⇒ 对任何载体只算「未核对」）。
-    req_supplies: dict[str, set] = {}
-    unattrib: set = set()
+    # 每个请求按结构位置、事件/配置字段、静态调用位置与 store 节点身份单独持有供给集合。
+    # SQL 物理路径仍用于读取需求与展示载体，但不再充当请求身份。
+    unattached: list[tuple] = []
     provided: set[str] = set()        # 全页**已证明**送出名字的并集（仅用于展示「页面送出」）
-    for kind, conts, keys, raw, where, tgt, owner in transfers:
+    for (kind, conts, keys, raw, where, tgt, owner, pos,
+         call_kind, field, dynamic_params, call_identity, has_url) in transfers:
         tag = {"out": "[out 推荐]", "params=Wb.getValue": "[params·等价out]",
-               "params=对象": "[params·显式键]"}
+               "params=对象": "[params·显式键]", "params=动态": "[params·动态]"}
         head = f"  {tag.get(kind, kind):18s}"
-        _req_key = _resolve_transfer_target(tgt, owner)
+        _req_key = _resolve_transfer_target(tgt, owner, has_url)
         _names: set = set()
         if conts:
             detail = []
@@ -6893,24 +7980,55 @@ def cmd_params(args) -> int:
                 if not locs:
                     detail.append(f"app.{a} → [warn] 页面里找不到注册键（normalName||itemId）== {a!r} 的容器")
                     continue
-                dup = f"（同注册键 ×{len(locs)}，取第一个）" if len(locs) > 1 else ""
-                ids = _collect_name_islands(obj, locs[0][0][locs[0][1]], field_set)
-                _names |= set(ids)
-                detail.append(f"app.{a}{dup} → 容器内取值控件 {ids or '（无）'}")
+                dup = f"（同注册键 ×{len(locs)}，附着未知）" if len(locs) > 1 else ""
+                if len(locs) == 1:
+                    ids = _collect_name_islands(obj, locs[0][0][locs[0][1]], field_set)
+                    _names |= set(ids)
+                    detail.append(f"app.{a} → 容器内取值控件 {ids or '（无）'}")
+                else:
+                    detail.append(f"app.{a}{dup} → 容器内取值控件不任选其一")
             print(head + "; ".join(detail))
         else:
             _names |= set(keys)
             print(head + f"显式参数名 {keys}")
-        # 归属：能解析到具体请求目标 ⇒ 只给该载体背书；否则进「未核对」。
-        _tgt_show = ""
-        if _req_key is not None:
-            req_supplies.setdefault(_req_key, set()).update(_names)
-            _tgt_show = f"  → 归属请求: {_phys_display.get(_req_key, _req_key)}"
+        _store_node = None
+        if call_kind == "store.load":
+            _request_obj, _store_node = _store_request(
+                owner, where, pos, call_kind, _req_key, has_url)
+            if _request_obj is not None and pos not in _request_obj.calls:
+                _request_obj.calls.append(pos)
         else:
-            unattrib |= _names
-            _tgt_show = "  → [未核对] 无法静态关联到具体请求目标（不并入任何载体）"
-        provided |= _names
-        print(f"      {'':16s} 原始: {raw[:150]}{_tgt_show}")
+            _call_identity = (where, field, pos, call_identity)
+            _request_obj = _request(_call_identity,
+                                    (call_kind or "静态调用") + " #" + str(pos),
+                                    where, _req_key,
+                                    "Wb.request 直调" if (call_kind or "").startswith("Wb.")
+                                    else "显式调用")
+        if _request_obj is None:
+            unattached.append((where, pos, _req_key, _names))
+            print(f"      {'':16s} 原始: {raw[:150]}  → [未核对] 无法关联到唯一 store 节点")
+            continue
+        if _request_obj.carrier is None:
+            _request_obj.carrier = _req_key
+        if dynamic_params:
+            _request_obj.incomplete = True
+            _request_obj.notes.append("动态 params 的键无法静态核对")
+            _add_unknown(_request_obj, set(), where, pos,
+                         "动态 params 的键无法静态核对")
+        elif _req_key is None:
+            _request_obj.incomplete = True
+            if _names:
+                _add_unknown(_request_obj, set(), where, pos,
+                             "请求目标无法静态关联")
+                _request_obj.unknown.update(_names)
+            if has_url:
+                _request_obj.notes.append("请求目标无法静态关联")
+            _request_obj.carrier = None
+            if not requests:
+                unattrib.update(_names)
+        else:
+            _add_names(_request_obj, _names, where, pos)
+        print(f"      {'':16s} 原始: {raw[:150]}")
 
     # ---- 把 **store 自身 `configs.params`** 的键归属到**该 store 自己那次请求** ----
     # 形态实测（全量 32519 个 store）：缺失 22755 / **对象字面量字符串** 9752 /
@@ -6918,7 +8036,8 @@ def cmd_params(args) -> int:
     # 只认 `{…}`、其余忽略并 note（`'20'` 这类天然被 `obj_keys` 挡掉）。
     store_keys: set[str] = set()
     ignored_store_params: list[tuple] = []
-    for cfg in stores:
+    store_params_records: list[tuple] = []
+    for cfg, _store_label, store_identity in stores:
         raw_p = cfg.get("params")
         if not isinstance(raw_p, str) or not raw_p.strip():
             continue
@@ -6926,19 +8045,7 @@ def cmd_params(args) -> int:
         if s.startswith("{") and s.endswith("}"):
             _ks = set(obj_keys(s[1:-1]))
             store_keys |= _ks
-            provided |= _ks
-            _u = cfg.get("url")
-            _req_key = None
-            if isinstance(_u, str) and "m?xwl=" in _u and root:
-                _t = _u.split("m?xwl=")[-1].split("&")[0].strip()
-                if _t:
-                    _fp = os.path.join(root, _t.replace("/", os.sep) + ".xwl")
-                    if os.path.exists(_fp):
-                        _req_key = _phys(_fp)
-            if _req_key is not None:
-                req_supplies.setdefault(_req_key, set()).update(_ks)
-            else:
-                unattrib |= _ks
+            store_params_records.append((cfg, _store_label, store_identity, _ks))
         else:
             ignored_store_params.append((cfg.get("itemId"), s))
 
@@ -6980,6 +8087,128 @@ def cmd_params(args) -> int:
                         carrier_needs[_ck] |= set(ps)
 
     needed = need_sql | need_req
+    _incomplete_before_clear = False
+    if not needed:
+        _incomplete_before_clear = any(request.incomplete for request in requests)
+        requests = []
+        requests_by_identity.clear()
+        unattrib.clear()
+    explicit_store_nodes = {id(request.store_node) for request in requests
+                            if request.kind == "显式调用" and request.store_node is not None}
+    suppressed_store_nodes = {id(request.store_node) for request in requests
+                              if (request.kind == "条件性 store 配置契约"
+                                  and id(request.store_node) in explicit_store_nodes)}
+    requests[:] = [request for request in requests
+                   if not (request.kind == "条件性 store 配置契约"
+                           and id(request.store_node) in explicit_store_nodes)]
+    print("\n=== 请求身份（%d 个）===" % len(requests))
+    _ambiguous_requests: set = set()
+    for request in requests:
+        print("  · %s @%s  载体=%s  位置=%s"
+              % (request.label, request.location,
+                 _carrier_display(request.carrier), request.kind))
+        for note in request.notes:
+            print("      [note] %s" % note)
+
+    for where, pos, _req_key, names in unattached:
+        unattrib.update(names)
+        print("      %16s → [未核对] @%s#%d 无法关联到唯一 store 节点：%s"
+              % ("", where, pos, sorted(names)))
+    for request in requests:
+        if request.carrier is None and request.unknown:
+            unattrib.update(request.unknown)
+            for other in requests:
+                if other.kind == "条件性 store 配置契约":
+                    other.unknown.update(request.unknown)
+
+    unresolved_targets = [request for request in requests
+                          if any(note in ("请求目标无法静态关联",
+                                          "动态 params 的键无法静态核对")
+                                 for note in request.notes)]
+    for request in unresolved_targets:
+        request.unknown.update(needed)
+        print("      %16s → 请求: %s @%s  [未核对] 目标或动态参数附着未知"
+              % ("", request.label, request.location))
+
+    for cfg, store_label, store_identity, keys in store_params_records:
+        suppressed = id(cfg) in suppressed_store_nodes
+        request = store_requests.get(store_identity)
+        if request is None:
+            request = _request(("store_params", store_identity),
+                               store_label + " · 条件性 store 配置契约", store_label,
+                               _store_url(cfg), "条件性 store 配置契约", cfg)
+            request.calls = []
+        if not suppressed and request not in requests:
+            requests.append(request)
+        if any(registry_key(other[0]) == registry_key(cfg)
+               and other[2] != store_identity for other in stores):
+            ambiguous_store_configs.append(cfg)
+            continue
+        # store 静态 params 是每次 load 的 defaults：autoLoad/条件契约与同 store
+        # 的每个显式 load 都要合并；有显式调用时条件占位已被抑制，不再重复计。
+        targets = [item for item in requests if item.store_node is cfg]
+        if not targets:
+            targets = [request]
+        for target in targets:
+            for call in (target.calls or [-1]):
+                print("      %16s → 请求: %s @%s#%d  供给键 %s"
+                      % ("", target.label, store_label, call, sorted(keys)))
+                target.supplies.update(keys)
+                provided.update(keys)
+    for cfg in ambiguous_store_configs:
+        for request in requests:
+            if request.store_node is not cfg:
+                continue
+            if request not in _ambiguous_requests:
+                _ambiguous_requests.add(request)
+                request.unknown.update(needed)
+                request.supplies.clear()
+                request.notes.append("注册名对应多个 store 节点，不任选其一")
+            print("      %16s → 请求: %s @%s  [未核对] 注册名有歧义"
+                  % ("", request.label, request.location))
+    for request in requests:
+        if any("注册名" in note for note in request.notes):
+            print("      %16s → 请求: %s @%s  [未核对] 注册名有歧义：%s"
+                  % ("", request.label, request.location, sorted(request.unknown)))
+
+    # ---- 直属 beforeload 后的有效键：按源码顺序覆盖/追加/合并，结果只作用于所属请求 ----
+    _beforeload_removed: set[str] = set()
+    for request in requests:
+        js = (store_beforeload_by_cfg.get(id(request.store_node))
+              if request.store_node is not None else None)
+        if not js:
+            continue
+        _before = set(request.supplies)
+        _beforeload_need = carrier_needs.get(request.carrier, needed)
+        _present, _unknown_keys, _residual_unknown, _notes = _beforeload_param_effect(
+            js, _before)
+        request.supplies = set(_present)
+        # 逐键：确定未知的键 + 其余键未知时，所有未证明保留的需求键都未核对。
+        _uncertain = {key for key in _unknown_keys if key in _beforeload_need}
+        if _residual_unknown:
+            _uncertain.update(key for key in _beforeload_need
+                              if key not in _present)
+        request.unknown.update(_uncertain)
+        for note in _notes:
+            request.notes.append(note)
+        _removed = sorted(key for key in _before - _present
+                          if not _residual_unknown and key not in _unknown_keys)
+        _beforeload_removed.update(_removed)
+        print("      %16s → 请求: %s @%s  直属 beforeload 有效键 %s"
+              % ("", request.label, request.location, sorted(_present)))
+        if _removed:
+            print("      %16s    └ 事件前键未保留: %s" % ("", _removed))
+        for note in _notes:
+            print("      %16s    └ %s" % ("", note))
+        if _uncertain:
+            print("      %16s    └ [未核对] 直属 beforeload 后的键集合不完整" % "")
+
+    # 事件后已无任何请求保留的键，不再计入「页面送出」与「store 自身 params 提供」。
+    for _key in sorted(_beforeload_removed):
+        if not any(_key in request.supplies for request in requests):
+            provided.discard(_key)
+            store_keys.discard(_key)
+
     if carrier_failed:
         # ⛔ 读不出 ≠ "载体没需求"：逐条列路径与原因，并标明本次核对未完成（码值在下方出口统一给）
         print("\n  [FAIL] SQL 载体读取失败 %d 处 ⇒ 本次核对**未完成**（缺参与未核对结论不完整）："
@@ -7011,7 +8240,7 @@ def cmd_params(args) -> int:
         else:
             print("\n[warn] （未发现 store，跳过交叉核对）")
         _emit_36(args, dangling36, placeholder36, mod36_notes)
-        _tail = _print_params_tail(args, root, text, stores, field_set,
+        _tail = _print_params_tail(args, root, text, [cfg for cfg, _l, _i in stores], field_set,
                                    target_is_carrier=_target_is_carrier)
         # 读依赖失败（载体／`var.json`／反查扫描）⇒ 本次核对未完成：默认与 `--strict` 均 rc=2；
         #   但 `--strict` 下若另有**已确认内容失败**（确悬空）⇒ 汇总 rc=1（上面已逐条列出读取失败）。
@@ -7031,29 +8260,54 @@ def cmd_params(args) -> int:
             print("         ⚠️ 已跳过交叉核对，**但存在 %d 处悬空取数 url**，按 `--strict` 判失败（rc=1）。"
                   % len(dangling36))
             return 1
+        if getattr(args, "strict", False) and _incomplete_before_clear:
+            print("         ⚠️ 已跳过交叉核对，**但存在请求目标或动态参数附着未知**，"
+                  "按 `--strict` 判未核对（rc=2）。")
+            return 2
         if _read_fail:
             return 2
         return 0
 
     # 真白名单 `prefixes`（含 `var.json` 读失败 `_pref_fail`）已在 `if not needed` 之前**一次读入并上报**，
     # 本段直接复用，⛔ 不再重复读第二遍。
-    # ---- 逐载体、逐名字判定：已提供 / 内置 / 带点疑似内置 / 未核对 / 确缺参 ----
+    # ---- 逐请求、逐名字判定：已提供 / 内置 / 带点疑似内置 / 未核对 / 确缺参 ----
     miss_by_carrier: dict[str, list] = {}     # 载体显示名 → 确缺参名字列表
     unknown_by_carrier: dict[str, list] = {}  # 载体显示名 → 未核对名字列表
-    for _ck, _needset in carrier_needs.items():
-        _disp = _phys_display.get(_ck, _ck)
-        _own = req_supplies.get(_ck, set())
-        for n in sorted(_needset):
-            if n in _own:
-                continue                       # 该载体自己那次请求已证明送出 ⇒ ok
-            if n.startswith(prefixes):
-                continue                       # 框架内置 ⇒ ok
-            if "." in n:
-                continue                       # 带点疑似内置 ⇒ 走独立告警（不计 miss/unknown）
-            if n in unattrib:
-                unknown_by_carrier.setdefault(_disp, []).append(n)
-            else:
+    request_ok: list[_Request] = []
+    for request in requests:
+        _needset = (set() if request.carrier is None
+                    else carrier_needs.get(request.carrier, needed))
+        call_positions = request.calls or [-1]
+        for call_pos in call_positions:
+            _disp = _request_location(request, request.location, call_pos)
+            _local_miss: list[str] = []
+            _local_unknown: list[str] = []
+            for n in sorted(_needset):
+                if n.startswith(prefixes):
+                    continue
+                if "." in n:
+                    continue
+                # 未知影响优先于已证明供给：helper/别名/未执行函数可能整体替换或删除键，
+                # 已存在的供给不能把 unknown 遮成 [ok]。
+                if (n in request.unknown
+                        or (n in unattrib and request.kind == "条件性 store 配置契约")
+                        or any("无法静态核对" in note for note in request.notes)):
+                    _local_unknown.append(n)
+                    unknown_by_carrier.setdefault(_disp, []).append(n)
+                    continue
+                if n in request.supplies:
+                    continue
+                _local_miss.append(n)
                 miss_by_carrier.setdefault(_disp, []).append(n)
+            if _local_miss:
+                print("  [缺参] %s：%s" % (_disp, sorted(_local_miss)))
+            elif _local_unknown:
+                print("  [未核对] %s：%s" % (_disp, sorted(_local_unknown)))
+            elif request.incomplete:
+                print("  [未核对] %s：请求目标或动态参数附着未知（未完成）" % _disp)
+            else:
+                print("  [ok] %s：需求键 %s 均有本请求供给" % (_disp, sorted(_needset)))
+                request_ok.append(request)
 
     # 展示口径：`provided`（全页已证明送出并集）与 `needed`（全页需求并集）
     miss = sorted({n for ns in miss_by_carrier.values() for n in ns})
@@ -7072,7 +8326,7 @@ def cmd_params(args) -> int:
     print(f"  SQL 侧需要 {len(needed)} 个 —— 按来源分桶：")
     print(f"    · dataprovider sql/totalSql 的 `{{?名?}}`: {sorted(need_sql)}")
     print(f"    · serverScript 的 `{{?名?}}` / `app.get(名)`（**请求级参数**）: {sorted(need_req)}")
-    print("  （归属口径：一笔供给只给**它自己那次请求**背书；跨请求不互相顶替）")
+    print("  （归属口径：每笔供给只给**同一请求身份**背书；跨 store／调用点不互相顶替）")
     if miss:
         print(f"  [warn] SQL 需要但页面未发现来源（确缺参）: {miss}")
         for _d, _ns in sorted(miss_by_carrier.items()):
@@ -7087,7 +8341,8 @@ def cmd_params(args) -> int:
         else:
             print("         [note] 默认只告警（rc=0）；要让它阻塞请加 `--strict`。")
     else:
-        if not unknown:
+        if (not unknown and not any(request.unknown for request in requests)
+                and len(request_ok) == len(requests)):
             print("  [ok]   SQL 需要的参数在页面侧都能找到来源")
     if unknown:
         print(f"  [note] 无法静态核对的参数（未核对）: {unknown}")
@@ -7098,7 +8353,7 @@ def cmd_params(args) -> int:
         print(f"  [info] 页面送了但 SQL 未用到: {extra}")
     print("\n  提示：参数名 = 控件 `itemId`；改了 itemId 或把控件移出容器都会**静默失效**（取到空值）。")
     _emit_36(args, dangling36, placeholder36, mod36_notes)
-    _tail = _print_params_tail(args, root, text, stores, field_set,
+    _tail = _print_params_tail(args, root, text, [cfg for cfg, _l, _i in stores], field_set,
                                target_is_carrier=_target_is_carrier)
     # 读依赖失败（SQL 载体／`var.json`／反查扫描）⇒ 本次核对未完成：
     #   默认与 `--strict` 均 rc=2；`--strict` 下若另有**已确认内容失败**（确缺参／确悬空）⇒ 汇总 rc=1，
@@ -7118,6 +8373,8 @@ def cmd_params(args) -> int:
         if miss or dangling36:
             return 1
         if unknown:
+            return 2
+        if _incomplete_before_clear or any(request.incomplete for request in requests):
             return 2
         if _read_fail:
             return 2

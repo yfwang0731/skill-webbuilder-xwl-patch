@@ -174,6 +174,262 @@ def _check_params_paths(tmp, node, failures, write) -> None:
     failures.extend(_f05_upstream_matrix_cases(tmp))
     # AV-03：注册表一次加载的 `params` 面（check/itemids 面在 new_guards 块）
     failures.extend(_av03_params_cases(tmp))
+    # ITEM-1229 序1：调用点、字段和位置身份（本块）
+    failures.extend(_request_identity_parser_cases())
+    # ITEM-1230 序2：直属 beforeload 的键集合计算（本块）
+    failures.extend(_beforeload_parser_cases())
+
+
+def _request_identity_parser_cases():
+    """调用参数对象顶层字段、空参身份、嵌套边界与动态 params。"""
+    failures = []
+    field_set = xwl.field_types(None)
+    js = ("Wb.request({url:'m?xwl=demo/carrier',params:{K:1}}); "
+          "Wb.request({url:'m?xwl=demo/carrier',params:{other:1}}); "
+          "Wb.request({params:runtimeParams});")
+    transfers = xwl.find_transfers_with_target(js, field_set)
+    identities = [item[10] for item in transfers]
+    if len(transfers) != 3:
+        failures.append("ITEM-1229：三处静态调用/动态 params 应各留一个传参点，实得 %d"
+                        % len(transfers))
+    if len(set(identities)) != 3:
+        failures.append("ITEM-1229：同段 JS 的请求身份不应按 SQL 物理路径合并：%r"
+                        % (identities,))
+    if [item[0] for item in transfers] != ["params=对象", "params=对象", "params=动态"]:
+        failures.append("ITEM-1229：动态 params 必须单独标为动态，不冒充显式键：%r"
+                        % ([item[0] for item in transfers],))
+    if [item[2] for item in transfers] != [["K"], ["other"], []]:
+        failures.append("ITEM-1229：请求供给键必须按调用点分开：%r"
+                        % ([item[2] for item in transfers],))
+    combined = xwl.find_transfers_with_target(
+        "Wb.request({url:'m?xwl=demo/carrier',params:{K:1},out:app.tbar});",
+        field_set)
+    if (len(combined) != 2
+            or {item[0] for item in combined} != {"out", "params=对象"}
+            or len({item[10] for item in combined}) != 1):
+        failures.append("ITEM-1229：同一调用的 out+params 必须归一到唯一身份：%r"
+                        % (combined,))
+    empty = xwl.find_transfers_with_target(
+        "Wb.request({url:'m?xwl=demo/carrier'});", field_set)
+    if (len(empty) != 1 or empty[0][0] != "无传参"
+            or empty[0][4] != "demo/carrier" or empty[0][2]):
+        failures.append("ITEM-1229：静态目标明确的空参调用必须保留独立身份：%r"
+                        % (empty,))
+    nested = xwl.find_transfers_with_target(
+        "Wb.request({url:'m?xwl=demo/carrier',params:{K:1},"
+        "callback:function(){out:app.tbar;}});", field_set)
+    if (len(nested) != 1 or nested[0][0] != "params=对象"
+            or nested[0][1] or "app.tbar" in nested[0][3]):
+        failures.append("ITEM-1229：嵌套回调/对象中的 out 不得附着外层调用：%r"
+                        % (nested,))
+    nested_url = xwl.find_transfers_with_target(
+        "Wb.request({params:{K:1},callback:function(){url:'m?xwl=demo/hidden';}});",
+        field_set)
+    if len(nested_url) != 1 or nested_url[0][4] is not None:
+        failures.append("ITEM-1229：嵌套对象中的 url 不得冒充调用顶层目标：%r"
+                        % (nested_url,))
+    nested_function = xwl.find_transfers_with_target(
+        "function nested(){Wb.request({url:'m?xwl=demo/carrier',params:{K:1}});} "
+        "Wb.request({url:'m?xwl=demo/carrier',params:{other:1}});", field_set)
+    if (len(nested_function) != 2
+            or len({item[10] for item in nested_function}) != 2
+            or [item[2] for item in nested_function] != [["K"], ["other"]]):
+        failures.append("ITEM-1229：嵌套函数内真实调用应独立列出、不得与外层互补：%r"
+                        % (nested_function,))
+    quoted = xwl.find_transfers_with_target(
+        "var s = \"Wb.request({url:'m?xwl=demo/carrier', params:{K:1}})\";", field_set)
+    if quoted:
+        failures.append("ITEM-1229：字符串字面量内的调用标记不得产生请求/供给：%r"
+                        % (quoted,))
+    call_url = xwl.find_transfers_with_target(
+        "app.st.load({url:'m?xwl=demo/other', params:{K:1}});", field_set)
+    if (len(call_url) != 1 or call_url[0][4] != "demo/other"
+            or len(call_url[0]) < 12 or not call_url[0][11]):
+        failures.append("ITEM-1229：store.load 调用级 url 应作为该次目标并标记 has_url：%r"
+                        % (call_url,))
+    store_url = xwl.find_transfers_with_target(
+        "app.st.load({params:{K:1}});", field_set)
+    if (len(store_url) != 1 or store_url[0][4] is not None
+            or len(store_url[0]) < 12 or store_url[0][11]):
+        failures.append("ITEM-1229：未写 url 的 store.load 不应伪造 has_url：%r"
+                        % (store_url,))
+    if failures:
+        return failures
+    print("[ok]  ITEM-1229 解析面：同调用 out+params 归一、空参建身份、"
+          "顶层字段边界与嵌套调用独立")
+    return []
+
+
+def _beforeload_parser_cases():
+    """直属 beforeload 的整体覆盖、追加、Ext.apply 合并、条件/动态未知与边界。"""
+    failures = []
+
+    def check(name, js, initial, expected, unknown_keys, residual_unknown):
+        present, got_unknown_keys, got_residual_unknown, _notes = (
+            xwl._beforeload_param_effect(js, set(initial)))
+        if present != set(expected):
+            failures.append("ITEM-1230 %s：有效键应 %r，实得 %r"
+                            % (name, sorted(expected), sorted(present)))
+        if set(got_unknown_keys) != set(unknown_keys):
+            failures.append("ITEM-1230 %s：确定未核对的键应 %r，实得 %r"
+                            % (name, sorted(unknown_keys), sorted(got_unknown_keys)))
+        if bool(got_residual_unknown) != bool(residual_unknown):
+            failures.append("ITEM-1230 %s：其余键未知标记应 %r，实得 %r"
+                            % (name, residual_unknown, got_residual_unknown))
+
+    check("静态保留", "", {"K"}, {"K"}, set(), False)
+    check("整体覆盖删除", "operation.params = {other: 1};", {"K"},
+          {"other"}, set(), False)
+    check("固定键追加", "operation.params.K = 1;", set(), {"K"}, set(), False)
+    check("先追加后覆盖", "operation.params.K = 1; operation.params = {other: 2};",
+          {"S"}, {"other"}, set(), False)
+    check("覆盖后追加恢复", "operation.params = {}; operation.params.K = 1;",
+          {"S"}, {"K"}, set(), False)
+    check("Ext.apply 保留并合并",
+          "operation.params = Ext.apply({}, operation.params, {other: 1});",
+          {"K"}, {"K", "other"}, set(), False)
+    check("Wb.apply 合并固定键",
+          "Wb.apply(operation.params, {other: 1});",
+          {"K"}, {"K", "other"}, set(), False)
+    check("Ext.apply 第三参数 defaults 先写",
+          "operation.params = Ext.apply({K: 1}, {}, {other: 2});",
+          {"S"}, {"K", "other"}, set(), False)
+    check("条件追加未知",
+          "if (flag) operation.params.K = 1;",
+          set(), set(), {"K"}, False)
+    check("动态整体覆盖未知",
+          "operation.params = buildParams();",
+          {"K"}, set(), set(), True)
+    check("假值守卫不执行",
+          "if (!operation.params) operation.params = {}; operation.params.K = 1;",
+          set(), {"K"}, set(), False)
+    check("未执行嵌套函数不作供给",
+          "function nested() { operation.params.K = 1; }",
+          set(), set(), set(), True)
+    check("嵌套函数只读不误判",
+          "function nested() { var x = operation.params.K; }",
+          {"K"}, {"K"}, set(), False)
+    check("注释与字符串内容不作供给",
+          "// operation.params.K = 1;\n"
+          "operation.params.S = 'operation.params.Z = 1;';",
+          set(), {"S"}, set(), False)
+    check("别名整体未知",
+          "var p = operation.params;",
+          {"K"}, set(), set(), True)
+    check("字符串键追加",
+          "operation.params['K'] = 1;",
+          set(), {"K"}, set(), False)
+    check("对象字面量带引号键与保留字键",
+          "operation.params = {'K': 1, params: 2, callback: 3, nested: {Z: 4}};",
+          set(), {"K", "params", "callback", "nested"}, set(), False)
+    check("三元值中的字符串不作键",
+          "operation.params = {K: flag ? 'a' : 'b'};",
+          set(), {"K"}, set(), False)
+    check("条件整体覆盖未知",
+          "if (flag) operation.params = {K: 1};",
+          {"K"}, {"K"}, set(), False)
+    check("delete 固定键移除",
+          "delete operation.params.K;",
+          {"K"}, set(), set(), False)
+    check("Ext.apply 空对象整体替换",
+          "operation.params = Ext.apply({}, {K: 1});",
+          {"S"}, {"K"}, set(), False)
+    check("Ext.apply 未知实参只追加键、保留原键",
+          "Ext.apply(operation.params, runtime);",
+          {"K"}, {"K"}, set(), True)
+    check("丢弃返回值的 Ext.apply 不改键",
+          "Ext.apply({}, operation.params, {other: 1});",
+          {"K"}, {"K"}, set(), False)
+    check("括号 params 整体覆盖",
+          "operation['params'] = {other: 1};",
+          {"K"}, {"other"}, set(), False)
+    check("括号 params 固定键追加",
+          "operation['params']['K'] = 1;",
+          set(), {"K"}, set(), False)
+    check("简单 operation 别名整体覆盖",
+          "var op = operation; op.params = {other: 1};",
+          {"K"}, {"other"}, set(), False)
+    check("括号右值别名整体覆盖",
+          "var op = (operation); op.params = {other: 1};",
+          {"K"}, {"other"}, set(), False)
+    check("链式别名整体覆盖",
+          "var op = operation; var op2 = op; op2.params = {other: 1};",
+          {"K"}, {"other"}, set(), False)
+    check("括号链式别名整体覆盖",
+          "var op = (operation); var op2 = (op); op2.params = {other: 1};",
+          {"K"}, {"other"}, set(), False)
+    check("未识别别名整体改写未知",
+          "var op = getOperation(); op.params = {other: 1};",
+          {"K"}, set(), set(), True)
+    check("无初始化后动态赋值整体改写未知",
+          "var op; op = getOperation(); op.params = {other: 1};",
+          {"K"}, set(), set(), True)
+    check("无初始化后已知别名整体覆盖",
+          "var op; op = operation; op.params = {other: 1};",
+          {"K"}, {"other"}, set(), False)
+    check("已知别名重赋动态值后整体改写未知",
+          "var op = operation; op = getOperation(); op.params = {other: 1};",
+          {"K"}, set(), set(), True)
+    check("独立对象重赋动态值后整体改写未知",
+          "var op = {}; op = getOperation(); op.params = {other: 1};",
+          {"K"}, set(), set(), True)
+    check("动态值重赋已知别名后整体覆盖",
+          "var op = getOperation(); op = operation; op.params = {other: 1};",
+          {"K"}, {"other"}, set(), False)
+    check("独立对象先改写后重赋 operation 不污染",
+          "var op = {}; op.params = {other: 1}; op = operation;",
+          {"K"}, {"K"}, set(), False)
+    check("已知别名先改写后重赋未知仍覆盖",
+          "var op = operation; op.params = {other: 1}; op = getOperation();",
+          {"K"}, {"other"}, set(), False)
+    check("无初始化后动态赋值括号 params 整体改写未知",
+          "var op; op = getOperation(); op['params'] = {other: 1};",
+          {"K"}, set(), set(), True)
+    check("无初始化复制后动态赋值链式改写未知",
+          "var op; var op2 = op; op = getOperation(); op2.params = {other: 1};",
+          {"K"}, set(), set(), True)
+    check("括号链式动态别名整体改写未知",
+          "var op = (getOperation()); var op2 = (op); op2.params = {other: 1};",
+          {"K"}, set(), set(), True)
+    check("无初始化声明不重置已建立别名",
+          "var op = operation; var op; op.params = {other: 1};",
+          {"K"}, {"other"}, set(), False)
+    check("无关对象 params 不污染",
+          "var other = {}; other.params = {X: 1};",
+          {"K"}, {"K"}, set(), False)
+    check("括号化 IIFE 整体覆盖",
+          "(function(){ operation.params = {other: 1}; })();",
+          {"K"}, {"other"}, set(), False)
+    check("箭头 IIFE 整体覆盖",
+          "(() => { operation.params = {other: 1}; })();",
+          {"K"}, {"other"}, set(), False)
+    check("别名保存整体未知",
+          "var p = operation.params; delete p.K;",
+          {"K"}, set(), set(), True)
+    check("确定整体覆盖清掉旧未知",
+          "var q; q = pick(); q.params = {Z: 1}; operation.params = {other: 1};",
+          {"K"}, {"other"}, set(), False)
+    check("条件覆盖后条件分支不恢复确定缺失",
+          "operation.params = {other: 1}; "
+          "if (window.flag) { operation.params = {Q: 1}; }",
+          {"K"}, set(), {"Q", "other"}, False)
+    check("未知接收者被后续确定覆盖",
+          "var q; q = pick(); q.params = {Z: 1}; "
+          "var r = operation; r.params = {other: 1};",
+          {"K"}, {"other"}, set(), False)
+    check("条件分支可能恢复才未知",
+          "operation.params = {other: 1}; "
+          "if (window.flag) { operation.params = {K: 1}; }",
+          {"K"}, set(), {"K", "other"}, False)
+    check("固定键追加恢复确定性",
+          "operation.params = {other: 1}; operation.params.K = 1;",
+          {"S"}, {"K", "other"}, set(), False)
+
+    if failures:
+        return failures
+    print("[ok]  ITEM-1230 解析面：整体覆盖／追加／Ext.apply 方向／顺序／"
+          "条件与动态未知／注释字符串与嵌套函数边界")
+    return []
 
 def _dump(obj, path):
     """按设计器格式（缩进 1、CRLF）写一份 `.xwl` 夹具；父目录自动建。"""

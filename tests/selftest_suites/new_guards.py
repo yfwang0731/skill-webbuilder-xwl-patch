@@ -424,6 +424,535 @@ def _check_new_guards(tmp, node, failures, write) -> None:
     failures.extend(_f05_dep_cases(tmp))
     # AV-03：注册表事实源一次加载（check --controls／itemids 两面；params 面在 params_paths 块）
     failures.extend(_av03_registry_cases(tmp))
+    # ITEM-1229 序1：四类请求身份的 default/strict 真实 rc 与 stdout
+    failures.extend(_request_identity_matrix(tmp))
+    failures.extend(_request_identity_shape_cases(tmp))
+    # ITEM-1230 序2：直属 beforeload 后的有效键（含与序1身份隔离的组合）
+    failures.extend(_beforeload_matrix(tmp))
+    # ITEM-1230 同请求多键：确定缺参与未知并存 / 仅未知
+    failures.extend(_beforeload_perkey_regression(tmp))
+    # F1–F5 返修：请求目标/供给边界与 beforeload 未知不得假绿
+    failures.extend(_repair_regression_cases(tmp))
+    # 请求完成状态：目标未知即使需求集为空也不得打印请求级 ok，并进入 strict 码值
+    failures.extend(_request_completion_cases(tmp))
+
+
+def _ri_carrier(module_root):
+    path = os.path.join(module_root, "demo", "carrier.xwl")
+    _dump({"children": [{"type": "dataprovider", "configs": {
+        "itemId": "dp", "sql": "select * from t where a={?K?}"}}]}, path)
+    return path
+
+
+def _ri_store(item_id, *, auto_load=None, params=None):
+    configs = {"itemId": item_id, "url": "m?xwl=demo/carrier"}
+    if auto_load is not None:
+        configs["autoLoad"] = auto_load
+    if params is not None:
+        configs["params"] = params
+    return {"type": "store", "configs": configs, "expanded": False,
+            "children": []}
+
+
+def _ri_button(events):
+    return {"type": "button", "configs": {"itemId": "btn"},
+            "expanded": False, "children": [], "events": events}
+
+
+def _ri_page(module_root, children):
+    path = os.path.join(module_root, "demo", "page.xwl")
+    _dump({"title": "p", "children": children}, path)
+    return path
+
+
+def _ri_case(tmp, name, family, variant):
+    module_root = os.path.join(tmp, "ri_" + name, "modules")
+    os.makedirs(os.path.join(module_root, "demo"), exist_ok=True)
+    _ri_carrier(module_root)
+    positive = variant == "positive"
+    ambiguous = variant == "ambiguous"
+    if family == "stores":
+        good = _ri_store("good", auto_load="true", params="{K:1}")
+        bad = _ri_store("bad", auto_load="true", params="{K:1}" if positive else None)
+        if ambiguous:
+            bad["configs"]["normalName"] = "good"
+        children = [good, bad]
+    elif family == "requests":
+        first = "Wb.request({url:'m?xwl=demo/carrier',params:{K:1}});"
+        second = ("Wb.request({url:'m?xwl=demo/carrier',params:{K:1}});" if positive
+                  else "Wb.request({url:'m?xwl=demo/carrier',params:{other:1}});")
+        unknown = "Wb.request({url:dynUrl,params:{K:1}});" if ambiguous else ""
+        children = [_ri_button({"click": first + second + unknown})]
+    elif family == "loads":
+        first = "app.shared.load({params:{K:1}});"
+        second = ("app.shared.load({params:{K:1}});" if positive
+                  else "app.shared.load({params:{other:1}});")
+        unknown = "Wb.request({url:dynUrl,params:{K:1}});" if ambiguous else ""
+        children = [_ri_store("shared", auto_load="false"),
+                    _ri_button({"click": first + second + unknown})]
+    else:
+        explicit = ("app.initial.load({params:{K:1}});" if positive
+                    else "app.initial.load({params:{other:1}});")
+        unknown = "app.initial.load({params:runtimeParams});" if ambiguous else ""
+        children = [_ri_store("initial", auto_load="true", params="{K:1}"),
+                    _ri_button({"click": explicit + unknown})]
+    page = _ri_page(module_root, children)
+    return page, module_root
+
+
+def _request_identity_matrix(tmp):
+    """四类夹具×三变体逐请求断言请求位置、键结论、stdout 与默认/strict rc。"""
+    failures = []
+    cases = [("stores", variant) for variant in ("positive", "missing", "ambiguous")]
+    cases += [("requests", variant) for variant in ("positive", "missing", "ambiguous")]
+    cases += [("loads", variant) for variant in ("positive", "missing", "ambiguous")]
+    cases += [("initial", variant) for variant in ("positive", "missing", "ambiguous")]
+    for family, variant in cases:
+        page, module_root = _ri_case(tmp, family + "_" + variant, family, variant)
+        for strict in (False, True):
+            rc, out = _run(xwl.cmd_params, file=page, module_root=module_root,
+                           controls=None, list_fields=False, upstream=False,
+                           strict=strict)
+            # F1：store 静态 params 是每次 load 的 defaults，初始化 + 显式 load 的
+            # `missing` 变体实际由 store params 补上 K，属正例；动态 params 只留未知。
+            positive_like = variant == "positive" or (
+                family == "initial" and variant == "missing")
+            if positive_like:
+                expected_rc = 0
+            elif family == "initial" and variant == "ambiguous":
+                expected_rc = 0 if not strict else 2
+            else:
+                expected_rc = 0 if not strict else 1
+            label = "%s/%s strict=%s" % (family, variant, strict)
+            if rc != expected_rc:
+                failures.append("ITEM-1229 %s：rc 应 %s，实得 %s\n%s"
+                                % (label, expected_rc, rc, out))
+            if out.count("=== SQL 侧: demo/carrier.xwl") != 1:
+                failures.append("ITEM-1229 %s：SQL 侧需求段应恰打印一次\n%s" % (label, out))
+            if family == "stores" and "（同载体 ×2）" not in out:
+                failures.append("ITEM-1229 %s：同载体引用计数丢失\n%s" % (label, out))
+            if out.count("· store[") < 2 if family == "stores" else out.count("→ 请求:") < 2:
+                failures.append("ITEM-1229 %s：未按请求位置分开输出\n%s" % (label, out))
+            if positive_like:
+                if "SQL 需要的参数在页面侧都能找到来源" not in out or "[缺参]" in out:
+                    failures.append("ITEM-1229 %s：确定正例应逐请求齐全\n%s" % (label, out))
+            elif "[ok]   SQL 需要的参数在页面侧都能找到来源" in out:
+                failures.append("ITEM-1229 %s：页面整体不得报齐全\n%s" % (label, out))
+            if variant == "ambiguous" and "[未核对]" not in out:
+                failures.append("ITEM-1229 %s：歧义/未知未落到输出\n%s" % (label, out))
+            if (strict and not positive_like and family != "initial" and rc != 1):
+                failures.append("ITEM-1229 %s：单请求确缺参须优先于未知判 rc=1\n%s"
+                                % (label, out))
+    if failures:
+        return failures
+    print("[ok]  ITEM-1229 请求身份矩阵：双 store／双 Wb.request／同 store 多 load／"
+          "初始化与后续 load 的正例、单请求缺参、歧义未知均按请求分开")
+    return []
+
+
+def _request_identity_shape_cases(tmp):
+    """同调用 out+params、空参、嵌套伪供给与条件 store 的端到端形态。"""
+    failures = []
+    module_root = os.path.join(tmp, "ri_shapes", "modules")
+    os.makedirs(os.path.join(module_root, "demo"), exist_ok=True)
+    _ri_carrier(module_root)
+    panel = {"type": "toolbar", "configs": {"itemId": "tbar"},
+             "expanded": False,
+             "children": [{"type": "text", "configs": {"itemId": "K"},
+                           "expanded": False, "children": []}]}
+    cases = [
+        ("combined", [panel, _ri_button({
+            "click": ("Wb.request({url:'m?xwl=demo/carrier',params:{K:1},"
+                      "out:app.tbar});")})],
+         0, ["传参点（2 处）", "请求身份（1 个）"], ["[缺参]"]),
+        ("empty", [_ri_button({
+            "click": "Wb.request({url:'m?xwl=demo/carrier'});"})],
+         1, ["请求身份（1 个）", "[缺参]"], ["请求身份（0 个）"]),
+        ("nested_pseudo", [_ri_button({
+            "click": ("Wb.request({url:'m?xwl=demo/carrier',params:{K:1},"
+                      "callback:function(){out:app.tbar;}});")})],
+         0, ["传参点（1 处）", "请求身份（1 个）"],
+         ["[缺参]", "[out 推荐]", "app.tbar"]),
+        ("nested_function", [_ri_button({
+            "click": ("function nested(){Wb.request({url:'m?xwl=demo/carrier',"
+                      "params:{K:1}});} Wb.request({url:'m?xwl=demo/carrier',"
+                      "params:{other:1}});")})],
+         1, ["请求身份（2 个）", "[缺参]", "[ok] "],
+         ["SQL 需要的参数在页面侧都能找到来源"]),
+        ("conditional_unrelated", [
+            _ri_store("cond", auto_load="false"),
+            _ri_store("other", auto_load="true"),
+            _ri_button({"click": "app.other.load({params:{K:1}});"})],
+         1, ["条件性 store 配置契约", "store[cond]", "[缺参]"],
+         ["SQL 需要的参数在页面侧都能找到来源"]),
+        ("conditional_config_combine", [
+            _ri_store("cond", auto_load="false", params="{K:1}"),
+            _ri_button({"click": "app.cond.load({params:{other:1}});"})],
+         0, ["请求身份（1 个）", "需求键 ['K'] 均有本请求供给"],
+         ["[缺参]", "条件性 store 配置契约"]),
+    ]
+    for name, children, expected_rc, required, forbidden in cases:
+        page = _ri_page(module_root, children)
+        rc, out = _run(xwl.cmd_params, file=page, module_root=module_root,
+                       controls=None, list_fields=False, upstream=False,
+                       strict=True)
+        if rc != expected_rc:
+            failures.append("ITEM-1229 %s：strict rc 应 %s，实得 %s\n%s"
+                            % (name, expected_rc, rc, out))
+        for token in required:
+            if token not in out:
+                failures.append("ITEM-1229 %s：输出缺少 %r\n%s" % (name, token, out))
+        for token in forbidden:
+            if token in out:
+                failures.append("ITEM-1229 %s：输出不应含 %r\n%s" % (name, token, out))
+    if failures:
+        return failures
+    print("[ok]  ITEM-1229 请求身份形态：同调用 out+params 归一、空参建身份、"
+          "嵌套伪供给不附着、嵌套真实调用独立、条件 store 不被无关请求跳过")
+    return []
+
+
+def _bl_store(item_id, *, params="{K:1}", beforeload=None, auto_load="true"):
+    configs = {"itemId": item_id, "url": "m?xwl=demo/carrier", "autoLoad": auto_load}
+    if params is not None:
+        configs["params"] = params
+    node = {"type": "store", "configs": configs, "expanded": False, "children": []}
+    if beforeload is not None:
+        node["events"] = {"beforeload": beforeload}
+    return node
+
+
+def _beforeload_matrix(tmp):
+    """静态保留、整体覆盖、追加恢复、合并、先追加后覆盖、条件/动态未知与身份组合。"""
+    failures = []
+    cases = [
+        ("static", [_bl_store("st")],
+         0, 0, ["SQL 需要的参数在页面侧都能找到来源"], []),
+        ("replace", [_bl_store("st", beforeload="operation.params = {other: 1};")],
+         0, 1, ["[缺参]", "事件前键未保留", "直属 beforeload 整体替换"],
+         ["SQL 需要的参数在页面侧都能找到来源"]),
+        ("append_restore", [_bl_store("st", params=None, beforeload=(
+            "operation.params = {}; operation.params.K = 1;"))],
+         0, 0, ["[ok] ", "SQL 需要的参数在页面侧都能找到来源"], []),
+        ("merge_ext", [_bl_store("st", beforeload=(
+            "operation.params = Ext.apply({}, operation.params, {other: 1});"))],
+         0, 0, ["[ok] ", "SQL 需要的参数在页面侧都能找到来源"], []),
+        ("merge_wb", [_bl_store("st", beforeload=(
+            "Wb.apply(operation.params, {other: 1});"))],
+         0, 0, ["[ok] ", "SQL 需要的参数在页面侧都能找到来源"], []),
+        ("append_then_replace", [_bl_store("st", beforeload=(
+            "operation.params.K = 1; operation.params = {other: 2};"))],
+         0, 1, ["[缺参]", "事件前键未保留"], ["SQL 需要的参数在页面侧都能找到来源"]),
+        ("conditional", [_bl_store("st", params=None, beforeload=(
+            "if (flag) operation.params.K = 1;"))],
+         0, 2, ["[未核对]", "条件固定键 K"], ["SQL 需要的参数在页面侧都能找到来源", "[缺参]"]),
+        ("dynamic", [_bl_store("st", beforeload=(
+            "operation.params = buildParams();"))],
+         0, 2, ["[未核对]", "动态整体赋值"], ["SQL 需要的参数在页面侧都能找到来源", "[缺参]"]),
+        ("d1_cond_miss", [_bl_store("st", beforeload=(
+            "operation.params = {other:1}; "
+            "if (window.flag) { operation.params = {Q:1}; }"))],
+         0, 1, ["[缺参]", "事件前键未保留"], ["[未核对]", "SQL 需要的参数在页面侧都能找到来源"]),
+        ("d2_unknown_then_determinate", [_bl_store("st", beforeload=(
+            "var q; q = pick(); q.params = {Z:1}; "
+            "var r = operation; r.params = {other:1};"))],
+         0, 1, ["[缺参]", "事件前键未保留"], ["SQL 需要的参数在页面侧都能找到来源"]),
+        ("e2_may_restore", [_bl_store("st", beforeload=(
+            "operation.params = {other:1}; "
+            "if (window.flag) { operation.params = {K:1}; }"))],
+         0, 2, ["[未核对]", "条件整体/动态赋值"], ["[缺参]", "SQL 需要的参数在页面侧都能找到来源"]),
+        ("identity_combo", [
+            _bl_store("stA", beforeload="operation.params = {other: 1};"),
+            _bl_store("stB", params="{K:1}")],
+         0, 1, ["[缺参]", "[ok] ", "（同载体 ×2）"],
+         ["SQL 需要的参数在页面侧都能找到来源"]),
+    ]
+    for name, children, default_rc, strict_rc, required, forbidden in cases:
+        module_root = os.path.join(tmp, "bl_" + name, "modules")
+        os.makedirs(os.path.join(module_root, "demo"), exist_ok=True)
+        _ri_carrier(module_root)
+        page = _ri_page(module_root, children)
+        for strict, expected in ((False, default_rc), (True, strict_rc)):
+            rc, out = _run(xwl.cmd_params, file=page, module_root=module_root,
+                           controls=None, list_fields=False, upstream=False,
+                           strict=strict)
+            label = "ITEM-1230 %s strict=%s" % (name, strict)
+            if rc != expected:
+                failures.append("%s：rc 应 %s，实得 %s\n%s" % (label, expected, rc, out))
+            for token in required:
+                if token not in out:
+                    failures.append("%s：输出缺少 %r\n%s" % (label, token, out))
+            for token in forbidden:
+                if token in out:
+                    failures.append("%s：输出不应含 %r\n%s" % (label, token, out))
+    if failures:
+        return failures
+    print("[ok]  ITEM-1230 直属 beforeload：静态保留／整体覆盖删除／追加恢复／"
+          "Ext.apply 与 Wb.apply 合并／先追加后覆盖／条件与动态未知／双请求身份隔离")
+    return []
+
+
+def _beforeload_perkey_regression(tmp):
+    """同请求多键：确定缺参与未知并存、仅未知的码值与输出。"""
+    failures = []
+
+    def _carrier_multi(root):
+        path = os.path.join(root, "demo", "carrier2.xwl")
+        _dump({"children": [{"type": "dataprovider", "configs": {
+            "itemId": "dp2",
+            "sql": "select * from t where a={?K?} and b={?Q?}"}}]}, path)
+
+    cases = [
+        ("mixed_miss_and_unknown",
+         "operation.params = {other:1}; "
+         "if (window.flag) { operation.params = {Q:1}; }",
+         "{K:1}", 0, 1,
+         ["[缺参]", "['K']", "无法静态核对的参数", "['Q']"],
+         ["SQL 需要的参数在页面侧都能找到来源"]),
+        ("unknown_only",
+         "if (window.flag) { operation.params = {K:1}; }",
+         "{K:1,Q:1}", 0, 2,
+         ["[未核对]", "['Q']"],
+         ["[缺参]", "SQL 需要的参数在页面侧都能找到来源"]),
+    ]
+    for name, beforeload, params, default_rc, strict_rc, required, forbidden in cases:
+        module_root = os.path.join(tmp, "pk_" + name, "modules")
+        os.makedirs(os.path.join(module_root, "demo"), exist_ok=True)
+        _carrier_multi(module_root)
+        node = _bl_store("st", params=params, beforeload=beforeload)
+        node["configs"]["url"] = "m?xwl=demo/carrier2"
+        page = _ri_page(module_root, [node])
+        for strict, expected in ((False, default_rc), (True, strict_rc)):
+            rc, out = _run(xwl.cmd_params, file=page, module_root=module_root,
+                           controls=None, list_fields=False, upstream=False,
+                           strict=strict)
+            label = "ITEM-1230 多键 %s strict=%s" % (name, strict)
+            if rc != expected:
+                failures.append("%s：rc 应 %s，实得 %s\n%s"
+                                % (label, expected, rc, out))
+            for token in required:
+                if token not in out:
+                    failures.append("%s：输出缺少 %r\n%s" % (label, token, out))
+            for token in forbidden:
+                if token in out:
+                    failures.append("%s：输出不应含 %r\n%s" % (label, token, out))
+    if failures:
+        return failures
+    print("[ok]  ITEM-1230 同请求多键：确定缺参与未知并列 strict=1，仅未知 strict=2")
+    return []
+
+
+def _repair_regression_cases(tmp):
+    """F1–F5：请求目标/供给边界与 beforeload 未知不得假绿（默认/strict 双跑）。"""
+    failures = []
+
+    def _carrier(root, name, need):
+        _dump({"children": [{"type": "dataprovider", "configs": {
+            "itemId": "dp",
+            "sql": "select * from t where a={?%s?}" % need}}]},
+            os.path.join(root, "demo", name + ".xwl"))
+
+    cases = [
+        ("f1_autoload_explicit",
+         [_bl_store("st"), _ri_button({"click": "app.st.load({params:{other:1}});"})],
+         [("carrier", "K")], 0, 0,
+         ["请求身份（2 个）", "[ok] store[st] · 显式调用",
+          "SQL 需要的参数在页面侧都能找到来源"],
+         ["[缺参]"]),
+        ("f2_call_url",
+         [_bl_store("st", params=None),
+          _ri_button({"click": "app.st.load({url:'m?xwl=demo/other', params:{K:1}});"})],
+         [("carrier", "K"), ("other", "Y")], 0, 1,
+         ["[缺参]", "['Y']", "=== SQL 侧: demo/other.xwl"],
+         ["SQL 需要的参数在页面侧都能找到来源"]),
+        ("f3_string_literal",
+         [_ri_button({"click": (
+             "var s = \"Wb.request({url:'m?xwl=demo/carrier', params:{K:1}})\";")})],
+         [("carrier", "K")], 0, 0,
+         ["请求身份（0 个）"],
+         ["供给键", "=== SQL 侧: demo/carrier"]),
+        ("f4a_helper_unknown",
+         [_bl_store("st", beforeload="someHelper(operation.params);")],
+         [("carrier", "K")], 0, 2,
+         ["[未核对]", "直属 beforeload 后的键集合不完整"],
+         ["SQL 需要的参数在页面侧都能找到来源"]),
+        ("f4b_alias_delete",
+         [_bl_store("st", beforeload="var p = operation.params; delete p.K;")],
+         [("carrier", "K")], 0, 2,
+         ["[未核对]", "直属 beforeload 后的键集合不完整"],
+         ["SQL 需要的参数在页面侧都能找到来源"]),
+        ("f4_append_unknown",
+         [_bl_store("st", beforeload="Ext.apply(operation.params, runtime);")],
+         [("carrier", "K")], 0, 0,
+         ["[ok] ", "SQL 需要的参数在页面侧都能找到来源"],
+         ["[未核对]", "传给未建语义"]),
+        ("f4_discarded_apply",
+         [_bl_store("st", beforeload="Ext.apply({}, operation.params, {other: 1});")],
+         [("carrier", "K")], 0, 0,
+         ["[ok] ", "SQL 需要的参数在页面侧都能找到来源"],
+         ["[未核对]", "传给未建语义"]),
+        ("f5_bracket",
+         [_bl_store("st", beforeload="operation['params'] = {other: 1};")],
+         [("carrier", "K")], 0, 1,
+         ["[缺参]", "事件前键未保留"],
+         ["SQL 需要的参数在页面侧都能找到来源"]),
+        ("f5_op_alias",
+         [_bl_store("st", beforeload="var op = operation; op.params = {other: 1};")],
+         [("carrier", "K")], 0, 1,
+         ["[缺参]", "事件前键未保留"],
+         ["SQL 需要的参数在页面侧都能找到来源"]),
+        ("f5_paren_alias",
+         [_bl_store("st", beforeload="var op = (operation); op.params = {other: 1};")],
+         [("carrier", "K")], 0, 1,
+         ["[缺参]", "事件前键未保留"],
+         ["SQL 需要的参数在页面侧都能找到来源"]),
+        ("f5_chain_alias",
+         [_bl_store("st", beforeload=(
+             "var op = operation; var op2 = op; op2.params = {other: 1};"))],
+         [("carrier", "K")], 0, 1,
+         ["[缺参]", "事件前键未保留"],
+         ["SQL 需要的参数在页面侧都能找到来源"]),
+        ("f5_uncertain_alias",
+         [_bl_store("st", beforeload="var op = getOperation(); op.params = {other: 1};")],
+         [("carrier", "K")], 0, 2,
+         ["[未核对]", "未识别接收者"],
+         ["SQL 需要的参数在页面侧都能找到来源"]),
+        ("f5_uninit_alias_dynamic",
+         [_bl_store("st", beforeload=(
+             "var op; op = getOperation(); op.params = {other: 1};"))],
+         [("carrier", "K")], 0, 2,
+         ["[未核对]", "未识别接收者"],
+         ["SQL 需要的参数在页面侧都能找到来源"]),
+        ("f5_uninit_alias_operation",
+         [_bl_store("st", beforeload=(
+             "var op; op = operation; op.params = {other: 1};"))],
+         [("carrier", "K")], 0, 1,
+         ["[缺参]", "事件前键未保留"],
+         ["SQL 需要的参数在页面侧都能找到来源"]),
+        ("f5_reassign_dynamic",
+         [_bl_store("st", beforeload=(
+             "var op = operation; op = getOperation(); op.params = {other: 1};"))],
+         [("carrier", "K")], 0, 2,
+         ["[未核对]", "未识别接收者"],
+         ["SQL 需要的参数在页面侧都能找到来源"]),
+        ("f5_independent_then_reassigned",
+         [_bl_store("st", beforeload=(
+             "var op = {}; op.params = {other: 1}; op = operation;"))],
+         [("carrier", "K")], 0, 0,
+         ["SQL 需要的参数在页面侧都能找到来源"],
+         ["[未核对]", "[缺参]"]),
+        ("f5_unrelated_params",
+         [_bl_store("st", beforeload="var other = {}; other.params = {X: 1};")],
+         [("carrier", "K")], 0, 0,
+         ["[ok] ", "SQL 需要的参数在页面侧都能找到来源"],
+         ["[未核对]"]),
+        ("f5_fn_iife",
+         [_bl_store("st", beforeload="(function(){ operation.params = {other: 1}; })();")],
+         [("carrier", "K")], 0, 1,
+         ["[缺参]", "事件前键未保留"],
+         ["SQL 需要的参数在页面侧都能找到来源"]),
+        ("f5_arrow_iife",
+         [_bl_store("st", beforeload="(() => { operation.params = {other: 1}; })();")],
+         [("carrier", "K")], 0, 1,
+         ["[缺参]", "事件前键未保留"],
+         ["SQL 需要的参数在页面侧都能找到来源"]),
+    ]
+    for name, children, carriers, default_rc, strict_rc, required, forbidden in cases:
+        module_root = os.path.join(tmp, "rep_" + name, "modules")
+        os.makedirs(os.path.join(module_root, "demo"), exist_ok=True)
+        for cname, need in carriers:
+            _carrier(module_root, cname, need)
+        page = _ri_page(module_root, children)
+        for strict, expected in ((False, default_rc), (True, strict_rc)):
+            rc, out = _run(xwl.cmd_params, file=page, module_root=module_root,
+                           controls=None, list_fields=False, upstream=False,
+                           strict=strict)
+            label = "F1–F5 %s strict=%s" % (name, strict)
+            if rc != expected:
+                failures.append("%s：rc 应 %s，实得 %s\n%s" % (label, expected, rc, out))
+            for token in required:
+                if token not in out:
+                    failures.append("%s：输出缺少 %r\n%s" % (label, token, out))
+            for token in forbidden:
+                if token in out:
+                    failures.append("%s：输出不应含 %r\n%s" % (label, token, out))
+            if name == "f1_autoload_explicit" and out.count("供给键 ['K']") < 2:
+                failures.append("%s：autoLoad 与显式 load 都应合并 store 静态 K\n%s"
+                                % (label, out))
+    if failures:
+        return failures
+    print("[ok]  F1–F5 返修：autoLoad+显式 load 合并 store params／调用级 url 优先／"
+          "字符串伪调用不建请求／beforeload 未知不被供给遮蔽／括号·别名·IIFE 不假绿")
+    return []
+
+
+def _request_completion_cases(tmp):
+    """目标未知的 load：请求级不得 [ok]，仅未知 strict=2，另有确缺参 strict=1。"""
+    failures = []
+    dynamic_click = (
+        "var target = getTarget(); "
+        "app.st.load({url: target, params:{K:1}});")
+
+    def _setup(name, *, need, children):
+        module_root = os.path.join(tmp, "rc_" + name, "modules")
+        os.makedirs(os.path.join(module_root, "demo"), exist_ok=True)
+        sql = ("select * from t where a={?K?}" if need else "select 1")
+        _dump({"children": [{"type": "dataprovider", "configs": {
+            "itemId": "dp", "sql": sql}}]},
+            os.path.join(module_root, "demo", "carrier.xwl"))
+        return module_root, _ri_page(module_root, children)
+
+    def _run_case(name, module_root, page, default_rc, strict_rc,
+                  required, forbidden, strict_required=()):
+        for strict, expected in ((False, default_rc), (True, strict_rc)):
+            rc, out = _run(xwl.cmd_params, file=page, module_root=module_root,
+                           controls=None, list_fields=False, upstream=False,
+                           strict=strict)
+            label = "请求完成 %s strict=%s" % (name, strict)
+            if rc != expected:
+                failures.append("%s：rc 应 %s，实得 %s\n%s"
+                                % (label, expected, rc, out))
+            tokens = list(required) + (list(strict_required) if strict else [])
+            for token in tokens:
+                if token not in out:
+                    failures.append("%s：输出缺少 %r\n%s" % (label, token, out))
+            for token in forbidden:
+                if token in out:
+                    failures.append("%s：输出不应含 %r\n%s" % (label, token, out))
+
+    module_root, page = _setup(
+        "dynamic_needs_k", need=True,
+        children=[_ri_store("st"), _ri_button({"click": dynamic_click})])
+    _run_case(
+        "dynamic_needs_k", module_root, page, 0, 2,
+        ["[未核对]"], ["  [ok] store[st] · 显式调用",
+                      "SQL 需要的参数在页面侧都能找到来源"])
+
+    module_root, page = _setup(
+        "dynamic_empty_needs", need=False,
+        children=[_ri_store("st"), _ri_button({"click": dynamic_click})])
+    _run_case(
+        "dynamic_empty_needs", module_root, page, 0, 2,
+        [], ["  [ok] store[st] · 显式调用",
+            "SQL 需要的参数在页面侧都能找到来源"],
+        strict_required=["按 `--strict` 判未核对（rc=2）"])
+
+    module_root, page = _setup(
+        "unknown_plus_miss", need=True,
+        children=[_ri_store("st1", auto_load="true"),
+                  _ri_store("st2"),
+                  _ri_button({"click": dynamic_click.replace("app.st.", "app.st2.")})])
+    _run_case(
+        "unknown_plus_miss", module_root, page, 0, 1,
+        ["[缺参]", "[未核对]"],
+        ["SQL 需要的参数在页面侧都能找到来源"])
+
+    if failures:
+        return failures
+    print("[ok]  请求完成状态：目标未知不打印请求级 [ok]；空需求集 strict=2；"
+          "与确缺参并存时 strict=1")
+    return []
+
 
 @_cap
 def _ng_cli_readonly(tmp, node, failures, write) -> None:
