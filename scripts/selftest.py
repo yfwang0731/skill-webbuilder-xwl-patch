@@ -2274,7 +2274,17 @@ def _trows(ls):
 #     **仍送解析器判一次**（`_prompt_cmd_prefix_argv`）：能过 ＝ 合法的省略写法，过不了 ＝ 照样红
 #     —— 否则**加个 `…` 就能免检**（实测：只要文档里还有别的合法样例，坏样例带 `…` 即整体仍绿）；
 #     条数仍打进 `[ok]` 行。
-_PROMPT_CMD_RE = re.compile(r"^\s*(?:python\s+)?(?:\S*/)?xwl\.py(?:\s+(.*))?$")
+#   ⭐ 序3（1.8.4）：`<占位>/scripts/xwl.py` 类命令**照抄即失败**，但旧抽取把脚本路径整段当
+#     「`(?:\S*/)?xwl\.py`」前缀吃掉，只把 `new <占位路径>` 交给 argparse ⇒ **完全不可照抄的命令被判绿（假绿）**。
+#     新版把**脚本路径 token 单独捕获**（引号包裹 / `$VAR` / `$env:VAR` / 绝对 / 相对 均可），
+#     再判它是否为**尖括号占位**（`<...>`）：含 `<`／`>` ⇒ 无法照抄 ⇒ 判红；`$SKILL_ROOT`／绝对路径／
+#     相对 `scripts/xwl.py` 等正确写法 ⇒ 判绿。同时保留原判：命令体仍逐条喂 `parse_args()`。
+#     ⚠️ 续行（行尾 `\`）先剥掉再判，`$SKILL_ROOT`/引号包裹**不误报**。
+_PROMPT_CMD_RE = re.compile(
+    r'^\s*(?:python3?\s+)?'
+    r'(?P<path>"[^"]*xwl\.py"|\'[^\']*xwl\.py\'|(?:\$[^\s"]*|~?[^\s"]*|)[^\s"]*xwl\.py)'
+    r'(?P<rest>(?:\s+.*)?)$'
+)
 _PROMPT_TEMPLATE_MARKS = ("…", "|")
 
 
@@ -2313,9 +2323,23 @@ def _prompt_cmd_prefix_argv(body):
     return _out
 
 
+def _prompt_cmd_script_path_is_placeholder(path_token):
+    """脚本路径 token 是否为**尖括号占位**（`<skill根>/scripts/xwl.py` 之类 ⇒ 照抄必挂）。
+
+    正确写法（`$SKILL_ROOT/scripts/xwl.py`、`$env:SKILL_ROOT/…`、绝对路径、相对 `scripts/xwl.py`）
+    都不含 `<`／`>` ⇒ 判绿、不误报。去掉两侧引号后判断。
+    """
+    _pb = path_token.strip().strip("\"'")
+    return ("<" in _pb) or (">" in _pb)
+
+
 def _doc_prompt_cmds(root):
-    """从文档围栏块里抽 `xwl.py <命令> …` 样例 ⇒ (参与判定的 [(rel, 行号, argv 文本)], 模板记法行 [(rel, 行号, argv 文本)])"""
-    _got, _skip = [], []
+    """从文档围栏块里抽 `xwl.py <命令> …` 样例。
+
+    返回 `(参与判定的 [(rel,行号,argv 文本)], 模板记法行 [(rel,行号,argv 文本)], 占位路径行 [(rel,行号,路径 token,argv 文本)])`。
+    ⚠️ 占位路径行（脚本路径含 `<...>`）**单列一栏**：它们照抄必失败，先于可解析性判红。
+    """
+    _got, _skip, _ph = [], [], []
     for _rel in [n for n in _doc_names(root) if n != "CHANGELOG.md"]:
         try:
             with open(os.path.join(root, _rel.replace("/", os.sep)), encoding="utf-8") as _fh:
@@ -2323,31 +2347,58 @@ def _doc_prompt_cmds(root):
         except OSError:
             continue
         _in = False
-        for _no, _ln in enumerate(_lines, 1):
+        _idx = 0
+        while _idx < len(_lines):
+            _ln = _lines[_idx]
+            _no = _idx + 1
+            _idx += 1
             if _ln.strip().startswith("```"):
                 _in = not _in
                 continue
             if not _in:
                 continue
-            _m = _PROMPT_CMD_RE.match(_ln)
+            if not _PROMPT_CMD_RE.match(_ln):
+                continue
+            # ⭐ 续行处理：行尾 `\` ⇒ 与后续物理行拼成**一条逻辑命令**再判
+            #   （`python … patch x.xwl \` + `  --ops ops.json` 必须整体喂 argparse，
+            #    否则缺 `--ops` 会被误判红 —— 这正是「续行不误报」的要求）。
+            _merged = _ln
+            while _merged.rstrip().endswith("\\") and _idx < len(_lines):
+                _merged = _merged.rstrip()[:-1].rstrip() + " " + _lines[_idx].strip()
+                _idx += 1
+            _m = _PROMPT_CMD_RE.match(_merged)
             if not _m:
                 continue
-            _body = _prompt_cmd_strip_comment(_m.group(1) or "").strip()
+            _body = _prompt_cmd_strip_comment(_m.group("rest") or "").strip()
+            if _body.endswith("\\"):
+                _body = _body[:-1].rstrip()
             if not _body:
+                continue
+            _path = _m.group("path")
+            if _prompt_cmd_script_path_is_placeholder(_path):
+                _ph.append((_rel, _no, _path.strip().strip("\"'"), _body))
                 continue
             if any(_t in _body for _t in _PROMPT_TEMPLATE_MARKS):
                 _skip.append((_rel, _no, _body))
                 continue
             _got.append((_rel, _no, _body))
-    return _got, _skip
+    return _got, _skip, _ph
 
 
 def _doc_prompt_cmd_probe(root):
     """判**每条文档命令样例都能被解析器接住** ⇒ `(FAIL 文案 or None, 判定条数, 模板记法条数)`。"""
-    _got, _skip = _doc_prompt_cmds(root)
-    if not (_got or _skip):
+    _got, _skip, _ph = _doc_prompt_cmds(root)
+    if not (_got or _skip or _ph):
         return ("prompt 命令样例守卫：一条 `xwl.py <命令>` 样例都没抽到 ⇒ 本项无法判定，判红"
                 "（抽取面可能已失效：围栏块标记或起头形态变了）", 0, len(_skip))
+    # ⭐ 序3：**脚本路径含尖括号占位 ⇒ 照抄必失败**，先于可解析性判红（旧判据在此处是假绿）。
+    if _ph:
+        _pb = ["%s:%d 脚本路径「%s」含尖括号占位 —— 照抄到 shell 必失败"
+               "（PowerShell 报 Invalid argument；POSIX 把 < > 当重定向）⇒ 先设 SKILL_ROOT 变量再引用，"
+               "如 `python \"$SKILL_ROOT/scripts/xwl.py\" …`" % (_rel, _no, _path)
+               for _rel, _no, _path, _body in _ph]
+        return ("prompt 里的命令样例有 %d 条**照抄跑不通**（脚本路径是尖括号占位，不是可执行的真实路径）：%s"
+                % (len(_ph), "；".join(_pb[:6])), len(_got), len(_skip))
     try:
         _ap = xwl.build_parser()
     except Exception as _exc:  # noqa: BLE001
@@ -2476,12 +2527,15 @@ _ABSENT_S_PROBE = [False]
 _ENTRY_SKIP = ("CHANGELOG.md",)
 
 # 入口形态的**唯一判据**：`python` 家族命令里，`scripts/xwl.py` 与 `scripts/selftest.py` 前
-#   必须有**路径前缀**（占位符 `<…>` ／ Unix 绝对 `/…` ／ 盘符绝对 `X:…`）。写成"整条命令能命中本正则"
+#   必须有**路径前缀**（占位符 `<…>` ／ Unix 绝对 `/…` ／ 盘符绝对 `X:…` ／ **变量前缀**
+#   `$SKILL_ROOT/…`、`${SKILL_ROOT}/…`、`$env:SKILL_ROOT/…`、`%SKILL_ROOT%/…`）。写成"整条命令能命中本正则"
 #   而非手工找斜杠，是因为手工写法要先剥引号、再处理空格与反斜杠，三处任一漏掉就假绿（实测栽过两处）。
+#   ⚠️ 变量前缀（round2 新增）与 `<…>`/绝对路径**同权**：它们同样**不是裸相对路径**、脚本可定位
+#     （调用方先 `export SKILL_ROOT=…` 再引用，cwd 无关）⇒ 视为"有前缀"；⛔ **裸 `scripts/xwl.py`（无前缀）仍判红**。
 #   ⚠️ `selftest.py` 与 `xwl.py` **同一条规则**，不另造一套。只扩文档面（`.md` ＋ `examples/README.md`），
 #   ⛔ 不扩到 `.py` 源码：`selftest.py` 自己的 docstring 在 skill 根下跑，裸写是对的。
 _ENTRY_OK_RE = re.compile(
-    r"""(?:\A|[\s"'])(?:<[^>\n]*>|/|[A-Za-z]:)[^"\n]*?/scripts/(?:xwl|selftest)\.py""")
+    r"""(?:\A|[\s"'])(?:<[^>\n]*>|/|[A-Za-z]:|\$\{[^}\n]*\}|\$[A-Za-z_][A-Za-z0-9_]*(?::[A-Za-z_][A-Za-z0-9_]*)?|%[^%\n]+%)[^"\n]*?/scripts/(?:xwl|selftest)\.py""")
 
 # `python` 家族的命令头：`python`／`python3`／`py -3`／`uv run python`。
 #   ⚠️ 只认 `python ` 会让后三种写法**完全不在射程内**（实测抽取数 0 ⇒ 绿得毫无道理）。
@@ -2507,7 +2561,8 @@ def _entry_cmds(line: str) -> list:
 def _entry_prefix_missing(cmd: str) -> bool:
     """命令里的 `scripts/xwl.py` 或 `scripts/selftest.py` 是否**缺路径前缀**。
 
-    `<…>` 占位符／Unix 绝对／盘符绝对都不算缺。两条脚本同一条规则。
+    `<…>` 占位符／Unix 绝对／盘符绝对／**变量前缀**（`$SKILL_ROOT/…`、`${SKILL_ROOT}/…`、
+    `$env:SKILL_ROOT/…`、`%SKILL_ROOT%/…`）都不算缺；只有**裸相对**（无任何路径前缀）才算缺。两条脚本同一条规则。
     ⚠️ 两处归一化缺一即错：① **反斜杠视同 `/`**（Windows 写法；否则 `scripts\\xwl.py` 会被上层的
     "含 `scripts/xwl.py`"过滤整条跳过 ⇒ 判绿）；② **引号包裹必须放行**（`python "<skill根>/scripts/xwl.py"`
     正是文档教人"路径带空格就加引号"时的写法，不放行会假红）。

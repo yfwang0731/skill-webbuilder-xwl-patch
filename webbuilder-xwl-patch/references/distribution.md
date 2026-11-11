@@ -48,17 +48,19 @@ npx skills remove webbuilder-xwl-patch -g -y
 
 ## 四、命令在哪个目录里跑（最容易踩的一条）
 
-`xwl.py` 是**独立脚本**，与业务工程没有位置关系 ⇒ **入口一律写全路径**：
+`xwl.py` 是**独立脚本**，与业务工程没有位置关系 ⇒ **入口一律写全路径**：先设 `SKILL_ROOT` 指装好的那份 skill 目录，再引用它。
 
 ```bash
-python <skill根>/scripts/xwl.py check <业务工程>/wb/modules/<模块>/某页.xwl
+# 先设变量（PowerShell：$env:SKILL_ROOT="…"）；<业务工程>/<模块> 换成你的实际路径
+export SKILL_ROOT="$HOME/.agents/skills/webbuilder-xwl-patch"
+python "$SKILL_ROOT/scripts/xwl.py" check "<业务工程>/wb/modules/<模块>/某页.xwl"
 ```
 
 - `<skill根>` ＝ **装好的那份 skill 目录**（`-a codex` 下即 `~/.agents/skills/webbuilder-xwl-patch`）；里面有 `SKILL.md`、`references/`、`examples/`、`scripts/xwl.py`。
 - `<repo>` ＝ **源码树根**（git 仓库根，含 `webbuilder-xwl-patch/`、开发用的 `scripts/selftest.py` 与 `tests/`）—— 只用于开发自检（见 §五），**不是**安装目录，也不随安装副本分发。
 - 在**业务工程**里 `cd` 着跑、却只写**裸相对路径** ⇒ **找不到脚本**（本页把 `<skill根>` / `<repo>` 都写全了）。
-- 路径带空格或中文（Windows 上很常见）时**两侧都加引号**：
-  `python "<带空格 的 skill根>/scripts/xwl.py" "<带空格 的工程>/某页.xwl"`。
+- 路径带空格或中文（Windows 上很常见）时**两侧都加引号**（变量用引号包住即可）：
+  `python "$SKILL_ROOT/scripts/xwl.py" "$BIZ_ROOT/wb/modules/某模块/某页.xwl"`。
 - 工具失败时打印的"重跑"提示里，入口已经是**本机绝对路径**（尾段仍是 `scripts/xwl.py`），直接粘。
 
 ### ⛔ 别往 skill 安装目录写东西
@@ -80,8 +82,46 @@ python <skill根>/scripts/xwl.py check <业务工程>/wb/modules/<模块>/某页
 
 ## 六、装完先做这三步
 
+> 下列命令按 §四 先设好 `SKILL_ROOT`（`export SKILL_ROOT="…"`／PowerShell `$env:SKILL_ROOT="…"`）。
+
 1. 照 [`../examples/README.md`](../examples/README.md) 生成一个示例页面 —— 验证 `new` 路径可用；
-2. `python <skill根>/scripts/xwl.py check <刚生成的页面>` —— 验证运行面能跑通（纯标准库，无第三方依赖）；
+2. `python "$SKILL_ROOT/scripts/xwl.py" check "<刚生成的页面>"` —— 验证运行面能跑通（纯标准库，无第三方依赖）；
 3. `--help` 过一遍子命令 —— 确认装的是你预期的那份（子命令数量与文档对得上）。
 
 > 自检脚本不在安装副本里：装完**不要**找 `selftest.py` / `--list-blocks` —— 那是源码树的东西（见 §五）。
+
+## 七、如何确认程序完整（`xwl.py` 是不是"残缺"）
+
+核心程序就是一个文件：`scripts/xwl.py`。它是**纯标准库、零第三方依赖**的单文件脚本 ——
+整个工具的全部子命令都在这一个文件里，**没有拆成包、也没有别的同层 `.py` 需要一起读**。
+所以"文件看起来很长"是正常的：**长度 ≠ 残缺**，判断完整性只看下面几条**读文件时就能自证**的依据：
+
+- **文件以 shebang 起头**：第一行是 `#!/usr/bin/env python3`（其后是 `# -*- coding: utf-8 -*-` 与模块 docstring）；
+- **入口在文件末尾**：最后以 `if __name__ == "__main__":` 收尾 —— 见到它，说明主函数与入口都在这一份里，没有外挂入口文件；
+- **子命令全靠 argparse**：运行 `python "$SKILL_ROOT/scripts/xwl.py" --help`，能列出全部 **15 个**子命令
+  （`check` `edit` `patch` `params` `paths` `new` `folders` `itemids` `sqlrefs` `diffguard` `schema` `dump` `expand` `sql` `events`）即说明命令表完整；
+- **能编译**：`python -m py_compile "$SKILL_ROOT/scripts/xwl.py"` 无报错（rc=0）即说明语法层完整、可被解释器加载；
+- **能跑通一次冒烟**：按 §六 生成一页 + `check`，得到 `ALL OK` 即说明运行面完整。
+
+> 这几条都是**当场可复算**的，不依赖任何随版本漂移的体量数字。本 skill **不提供** `--version` 子命令，
+> 也不另外提供 `__main__.py` 或包装入口 —— 认准 `scripts/xwl.py` 这一个文件即可。
+
+## 八、工具速查（子命令一句话作用）
+
+参数与各自的边界／警告见 [`../SKILL.md`](../SKILL.md) §4.1，本表只给一句话作用。
+
+| 子命令 | 干什么 |
+|---|---|
+| `new <out.xwl> --kind page\|sql [--from-json F]` | **从零生成**：内置设计器真实键序的骨架（页面 / SQL 载体）；默认拒绝覆盖已有文件 |
+| `patch <file> --ops ops.json` | **结构级编辑（默认方式）**：只给值/子树，按设计器算法重建整份文件 |
+| `folders <path> [--register]` | `folder.json`（设计器导航树索引）一致性检查（**只读**）；`--register` 才写（只接文件路径） |
+| `check <file...>` | 九项校验：格式五项 + 事件 JS `node --check` + **注册键重名分级** + **`configs` 值类型** + 加载链完整性（只提示）；任一 FAIL 返回非 0；**给了 `--controls` 时另校 `configs` 键与内联 `[js]`** |
+| `diffguard <path...>` | **相对 git 基线检测「多行内容被压平」**（`check` 查不出的那类静默损坏）；默认只告警，`--strict` 才阻塞 |
+| `itemids <file>` | **注册键重名报告（只读）**：分级 + 候选清单 + 建议改名；`--suggest` 出 ops 草稿 |
+| `paths <file>` | 列出 `sql` / `totalSql` / `serverScript` / `url` 四类字段的位置（含 `@itemId` 写法） |
+| `params <page.xwl>` | 核对「参数控件 → store → SQL」传参链路（标出 `out` / `params` 两条通路） |
+| `sqlrefs <file>` | 校验 SQL 片段里 `{#名字#}` 与 `serverScript` 是否自洽 |
+| `schema [<type>] --controls <…/controls.json>` | 查控件注册表：`--tree` 面板分组树、`--list` 控件 id、`--skeleton` 设计器同款骨架、`--json` 机器可读（`--list --json` 出数组）、`--observed` 语料**实测**用过的 `configs` 键＋频次 |
+| `expand <file>` | 单行 → 设计器同款多行（含语义等价比对） |
+| `edit <file> --old-file O --new-file N` | 文本级安全替换（**例外**手段） |
+| `dump` / `sql` / `events` | 解析后美化输出 / 抽 SQL / 导出事件 JS |

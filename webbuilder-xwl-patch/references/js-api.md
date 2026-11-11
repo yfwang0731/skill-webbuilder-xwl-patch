@@ -164,9 +164,9 @@ Wb.requestAg({
 > 见 [`measured-data.md`](measured-data.md) §三。
 
 **后台传回后，前台怎么处理**：最常见的是**提示 + 刷新 + 关窗**这三件事
-（实测占比 91% / 78% / 29%）；返回值本身只有约六成调用点会读，且多数是普通文本或数字，
-直接 `if (data == 1)` 判，约四成才需要 `Wb.decode`。完整分布与口径见
-[`measured-data.md`](measured-data.md) §四。
+（占比按你的工程现采）；返回值本身只有部分调用点会读，且多数是普通文本或数字，
+直接 `if (data == 1)` 判，只有一部分才需要 `Wb.decode`。完整分布与口径见
+[`measured-data.md`](measured-data.md) §四（历史口径见 `CHANGELOG.md`）。
 
 要点：
 

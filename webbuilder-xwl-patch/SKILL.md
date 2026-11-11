@@ -2,7 +2,7 @@
 name: webbuilder-xwl-patch
 slug: skill-webbuilder-xwl-patch
 displayName: webbuilder-xwl-patch
-version: 1.8.3
+version: 1.8.4
 license: MIT
 metadata:
   category: development-tools
@@ -58,7 +58,7 @@ WebBuilder 的页面与查询定义都写在 `.xwl` 里。它**看起来像 JSON
 | 入口 | 怎么进 |
 |---|---|
 | **① 对话里直接说**（推荐） | 在 Agent 对话中描述任务即可，不必记命令。以下说法都会命中本 skill：<br>「改 xxx.xwl / 加个按钮 / 挂个点击事件 / 改页面上的 SQL / 这个页面白屏了 / 报解析错误 / `app.X` 取不到值 / 新建一个页面或 SQL 文件 / 新建的页面在设计器里找不到 / 把 xwl 里的 SQL 抽出来灌库跑一遍」 |
-| **② 命令行直调** | 不经过 Agent、要自己跑或写进脚本时：`python <skill根>/scripts/xwl.py <子命令>`（`<skill根>` ＝ 本 skill 的**安装目录**，⛔ 别写裸 `scripts/xwl.py` —— 你的 cwd 是业务工程）；`--help` 看全部子命令；⛔ 别往安装目录写 ops／业务 `.xwl`／备份／临时夹具（会被更新覆盖、且可能是只读） |
+| **② 命令行直调** | 不经过 Agent、要自己跑或写进脚本时：先设 `SKILL_ROOT`＝本 skill 的**安装目录**（如 `export SKILL_ROOT="$HOME/.agents/skills/webbuilder-xwl-patch"`／PowerShell `$env:SKILL_ROOT="…"`），再 `python "$SKILL_ROOT/scripts/xwl.py" <子命令>`（⛔ 别写裸 `scripts/xwl.py` —— 你的 cwd 是业务工程）；`--help` 看全部子命令；⛔ 别往安装目录写 ops／业务 `.xwl`／备份／临时夹具（会被更新覆盖、且可能是只读） |
 
 **本 skill 不提供 GUI / 菜单入口** —— 它是命令行工具 + Agent 指令集。非技术用户让 Agent 代跑就行。
 
@@ -149,8 +149,8 @@ hidden, children, roles, title, iconCls, inframe, pageLink
 > ⚠️ **缺 `inframe` / `pageLink` 这类键时，`check` 依然 ALL OK** —— 它只查格式，不查"骨架是否齐全"
 > （工程里确实存在这种「缺钥匙」的文件，如 `dev/ide/add-file.xwl`）。
 > 所以**新建时不要手写顶层键** —— 用 `xwl.py new`（内置了这套键序，见**第三章第 0 步**）。
-> 7 把钥匙各自的**取值形态与实测分布**（1635 个页面类文件的计数）见
-> [`references/measured-data-skeleton.md`](references/measured-data-skeleton.md) §九。
+> 7 把钥匙各自的**取值形态与实测分布**（按你的工程现采计数）见
+> [`references/measured-data-skeleton.md`](references/measured-data-skeleton.md) §九；历史口径见 `CHANGELOG.md`。
 
 引用三种写法：`m?xwl=<模块相对路径，不带 .xwl>`／注册短名／外部 URL，**外部地址须 `inframe:true`**；写在不同位置（事件／store／列配置／服务端脚本／页面顶层），位置表见 [`references/js-api.md`](references/js-api.md)「附录：引用通路总表与代码位置」。
 
@@ -193,7 +193,7 @@ hidden, children, roles, title, iconCls, inframe, pageLink
 > [`references/measured-data-designer.md`](references/measured-data-designer.md) §五。
 
 `auto` 怎么定：**只有一种**换行（全 CRLF / 全 LF / 全 CR）⇒ **沿用它**（含纯 CR）；**混用多种** ⇒ 只在
-**CRLF / LF** 取多数（等量取 CRLF）、**裸 CR 不参与投票**；**一个换行符都没有**（紧凑单行源正属此类，样本工程 902 个）⇒ 无从"沿用"、**回退 LF**。
+**CRLF / LF** 取多数（等量取 CRLF）、**裸 CR 不参与投票**；**一个换行符都没有**（紧凑单行源正属此类，样本工程里确有这类文件）⇒ 无从"沿用"、**回退 LF**（计数与采集口径见 [`references/measured-data-designer.md`](references/measured-data-designer.md)，历史口径见 `CHANGELOG.md`）。
 
 ### 2.5 值里的「字面反斜杠 + n」为什么长得别扭
 
@@ -233,11 +233,15 @@ hidden, children, roles, title, iconCls, inframe, pageLink
 ### 第 0 步 · 新建文件
 
 ```bash
+# 先设变量：SKILL_ROOT=本 skill 安装目录（换成你的实际值）；<模块> 换成你的业务模块目录
+export SKILL_ROOT="$HOME/.agents/skills/webbuilder-xwl-patch"
 # 独立页面：顶层 7 把钥匙 + 一个空 module 节点
-python <skill根>/scripts/xwl.py new wb/modules/<模块>/myPage.xwl --kind page --title "我的页面"
+python "$SKILL_ROOT/scripts/xwl.py" new wb/modules/<模块>/myPage.xwl --kind page --title "我的页面"
 # SQL 载体：module(serverScript) → dataprovider(sql)，被页面用 store.url='m?xwl=…' 引用
-python <skill根>/scripts/xwl.py new wb/modules/<模块>/xxxSql/queryXxx.xwl --kind sql --title "出库单查询"
+python "$SKILL_ROOT/scripts/xwl.py" new wb/modules/<模块>/xxxSql/queryXxx.xwl --kind sql --title "出库单查询"
 ```
+
+PowerShell 版把 `export SKILL_ROOT=…` 换成 `$env:SKILL_ROOT = "…";`，命令里的 `"$SKILL_ROOT/…"` 换成 `"$env:SKILL_ROOT/…"`。
 
 `new` 内置了 1.3 那套**设计器真实键序**，所以：
 
@@ -324,10 +328,12 @@ python <skill根>/scripts/xwl.py new wb/modules/<模块>/xxxSql/queryXxx.xwl --k
    `--backup` 是**兜底**，不是"跳过 dry-run 的理由"。
 
 ```bash
+# 先设变量（承接上文）：SKILL_ROOT=安装目录
+export SKILL_ROOT="$HOME/.agents/skills/webbuilder-xwl-patch"
 # 先看将产生的 diff（不写入）
-python <skill根>/scripts/xwl.py patch <file.xwl> --ops ops.json --dry-run
+python "$SKILL_ROOT/scripts/xwl.py" patch <file.xwl> --ops ops.json --dry-run
 # 真改（--backup 会先写 <file>.bak）
-python <skill根>/scripts/xwl.py patch <file.xwl> --ops ops.json --backup
+python "$SKILL_ROOT/scripts/xwl.py" patch <file.xwl> --ops ops.json --backup
 ```
 
 **报错怎么办** —— `patch` 的**失败**默认不写盘（⚠️ 正常成功当然写盘 —— ⛔ 别把默认执行模式说成 dry-run）；但"是否写入"与"本次是否检查完"是两件事，输出里必须分别说清 —— ①**正常成功**：已写入、`rc=0`（⑤）；②**已写入且内容失败**：④ 旧错保留（`rc=1`）；③**已写入且检查未完成**：⑥-a Node 缺失／`--no-js`（`rc=0`）；④**未写入**：①②③⑥-b⑦（`rc=1`／`2`）；「写后 ⑥ 失败」另报『已写入；写后校验失败』：
@@ -354,7 +360,8 @@ python <skill根>/scripts/xwl.py patch <file.xwl> --ops ops.json --backup
 用它就得自己守两条硬要求：`newline=''` 保留原换行 + **替换前断言锚点唯一**。
 
 ```bash
-python <skill根>/scripts/xwl.py edit <file.xwl> --old-file old.txt --new-file new.txt --expect 1 --dry-run
+# SKILL_ROOT 已在上面设好；<file.xwl> 换成真实文件路径
+python "$SKILL_ROOT/scripts/xwl.py" edit <file.xwl> --old-file old.txt --new-file new.txt --expect 1 --dry-run
 ```
 
 > 「锚点出现次数」是**信息**不是障碍：工具会报出实际次数。出现多次时把锚点**扩到足够上下文**
@@ -374,8 +381,9 @@ python <skill根>/scripts/xwl.py edit <file.xwl> --old-file old.txt --new-file n
 提交前补这一刀：
 
 ```bash
-python <skill根>/scripts/xwl.py diffguard <改过的文件或目录>            # 默认只告警
-python <skill根>/scripts/xwl.py diffguard <改过的文件或目录> --strict    # CI / pre-commit：让它阻塞
+# SKILL_ROOT 已在上面设好；<改过的文件或目录> 换成真实路径
+python "$SKILL_ROOT/scripts/xwl.py" diffguard <改过的文件或目录>            # 默认只告警
+python "$SKILL_ROOT/scripts/xwl.py" diffguard <改过的文件或目录> --strict    # CI / pre-commit：让它阻塞
 ```
 
 - **判据、已知边界与退出码都在 [`references/faq.md`](references/faq.md) §三** —— 这里不重复。

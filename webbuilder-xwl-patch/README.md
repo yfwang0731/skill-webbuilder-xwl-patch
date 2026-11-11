@@ -40,8 +40,9 @@ npx skills add yfwang0731/skill-webbuilder-xwl-patch --skill webbuilder-xwl-patc
 
 ```bash
 # 改标题 + 给工具栏加一个带多行 JS 的按钮：只写"要什么"，不写"怎么排版"
-python <skill根>/scripts/xwl.py patch page.xwl --ops ops.json --dry-run   # 先看 diff
-python <skill根>/scripts/xwl.py patch page.xwl --ops ops.json --backup    # 确认后落盘
+export SKILL_ROOT="$HOME/.agents/skills/webbuilder-xwl-patch"   # 换成你实际的安装目录
+python "$SKILL_ROOT/scripts/xwl.py" patch page.xwl --ops ops.json --dry-run   # 先看 diff
+python "$SKILL_ROOT/scripts/xwl.py" patch page.xwl --ops ops.json --backup    # 确认后落盘
 ```
 
 ```json
@@ -75,19 +76,26 @@ python <skill根>/scripts/xwl.py patch page.xwl --ops ops.json --backup    # 确
 ## 三分钟上手
 
 ```bash
-# 造新文件（内置设计器真实顶层键序，不需要种子文件）
-python <skill根>/scripts/xwl.py new wb/modules/<模块>/myPage.xwl --kind page --title "我的页面"
-python <skill根>/scripts/xwl.py new wb/modules/<模块>/xxxSql/queryXxx.xwl --kind sql --title "出库单查询"
-python <skill根>/scripts/xwl.py folders wb/modules/<模块>/myPage.xwl --register   # 登记（否则设计器里看不到）
+# 先设变量：SKILL_ROOT=本 skill 安装目录（把路径换成你的实际值）
+export SKILL_ROOT="$HOME/.agents/skills/webbuilder-xwl-patch"
+
+# 造新文件（内置设计器真实顶层键序，不需要种子文件）；<模块> 换成你的业务模块目录
+python "$SKILL_ROOT/scripts/xwl.py" new wb/modules/<模块>/myPage.xwl --kind page --title "我的页面"
+python "$SKILL_ROOT/scripts/xwl.py" new wb/modules/<模块>/xxxSql/queryXxx.xwl --kind sql --title "出库单查询"
+python "$SKILL_ROOT/scripts/xwl.py" folders wb/modules/<模块>/myPage.xwl --register   # 登记（否则设计器里看不到）
 
 # 改已有文件：0 check 基线 → 1 paths 拿路径 → 2 --dry-run → 3 --backup → 4 check 复核 → 5 diffguard
-python <skill根>/scripts/xwl.py check     page.xwl
-python <skill根>/scripts/xwl.py paths     page.xwl                            # 改 SQL/数据源时；其余改动用 dump 看层级
-python <skill根>/scripts/xwl.py patch     page.xwl --ops ops.json --dry-run
-python <skill根>/scripts/xwl.py patch     page.xwl --ops ops.json --backup
-python <skill根>/scripts/xwl.py check     page.xwl
-python <skill根>/scripts/xwl.py diffguard page.xwl                            # 有没有把多行内容悄悄压平？
+python "$SKILL_ROOT/scripts/xwl.py" check     page.xwl
+python "$SKILL_ROOT/scripts/xwl.py" paths     page.xwl                            # 改 SQL/数据源时；其余改动用 dump 看层级
+python "$SKILL_ROOT/scripts/xwl.py" patch     page.xwl --ops ops.json --dry-run
+python "$SKILL_ROOT/scripts/xwl.py" patch     page.xwl --ops ops.json --backup
+python "$SKILL_ROOT/scripts/xwl.py" check     page.xwl
+python "$SKILL_ROOT/scripts/xwl.py" diffguard page.xwl                            # 有没有把多行内容悄悄压平？
 ```
+
+> `<模块>` 是**你的业务模块目录名**占位（形如 `wb/modules/<模块>/`），跑前换成实际值；这是业务路径、随工程变，
+> 不是脚本入口。上面第一条 `new` 直接照抄即可跑（先 `export SKILL_ROOT` 指向安装目录）。
+> PowerShell 把 `export SKILL_ROOT=...` 换成 `$env:SKILL_ROOT = "...";`，其余命令里的 `"$SKILL_ROOT/…"` 换成 `"$env:SKILL_ROOT/…"` 即可。
 
 > 最后一步补的是**唯一有自动化防线**的静默损坏：把「反斜杠 + 换行」直接删掉之后，
 > 文件依然是合法 JSON、`check` 全绿、`node --check` 也可能返回 0，只有**相对 git 基线**才看得出。
@@ -99,23 +107,8 @@ python <skill根>/scripts/xwl.py diffguard page.xwl                            #
 
 ## 工具速查
 
-**参数与各自的边界/警告见 [`SKILL.md`](SKILL.md) §4.1，本表只给一句话作用。**
-
-| 子命令 | 干什么 |
-|---|---|
-| `new <out.xwl> --kind page\|sql [--from-json F]` | **从零生成**：内置设计器真实键序的骨架（页面 / SQL 载体）；默认拒绝覆盖已有文件 |
-| `patch <file> --ops ops.json` | **结构级编辑（默认方式）**：只给值/子树，按设计器算法重建整份文件 |
-| `folders <path> [--register]` | `folder.json`（设计器导航树索引）一致性检查（**只读**）；`--register` 才写（只接文件路径） |
-| `check <file...>` | 九项校验：格式五项 + 事件 JS `node --check` + **注册键重名分级** + **`configs` 值类型** + 加载链完整性（只提示）；任一 FAIL 返回非 0；**给了 `--controls` 时另校 `configs` 键与内联 `[js]`** |
-| `diffguard <path...>` | **相对 git 基线检测「多行内容被压平」**（`check` 查不出的那类静默损坏）；默认只告警，`--strict` 才阻塞 |
-| `itemids <file>` | **注册键重名报告（只读）**：分级 + 候选清单 + 建议改名；`--suggest` 出 ops 草稿 |
-| `paths <file>` | 列出 `sql` / `totalSql` / `serverScript` / `url` 四类字段的位置（含 `@itemId` 写法） |
-| `params <page.xwl>` | 核对「参数控件 → store → SQL」传参链路（标出 `out` / `params` 两条通路） |
-| `sqlrefs <file>` | 校验 SQL 片段里 `{#名字#}` 与 `serverScript` 是否自洽 |
-| `schema [<type>] --controls <…/controls.json>` | 查控件注册表：`--tree` 面板分组树、`--list` 控件 id、`--skeleton` 设计器同款骨架、`--json` 机器可读（`--list --json` 出数组）、`--observed` 语料**实测**用过的 `configs` 键＋频次 |
-| `expand <file>` | 单行 → 设计器同款多行（含语义等价比对） |
-| `edit <file> --old-file O --new-file N` | 文本级安全替换（**例外**手段） |
-| `dump` / `sql` / `events` | 解析后美化输出 / 抽 SQL / 导出事件 JS |
+15 个子命令（`new`/`patch`/`check`/`diffguard`/`itemids`/`paths`/`params`/`sqlrefs`/`folders`/`schema`/`expand`/`edit`/`dump`/`sql`/`events`）的**逐条作用与边界**见
+[`references/distribution.md`](references/distribution.md) §八「工具速查」，以及 `SKILL.md` §4.1 的参数细则 —— 本页不重复。
 
 ## 目录结构
 
@@ -131,6 +124,11 @@ webbuilder-xwl-patch/
 └── scripts/
     └── xwl.py                # 全部子命令（纯标准库，零依赖）
 ```
+
+> **`xwl.py` 是单文件程序，长不等于残缺**：它是纯标准库零依赖的**一个**文件，以 shebang 起、
+> 以 `if __name__ == "__main__":` 收尾，全部子命令都在里面。判断是否完整看三条当场可复算的依据：
+> `python "$SKILL_ROOT/scripts/xwl.py" --help` 列全 15 个子命令、`python -m py_compile …/xwl.py` 通过、
+> 按 `examples` 跑一次 `check` 得 `ALL OK`。完整说明见 [`references/distribution.md`](references/distribution.md) §"如何确认程序完整"。
 
 > `scripts/selftest.py`、`scripts/privacy_scan.py`、`scripts/privacy_patterns.example.json`、`tests/` 只存在于
 > **源码仓根/开发树**，不属于安装副本；维护者自检见 [`references/distribution.md`](references/distribution.md)。

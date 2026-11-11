@@ -14,6 +14,18 @@
 
 ---
 
+## [1.8.4] - 2026-11-11
+
+示例可复制即跑、现行面口径收敛与文档守卫补「照抄即执行」判据（patch）：**无新子命令或参数**，不改 `xwl.py` 任何字节。
+
+① **示例可复制即跑**：`SKILL.md`、`README.md`、`examples/README.md`、`references/*` 里所有写命令的围栏块，把「`<skill根>`／`<你的临时目录>`／`<本skill目录>`／`<样例文件名>`」这类照抄即挂的占位写法，改为「先设 `SKILL_ROOT`／`TMP_DIR` 变量再引用」的可复制写法，并给 bash 与 PowerShell 双版；`examples/README.md` 的把多行 JS 压平的 POSIX heredoc（`python - <<'EOF'`）改为单行 `python -c`、双平台可跑。照抄任一被改围栏块的首条命令即可实跑（`new`→`rc=0`；含 `check`→`rc=0`）。
+
+② **现行面口径收敛**：现行面（`SKILL.md`／`README.md`／`references/{distribution,faq,js-api,sql-fragments,walkthrough,workflow-notes-guards-maintenance}.md`）里会过期的语料规模数、文件大小数与样本占比，改为「形状描述 + 采集命令」，不再写死数值；确需引用处只注「历史口径见 `CHANGELOG.md`」。⛔ 历史记录类（本文件历史段、`metadata.update_history` 历史条、`references/measured-data*.md`）保持原样。
+
+③ **程序完整性说明**：`references/distribution.md` 增「如何确认程序完整」小节、`README.md` 增一段简述——核心程序是单一 `scripts/xwl.py`（纯标准库零依赖），以 shebang 起、以 `if __name__ == "__main__":` 收尾，判断完整性看 `--help` 是否列全 15 个子命令、`python -m py_compile` 是否通过、跑一次 `check` 是否 `ALL OK`；⛔ 不新增 `--version`／入口脚本。
+
+④ **文档守卫补「照抄即执行」判据**（`scripts/selftest.py` 的 docs 块，并入既有 `_check_prompt_cmds` 同块，⛔ 不改 `--list-blocks` 协议）：原判据 `_PROMPT_CMD_RE` 把 `<占位>/scripts/xwl.py` 前缀整段吃掉，只把 `new <占位路径>` 交给 argparse ⇒ **完全不可照抄的命令被判绿（假绿）**。新判据把脚本路径 token 单独捕获，含尖括号占位即判红；`$SKILL_ROOT`／`$env:SKILL_ROOT`／绝对路径／`scripts/xwl.py` 相对路径／`\` 续行等正确写法判绿、不误报。定向负例：注入占位路径样例，旧判据绿、新判据红；阳性对照 PASS，命中数＝注入数。
+
 ## [1.8.3] - 2026-11-11
 
 说明与账本收口（patch）：**无新子命令或参数**。

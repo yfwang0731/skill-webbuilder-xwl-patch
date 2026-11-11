@@ -52,8 +52,10 @@
   **events 为 0 个**（dataprovider 挂不了事件）。
 
 ```bash
-python <skill根>/scripts/xwl.py schema dataprovider --controls <工程>/wb/system/controls.json
-python <skill根>/scripts/xwl.py schema module       --controls <工程>/wb/system/controls.json
+# 先设变量：SKILL_ROOT=本 skill 安装目录（PowerShell：$env:SKILL_ROOT="…"）；<工程> 换成你的 wb 工程根
+export SKILL_ROOT="$HOME/.agents/skills/webbuilder-xwl-patch"
+python "$SKILL_ROOT/scripts/xwl.py" schema dataprovider --controls <工程>/wb/system/controls.json
+python "$SKILL_ROOT/scripts/xwl.py" schema module       --controls <工程>/wb/system/controls.json
 ```
 
 ## 三、引用机制（核心）
@@ -125,9 +127,8 @@ where t.ID = {?ID?}            -- ← 绑定参数
 的页面合进来"这一步；但部署脚本 / 运维配置不在仓库里，**实际部署形态以运维为准**。
 
 第二种短名（`/<短名>`，**捷径**，如 `/upload`）工具**不解析**、只提示 —— 它**不只会出现在理论上**：
-全量 24986 个文件里，`url:` 的写法分三类 —— **字面量含 `m?xwl=`（已覆盖）**、
-**字面量不含 `m?xwl=`（捷径等）**、**变量 / 表达式（静态不可能解析）**，后两类工具都**不纳入核对**，
-量级见 [`measured-data-criteria.md`](measured-data-criteria.md) 第十一节。
+全量语料里 `url:` 的写法分三类 —— **字面量含 `m?xwl=`（已覆盖）**、
+**字面量不含 `m?xwl=`（捷径等）**、**变量 / 表达式（静态不可能解析）**，后两类工具都**不纳入核对**，各类占比要按你的工程现采。历史口径（具体文件数）见 `CHANGELOG.md`；采集命令：`grep -rc 'url:' <工程>/wb/modules --include='*.xwl' | wc -l` 之类，具体口径见 [`measured-data-criteria.md`](measured-data-criteria.md) 第十一节。
 
 ## 四、两条硬规则（有源码依据）
 
@@ -268,16 +269,17 @@ queryBizList.xwl
 ## 六、配套检查工具
 
 ```bash
-python <skill根>/scripts/xwl.py paths   <file.xwl>                  # 列出 sql / totalSql / serverScript / url 的位置
-python <skill根>/scripts/xwl.py sqlrefs <file.xwl>                  # {#名字#} 与 serverScript 是否自洽
-python <skill根>/scripts/xwl.py params  <page.xwl> [--controls …]   # 页面 → store → SQL 的传参链路交叉核对
+# SKILL_ROOT 已在上面设好（或先 export SKILL_ROOT="…"）；<file.xwl>/<page.xwl> 换成真实文件
+python "$SKILL_ROOT/scripts/xwl.py" paths   <file.xwl>                  # 列出 sql / totalSql / serverScript / url 的位置
+python "$SKILL_ROOT/scripts/xwl.py" sqlrefs <file.xwl>                  # {#名字#} 与 serverScript 是否自洽
+python "$SKILL_ROOT/scripts/xwl.py" params  <page.xwl> [--controls …]   # 页面 → store → SQL 的传参链路交叉核对
 ```
 
 - **`paths`** —— 同时给出「原路径」与「`@写法`」，改 SQL 前先跑它拿路径。
 - **`sqlrefs`** —— 检查三件事：每个 `{#名字#}` 是否有 serverScript 提供（`sys.*` / `Str.*` 视为内置）、
   **serverScript 里是否误用了 `{#…#}`**、顺带列出所有 `{?参数?}` 名字。
 
-  > 样本工程上的自洽率约 **99%**（明细见 [`measured-data-criteria.md`](measured-data-criteria.md) §八）：
+  > 样本工程上的自洽率很高（明细与口径见 [`measured-data-criteria.md`](measured-data-criteria.md) §八；按你的工程现采，历史口径见 `CHANGELOG.md`）：
   > 少量告警是「由调用方传入」的正常场景，或 serverScript 误用 `{#…#}`。
   > 这类告警要**结合调用方判断**，不要一律当成错误。
 

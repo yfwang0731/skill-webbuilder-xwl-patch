@@ -5,15 +5,32 @@
 > **本目录不含预置的 `.xwl`** —— 示例页面由 `xwl.py new` **现场生成**（第一节）。这样示例与
 > 你手上的工程完全同源，也不会过期；`ops-add-button.json` 是纯数据，直接给就好。
 >
-> 复现方式：`<skill根>` 指**本 skill 的安装目录**（`examples/` 的上一层）—— 命令里的入口与 `--ops`
-> 都写全了路径，**不必**先 `cd` 过去（你的 cwd 是业务工程时才真正需要绝对路径；路径带空格／中文请加引号）。
-> 生成目标请放**仓外**（下文示例统一用占位路径 `<你的临时目录>/demo-page.xwl`）——`.xwl` 是业务格式、
-> 会被平台拒收，也不该混进分发面扫描；示例页面**本就不进仓库**，跑完随手删掉即可。
+> **复现方式**：下文每个可跑的命令块都先**设两个环境变量再引用**——
+> `SKILL_ROOT` 指**本 skill 的安装目录**（`examples/` 的上一层），`TMP_DIR` 指**你自己的临时目录**（放**仓外**）。
+> 命令统一写成 `python "$SKILL_ROOT/scripts/xwl.py" … "$TMP_DIR/demo-page.xwl"`（两侧加引号，
+> 空格／中文路径也不会挂），**不必**先 `cd` 过去。
+> 生成目标请放**仓外** —— `.xwl` 是业务格式、会被平台拒收，也不该混进分发面扫描；示例页面**本就不进仓库**，跑完随手删掉即可。
+>
+> 下面给 **bash** 与 **PowerShell** 两版；按你用的 shell 照抄对应那一块即可（首个代码块是"设变量"，设完后续块接着用）。
 
 ## 一、先生成一个示例页面
 
+bash：
+
 ```bash
-python <skill根>/scripts/xwl.py new <你的临时目录>/demo-page.xwl --kind page --title "示例页面"
+# 先设变量：把两个路径改成你的实际值（SKILL_ROOT=安装目录，TMP_DIR=仓外临时目录）
+export SKILL_ROOT="$HOME/.agents/skills/webbuilder-xwl-patch"   # 或你实际的安装目录
+export TMP_DIR="$HOME/tmp-xwl-demo" && mkdir -p "$TMP_DIR"
+python "$SKILL_ROOT/scripts/xwl.py" new "$TMP_DIR/demo-page.xwl" --kind page --title "示例页面"
+```
+
+PowerShell：
+
+```powershell
+# 先设变量：把两个路径改成你的实际值（SKILL_ROOT=安装目录，TMP_DIR=仓外临时目录）
+$env:SKILL_ROOT = "$HOME\.agents\skills\webbuilder-xwl-patch"   # 或你实际的安装目录
+$env:TMP_DIR = "$HOME\tmp-xwl-demo"; New-Item -ItemType Directory -Force -Path $env:TMP_DIR | Out-Null
+python "$env:SKILL_ROOT/scripts/xwl.py" new "$env:TMP_DIR/demo-page.xwl" --kind page --title "示例页面"
 ```
 
 产出 238 B、单个空 `module` 节点，顶层 7 把钥匙的**键序与设计器一致**（不用手写顶层键）。
@@ -30,28 +47,42 @@ SQL 载体的写法见第三节。
 
 ## 三、改一个已有文件：给页面加一个带多行 JS 的按钮
 
-第一节生成的 `<你的临时目录>/demo-page.xwl` 是空 `module` 节点。
+第一节生成的 `$TMP_DIR/demo-page.xwl` 是空 `module` 节点。
 `examples/ops-add-button.json`（**留在仓内**，是样例数据）是**多 op 序列**：先往 `module.children`
 追加一个 `grid`（`itemId=demoGrid`），再往这个网格里追加一个 `button`（`itemId=queryBtn`）。
 
+bash（承接第一节已设的 `SKILL_ROOT` / `TMP_DIR`）：
+
 ```bash
 # 1) 先看基线格式是否合法
-python <skill根>/scripts/xwl.py check <你的临时目录>/demo-page.xwl
+python "$SKILL_ROOT/scripts/xwl.py" check "$TMP_DIR/demo-page.xwl"
 
 # 2) 看这次会改成什么样（不写盘）
-python <skill根>/scripts/xwl.py patch <你的临时目录>/demo-page.xwl \
-    --ops examples/ops-add-button.json --dry-run
+python "$SKILL_ROOT/scripts/xwl.py" patch "$TMP_DIR/demo-page.xwl" \
+    --ops "$SKILL_ROOT/examples/ops-add-button.json" --dry-run
 
-# 3) 确认后落盘（--backup 会先写 <你的临时目录>/demo-page.xwl.bak）
-python <skill根>/scripts/xwl.py patch <你的临时目录>/demo-page.xwl \
-    --ops examples/ops-add-button.json --backup
+# 3) 确认后落盘（--backup 会先写 $TMP_DIR/demo-page.xwl.bak）
+python "$SKILL_ROOT/scripts/xwl.py" patch "$TMP_DIR/demo-page.xwl" \
+    --ops "$SKILL_ROOT/examples/ops-add-button.json" --backup
 
 # 4) 改完必跑校验（默认九项；要连 `configs` 键 / 内联 `[js]` 一起校就加 `--controls`）
-python <skill根>/scripts/xwl.py check <你的临时目录>/demo-page.xwl
+python "$SKILL_ROOT/scripts/xwl.py" check "$TMP_DIR/demo-page.xwl"
 
 # 5) 扫一遍：有没有把多行内容悄悄压平（需要 git 仓库；仓外页面不在仓库里 ⇒ 本步以 [note] 跳过、rc=0）
 #    要看 diffguard 抓到压平的真实效果（含 --strict 的 rc=1），见第五节的最小实验
-python <skill根>/scripts/xwl.py diffguard <你的临时目录>/demo-page.xwl
+python "$SKILL_ROOT/scripts/xwl.py" diffguard "$TMP_DIR/demo-page.xwl"
+```
+
+PowerShell（承接第一节已设的 `$env:SKILL_ROOT` / `$env:TMP_DIR`）：
+
+```powershell
+python "$env:SKILL_ROOT/scripts/xwl.py" check "$env:TMP_DIR/demo-page.xwl"
+python "$env:SKILL_ROOT/scripts/xwl.py" patch "$env:TMP_DIR/demo-page.xwl" `
+    --ops "$env:SKILL_ROOT/examples/ops-add-button.json" --dry-run
+python "$env:SKILL_ROOT/scripts/xwl.py" patch "$env:TMP_DIR/demo-page.xwl" `
+    --ops "$env:SKILL_ROOT/examples/ops-add-button.json" --backup
+python "$env:SKILL_ROOT/scripts/xwl.py" check "$env:TMP_DIR/demo-page.xwl"
+python "$env:SKILL_ROOT/scripts/xwl.py" diffguard "$env:TMP_DIR/demo-page.xwl"
 ```
 
 **预期**：第 2 步的 diff 只新增网格与按钮那几行（不重排其它内容）；
@@ -66,53 +97,80 @@ ops 的完整规范见**第七节**。
 
 `new --kind sql` 产出的是两级结构：`module(serverScript)` → `dataprovider(sql)`。
 
+bash：
+
 ```bash
-python <skill根>/scripts/xwl.py new /tmp/<你的模块>/xxxSql/queryDemo.xwl --kind sql --title "示例查询"
-python <skill根>/scripts/xwl.py check  /tmp/<你的模块>/xxxSql/queryDemo.xwl
-python <skill根>/scripts/xwl.py sqlrefs /tmp/<你的模块>/xxxSql/queryDemo.xwl   # {#名字#} 与 serverScript 是否自洽
+mkdir -p "$TMP_DIR/xxxSql"
+python "$SKILL_ROOT/scripts/xwl.py" new "$TMP_DIR/xxxSql/queryDemo.xwl" --kind sql --title "示例查询"
+python "$SKILL_ROOT/scripts/xwl.py" check "$TMP_DIR/xxxSql/queryDemo.xwl"
+python "$SKILL_ROOT/scripts/xwl.py" sqlrefs "$TMP_DIR/xxxSql/queryDemo.xwl"   # {#名字#} 与 serverScript 是否自洽
+```
+
+PowerShell：
+
+```powershell
+New-Item -ItemType Directory -Force -Path "$env:TMP_DIR/xxxSql" | Out-Null
+python "$env:SKILL_ROOT/scripts/xwl.py" new "$env:TMP_DIR/xxxSql/queryDemo.xwl" --kind sql --title "示例查询"
+python "$env:SKILL_ROOT/scripts/xwl.py" check "$env:TMP_DIR/xxxSql/queryDemo.xwl"
+python "$env:SKILL_ROOT/scripts/xwl.py" sqlrefs "$env:TMP_DIR/xxxSql/queryDemo.xwl"
 ```
 
 > 注意：`new` 之后还要**登记进所在目录的 `folder.json`**（否则设计器导航树里看不到）：
-> `python <skill根>/scripts/xwl.py folders <文件> --register`。该目录必须已经被设计器管理（已有 `folder.json`）。
+> `python "$SKILL_ROOT/scripts/xwl.py" folders "$TMP_DIR/xxxSql/queryDemo.xwl" --register`。
+> 该目录必须已经被设计器管理（已有 `folder.json`）。
 
 ## 五、验证「压平」真的会被抓到（`diffguard` 的最小实验）
 
-在 git 仓库里：
+在 git 仓库里。bash：
 
 ```bash
-git init -q /tmp/flatdemo && cd /tmp/flatdemo
-python <skill根>/scripts/xwl.py new page.xwl --kind page --title "示例页面"
-python <skill根>/scripts/xwl.py patch page.xwl \
-    --ops <skill根>/examples/ops-add-button.json
+mkdir -p "$TMP_DIR/flatdemo" && cd "$TMP_DIR/flatdemo" && git init -q
+python "$SKILL_ROOT/scripts/xwl.py" new page.xwl --kind page --title "示例页面"
+python "$SKILL_ROOT/scripts/xwl.py" patch page.xwl \
+    --ops "$SKILL_ROOT/examples/ops-add-button.json"
 git add -A && git commit -qm base
 
-# 手动把多行 JS 的续行符删掉（= "合并行"，静默语义损坏）
-python - <<'EOF'
-import re, pathlib
-p = pathlib.Path("page.xwl")
-p.write_text(re.sub(r"\\\r?\n", "", p.read_text(encoding="utf-8")), encoding="utf-8")
-EOF
+# 手动把多行 JS 的续行符删掉（= "合并行"，静默语义损坏）—— 单行 python -c，双平台可跑
+# （newline='' 防止 Windows 把 LF 改写成 CRLF；只删「反斜杠+换行」这一对）
+python -c "import re,pathlib; p=pathlib.Path('page.xwl'); s=p.read_text(encoding='utf-8'); p.write_text(re.sub(r'\\\r?\n','',s),encoding='utf-8',newline='')"
 
-python <skill根>/scripts/xwl.py check page.xwl          # ← 九项全绿：格式校验查不出来
-python <skill根>/scripts/xwl.py diffguard page.xwl      # ← [warn] 疑似压平，并给出被合并的基线行号
-python <skill根>/scripts/xwl.py diffguard page.xwl --strict   # ← rc=1，可接进 CI
+python "$SKILL_ROOT/scripts/xwl.py" check page.xwl          # ← 九项全绿：格式校验查不出来
+python "$SKILL_ROOT/scripts/xwl.py" diffguard page.xwl      # ← [warn] 疑似压平，并给出被合并的基线行号
+python "$SKILL_ROOT/scripts/xwl.py" diffguard page.xwl --strict   # ← rc=1，可接进 CI
+```
+
+PowerShell：
+
+```powershell
+New-Item -ItemType Directory -Force -Path "$env:TMP_DIR\flatdemo" | Out-Null
+Set-Location "$env:TMP_DIR\flatdemo"; git init -q
+python "$env:SKILL_ROOT/scripts/xwl.py" new page.xwl --kind page --title "示例页面"
+python "$env:SKILL_ROOT/scripts/xwl.py" patch page.xwl --ops "$env:SKILL_ROOT/examples/ops-add-button.json"
+git add -A; git commit -qm base
+# 手动把多行 JS 的续行符删掉（= "合并行"，静默语义损坏）—— 单行 python -c，双平台可跑
+python -c "import re,pathlib; p=pathlib.Path('page.xwl'); s=p.read_text(encoding='utf-8'); p.write_text(re.sub(r'\\\r?\n','',s),encoding='utf-8',newline='')"
+python "$env:SKILL_ROOT/scripts/xwl.py" check page.xwl
+python "$env:SKILL_ROOT/scripts/xwl.py" diffguard page.xwl
+python "$env:SKILL_ROOT/scripts/xwl.py" diffguard page.xwl --strict
 ```
 
 实测输出（5 处续行、6 行 JS 被合并成 1 行）：
 
 ```text
-$ python <skill根>/scripts/xwl.py check page.xwl
+$ python "$SKILL_ROOT/scripts/xwl.py" check page.xwl
   [ok]   ① BOM  ② 换行一致  ③ 续行空白  ④ 解析  ⑤ 末行结构
   === 结果: ALL OK            ← 注意：格式校验完全放行
 
-$ python <skill根>/scripts/xwl.py diffguard page.xwl
+$ python "$SKILL_ROOT/scripts/xwl.py" diffguard page.xwl
   [warn] 疑似把多行内容压平（精确命中）—— 续行符 5 → 0（-5）| 最长行 66 → 139 字符 | 行数 29 → 24
          基线第 15–20 行（6 行）被合并成工作区第 15 行：'   "events": {"click": "var rec = app.demoGrid...'
   === 结果: ALL OK（疑似压平 1 / 无迹象 0 / 跳过 0）   ← 默认只告警
 
-$ python <skill根>/scripts/xwl.py diffguard page.xwl --strict
+$ python "$SKILL_ROOT/scripts/xwl.py" diffguard page.xwl --strict
   → rc=1
 ```
+
+> 上面的行数/字符数只是这一次实验的样例（会随内容变），要的只是形状：**diffguard 报「疑似压平」并给出被合并的基线行号**。
 
 这是 `diffguard` 存在的全部理由：**`check` 查不出压平**（压平后文件仍自洽），
 而 `diffguard` 能精确指出「基线的哪几行被并成了现在的哪一行」。
@@ -137,12 +195,24 @@ $ python <skill根>/scripts/xwl.py diffguard page.xwl --strict
 
 ### 复现（每份都从空页跑到底）
 
-把 `<样例文件名>` 换成表里任一份，`<你的临时目录>` 放**仓外**：
+把 `OPS_FILE` 设成表里任一份（如 `ops-add-grid.json`），生成的页面放**仓外**的 `$TMP_DIR`：
+
+bash：
 
 ```bash
-python <skill根>/scripts/xwl.py new <你的临时目录>/demo-page.xwl --kind page --force
-python <skill根>/scripts/xwl.py patch <你的临时目录>/demo-page.xwl --ops examples/<样例文件名>
-python <skill根>/scripts/xwl.py check <你的临时目录>/demo-page.xwl
+OPS_FILE="ops-add-grid.json"   # 换成表里任一份：ops-add-grid.json / ops-add-button.json / …
+python "$SKILL_ROOT/scripts/xwl.py" new "$TMP_DIR/demo-page.xwl" --kind page --force
+python "$SKILL_ROOT/scripts/xwl.py" patch "$TMP_DIR/demo-page.xwl" --ops "$SKILL_ROOT/examples/$OPS_FILE"
+python "$SKILL_ROOT/scripts/xwl.py" check "$TMP_DIR/demo-page.xwl"
+```
+
+PowerShell：
+
+```powershell
+$OPS_FILE = "ops-add-grid.json"   # 换成表里任一份：ops-add-grid.json / ops-add-button.json / …
+python "$env:SKILL_ROOT/scripts/xwl.py" new "$env:TMP_DIR/demo-page.xwl" --kind page --force
+python "$env:SKILL_ROOT/scripts/xwl.py" patch "$env:TMP_DIR/demo-page.xwl" --ops "$env:SKILL_ROOT/examples/$OPS_FILE"
+python "$env:SKILL_ROOT/scripts/xwl.py" check "$env:TMP_DIR/demo-page.xwl"
 ```
 
 > 这些样板**都真跑过**，第 3 步的 `check` 一律 `ALL OK`。

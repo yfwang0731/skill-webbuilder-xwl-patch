@@ -8,6 +8,10 @@
 
 > 下文的 `<模块>` 是占位符，指你自己的业务模块目录（形如 `wb/modules/<模块>/`）。
 > **把 `<模块>` 换成实际目录名后再跑**；文件名同理，这里用的都是示意名。
+>
+> 下文命令统一用变量 `SKILL_ROOT` 指**本 skill 的安装目录**（bash `export SKILL_ROOT="…"`／
+> PowerShell `$env:SKILL_ROOT="…"`），入口一律写 `"$SKILL_ROOT/scripts/xwl.py"`；照着先在 shell 里设好一次，
+> 后面每一步都能直接复制执行。
 
 ---
 
@@ -28,8 +32,9 @@
 ## 第 0 步 · 先确认两件事
 
 ```bash
+export SKILL_ROOT="$HOME/.agents/skills/webbuilder-xwl-patch"   # 换成你的安装目录（PowerShell：$env:SKILL_ROOT="…"）
 python --version                                  # 需要 3.9+
-python <本skill目录>/scripts/xwl.py --help        # 能列出子命令就说明工具可用
+python "$SKILL_ROOT/scripts/xwl.py" --help        # 能列出子命令就说明工具可用
 ```
 
 然后确认**要造的是哪一类** —— 这决定 `--kind`：
@@ -46,7 +51,7 @@ python <本skill目录>/scripts/xwl.py --help        # 能列出子命令就说�
 ## 第 1 步 · 造 SQL 载体
 
 ```bash
-python <本skill目录>/scripts/xwl.py new wb/modules/<模块>/xxxSql/queryOrder.xwl --kind sql --title "出库单查询"
+python "$SKILL_ROOT/scripts/xwl.py" new wb/modules/<模块>/xxxSql/queryOrder.xwl --kind sql --title "出库单查询"
 ```
 
 产出两层，各管一件事（见 [`sql-fragments.md`](sql-fragments.md)）：
@@ -71,7 +76,7 @@ module(serverScript)  → 取参数、拼条件
 先看一眼可编辑字段的位置与推荐写法：
 
 ```bash
-python <本skill目录>/scripts/xwl.py paths wb/modules/<模块>/xxxSql/queryOrder.xwl
+python "$SKILL_ROOT/scripts/xwl.py" paths wb/modules/<模块>/xxxSql/queryOrder.xwl
 ```
 
 输出会给出两套路径（`@` 写法不受嵌套层数影响，优先用）：
@@ -100,8 +105,8 @@ sql  (dataprovider, itemId='dataprovider', …)
 先看 diff，再真改：
 
 ```bash
-python <本skill目录>/scripts/xwl.py patch wb/modules/<模块>/xxxSql/queryOrder.xwl --ops ops-sql.json --dry-run
-python <本skill目录>/scripts/xwl.py patch wb/modules/<模块>/xxxSql/queryOrder.xwl --ops ops-sql.json --backup
+python "$SKILL_ROOT/scripts/xwl.py" patch wb/modules/<模块>/xxxSql/queryOrder.xwl --ops ops-sql.json --dry-run
+python "$SKILL_ROOT/scripts/xwl.py" patch wb/modules/<模块>/xxxSql/queryOrder.xwl --ops ops-sql.json --backup
 ```
 
 ⏭️ 下一步：确认 SQL 引用自洽。
@@ -111,7 +116,7 @@ python <本skill目录>/scripts/xwl.py patch wb/modules/<模块>/xxxSql/queryOrd
 ## 第 3 步 · 校验 SQL 载体
 
 ```bash
-python <本skill目录>/scripts/xwl.py sqlrefs wb/modules/<模块>/xxxSql/queryOrder.xwl
+python "$SKILL_ROOT/scripts/xwl.py" sqlrefs wb/modules/<模块>/xxxSql/queryOrder.xwl
 ```
 
 它核对 `{#名字#}` 与 `serverScript` 里 `setAttribute` 的名字对不对得上。
@@ -126,7 +131,7 @@ python <本skill目录>/scripts/xwl.py sqlrefs wb/modules/<模块>/xxxSql/queryO
 ## 第 4 步 · 造页面
 
 ```bash
-python <本skill目录>/scripts/xwl.py new wb/modules/<模块>/orderQuery.xwl --kind page --title "出库单查询"
+python "$SKILL_ROOT/scripts/xwl.py" new wb/modules/<模块>/orderQuery.xwl --kind page --title "出库单查询"
 ```
 
 产出：顶层 7 把钥匙 + 一个空 `module` 节点。**键序已经是对的**，你不用管（这也是不用"拿别的文件当种子"的原因）。
@@ -161,8 +166,8 @@ python <本skill目录>/scripts/xwl.py new wb/modules/<模块>/orderQuery.xwl --
 ```
 
 ```bash
-python <本skill目录>/scripts/xwl.py patch wb/modules/<模块>/orderQuery.xwl --ops ops-page.json --dry-run
-python <本skill目录>/scripts/xwl.py patch wb/modules/<模块>/orderQuery.xwl --ops ops-page.json --backup
+python "$SKILL_ROOT/scripts/xwl.py" patch wb/modules/<模块>/orderQuery.xwl --ops ops-page.json --dry-run
+python "$SKILL_ROOT/scripts/xwl.py" patch wb/modules/<模块>/orderQuery.xwl --ops ops-page.json --backup
 ```
 
 > `path` 的 `["children", 0, "children"]` 就是「顶层 `children[0]`（`module` 节点）的 children」。
@@ -181,7 +186,7 @@ python <本skill目录>/scripts/xwl.py patch wb/modules/<模块>/orderQuery.xwl 
 ## 第 6 步 · 核对「页面 → store → SQL」的传参
 
 ```bash
-python <本skill目录>/scripts/xwl.py params wb/modules/<模块>/orderQuery.xwl --module-root wb/modules
+python "$SKILL_ROOT/scripts/xwl.py" params wb/modules/<模块>/orderQuery.xwl --module-root wb/modules
 ```
 
 它列出 store、展开两条通路（`out` / `params`）传参点，并与 SQL 侧交叉核对。
@@ -194,7 +199,7 @@ python <本skill目录>/scripts/xwl.py params wb/modules/<模块>/orderQuery.xwl
 ## 第 7 步 · 格式与命名校验
 
 ```bash
-python <本skill目录>/scripts/xwl.py check wb/modules/<模块>/orderQuery.xwl wb/modules/<模块>/xxxSql/queryOrder.xwl
+python "$SKILL_ROOT/scripts/xwl.py" check wb/modules/<模块>/orderQuery.xwl wb/modules/<模块>/xxxSql/queryOrder.xwl
 ```
 
 **预期**：每个文件 `-> OK`，末行 `=== 结果: ALL OK`。有 `[FAIL]` 就按第五章 FAQ 排查。
@@ -210,7 +215,7 @@ python <本skill目录>/scripts/xwl.py check wb/modules/<模块>/orderQuery.xwl 
 先看有没有登记（**默认只读**）：
 
 ```bash
-python <本skill目录>/scripts/xwl.py folders wb/modules/<模块>
+python "$SKILL_ROOT/scripts/xwl.py" folders wb/modules/<模块>
 ```
 
 **前提**：该目录必须**已经被设计器管理** —— 也就是目录里已经有一个 `folder.json`。
@@ -220,8 +225,8 @@ python <本skill目录>/scripts/xwl.py folders wb/modules/<模块>
 看到「未登记」就登记 —— **`--register` 要指到文件上**：
 
 ```bash
-python <本skill目录>/scripts/xwl.py folders wb/modules/<模块>/orderQuery.xwl --register --dry-run
-python <本skill目录>/scripts/xwl.py folders wb/modules/<模块>/orderQuery.xwl --register
+python "$SKILL_ROOT/scripts/xwl.py" folders wb/modules/<模块>/orderQuery.xwl --register --dry-run
+python "$SKILL_ROOT/scripts/xwl.py" folders wb/modules/<模块>/orderQuery.xwl --register
 ```
 
 **预期**：`--dry-run` 打印 before/after 且写明 `未写入`；真跑打印 `已写入` 并留下 `folder.json.bak`；
