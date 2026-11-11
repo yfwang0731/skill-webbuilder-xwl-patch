@@ -66,7 +66,7 @@ python <skill根>/scripts/xwl.py patch page.xwl --ops ops.json --backup    # 确
 - 重建算法从设计器源码**完整复刻**（`IDE.updateModule` = `org.json toString(1)` + 两次 `replaceAll`），
   并做过**回放校验**：把算法跑在样本工程既有的上千个 xwl 上，还原出的字节与原件逐个比对
   → 所以重排**不会顺带改动无关内容**，**diff 只含这次真正改的内容**（**`--indent`／`--eol` 能主动触发的重排**会扩大 diff；非规范源即使不带参数也会被规整，见 `references/measured-data-designer.md`）
-  （377 KB 的页面加一个带多行 JS 的按钮 + 改标题，diff 仅 17 行）；
+  （在多行源页面上加一个带多行 JS 的按钮并改标题，diff 仍只覆盖本次实际改动）；
 - 写盘前强制「**重新解析后与改后对象的规范化文本一致**」的等价比对（**含键序与值类型**：`1` / `1.0` / `true` 互不通过），对不上**中止不写**。
 
 > 文本级 `xwl.py edit` 只是例外手段（改一小段文本、又不希望整份重排时）。

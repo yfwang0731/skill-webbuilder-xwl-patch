@@ -2,7 +2,7 @@
 name: webbuilder-xwl-patch
 slug: skill-webbuilder-xwl-patch
 displayName: webbuilder-xwl-patch
-version: 1.8.2
+version: 1.8.3
 license: MIT
 metadata:
   category: development-tools
@@ -45,12 +45,12 @@ WebBuilder 的页面与查询定义都写在 `.xwl` 里。它**看起来像 JSON
 | **对象** | 仅 `.xwl` 文件本身：格式、编辑、校验、抽取。**不含**后端 Java、模块打包、`target/` 部署副本同步、数据库菜单注册（`WB_MENU`） |
 | **操作系统** | Windows 与 POSIX（含 macOS）均支持；路径分隔符与换行按各平台惯例处理，跨平台时注意检出/存储形态差异 |
 | **环境** | Python 3.9+，**纯标准库零依赖**；`node` 可选，只用于事件 JS 语法校验，找不到时自动降级为提示 |
-| **规模** | 跨 5 个工程 / **8 个 wb 根**已在 **≥2.5 万 .xwl** 上实测（口径：8 个 wb 根 `modules/**`、排除 `target/`；时点 2026-10-19；精确值、复算命令与语料快照指纹见 [`references/measured-data-skeleton.md`](references/measured-data-skeleton.md) §十），最大单文件 **728.8 KB**（746299 字节，按 1024 算）。该量级下 `check` 全开约 **0.56 s** —— **性能不是约束**。**工具没有任何文件大小上限**，但**未验证**过 1 MB 以上的文件、或单文件事件段极多的情形 |
+| **规模** | 可修改范围只受可加载文件与本地资源约束。**工具没有任何文件大小上限**，但**未验证**过 1 MB 以上的文件、或单文件事件段极多的情形。规模样本、采集口径与复算入口只在 [`references/measured-data-skeleton.md`](references/measured-data-skeleton.md) §十维护 |
 | **能改的前提** | 目标文件能被加载器解析（即 `check` 的 ④ 通过）。已经是坏文件的，先用 `edit` 做文本级修复 |
 
-> 上表「规模」是**样本实测值，不是硬上限** —— 换工程要自己测。别把两处数字混起来：**这里**是"跨 5 个
-> 工程、最大到什么量级"；[`references/measured-data.md`](references/measured-data.md) 的 2780 / 2777 是
-> **统计口径**（只取自其中**一个**工程）。大文件上 `check` 为什么慢、怎么绕开 —— 见
+> 上表「规模」是能力边界。样本规模、统计口径和复算方法只由
+> [`references/measured-data*.md`](references/measured-data.md) 维护；换工程要按同一方法自行复采。
+> 大文件上 `check` 为什么慢、怎么绕开 —— 见
 > [`references/faq.md`](references/faq.md)「`check` 慢，或者本机根本没装 `node`？」。
 
 ## 怎么用
@@ -204,8 +204,8 @@ hidden, children, roles, title, iconCls, inframe, pageLink
 
 ### 2.6 压平检测：`diffguard`（相对 git 基线）
 
-> `diffguard` 的**判据**（定义级 / **粗筛**）、漏报面、只认新发生合并的两道闸（基线变更行对齐 ＋
-> 出现次数）、跳过与退出码、成本与 `--rev` 用法见
+> `diffguard` 的**判据**（精确拼接 / 最长行粗筛 / 相似度档）、漏报面、只认新发生合并的两道闸
+> （基线变更行对齐 ＋ 工作区新行）、跳过与退出码、成本与 `--rev` 用法见
 > [`references/faq.md`](references/faq.md) §三 与 [`references/workflow-notes-guards.md`](references/workflow-notes-guards.md) §二③；
 > **它只在 git 仓库里有意义**，且**只扫改动过的文件**，别对整个 `wb/` 跑。提交前该跑一次，见**第三章第 5 步**。
 
@@ -380,7 +380,7 @@ python <skill根>/scripts/xwl.py diffguard <改过的文件或目录> --strict  
 
 - **判据、已知边界与退出码都在 [`references/faq.md`](references/faq.md) §三** —— 这里不重复。
 - **没有 git 也没关系**：这一项以 `[note]` 跳过，前四步不受影响。
-- CI / pre-commit 里用 `--strict`（rc=1 阻塞）；给它的路径**尽量只列改过的文件**，
+- CI / pre-commit 里用 `--strict`：疑似优先 `rc=1`；仅检查未完成或全部跳过 `rc=2`；部分跳过只记 `[note]`。给它的路径**尽量只列改过的文件**，
   别每次都把整个 `wb/` 拖一遍（大工程上万个 xwl，没必要）。
 
 ## 四、工具
@@ -418,8 +418,9 @@ python <skill根>/scripts/xwl.py diffguard <改过的文件或目录> --strict  
 | `2` | **用法或前置条件不满足**（缺必填参数、`edit` 锚点次数不符、`new` 拒绝覆盖、读不到目标文件；**`check` 的 `--controls` 取不到控件注册表** —— 此时 ①–⑧⑩ 已照常判定，只有 ⑨ 与 configs 内联 `[js]` 未校；**`patch`／`edit` 的写前门禁：node 调用失败（超时/崩溃）也判 `2`**；**`params --strict` 下「仅未核对」判 `2`**；**`diffguard --strict` 下「检查未完成」（相似度档预算触顶）判 `2`** —— 含义是"没查完"，不是"有问题"；**`folders` 的索引读不动（无法判断）判 `2`**；**`params`／`sqlrefs` 读依赖失败（SQL 载体／`var.json`／`--upstream` 反查扫描）：默认与 `--strict` 均判 `2`** —— 同为"没查完"；`--strict` 下若另有已确认缺参／悬空，汇总判 `1` 并同时列出读取失败） |
 
 两类**判定会随命令线宽严变化**的命令，各自三档（默认 / 收紧 / 放松）：`diffguard`（疑似压平默认只告警，
-`--strict` 判失败 rc=1；**相似度档预算触顶＝检查未完成**：默认档 rc=0 但末行标 `=== 结果: 未完成`、不算完整通过，
-`--strict` 下 rc=2；一个文件都没比成才 rc=2，非 git 仓库 / 新文件以 `[note]` 跳过；**完整且无未完成/跳过时末行带「完整通过」**）；`params`（缺来源默认只告警，`--strict` 判失败，
+`--strict` 下**疑似优先 rc=1**；**仅相似度档预算触顶等检查未完成**时 rc=2，默认档 rc=0 但末行标
+`=== 结果: 未完成`；全部跳过才 rc=2，部分跳过只记 `[note]`；非 git 仓库 / 新文件以 `[note]` 跳过；
+**完整且无未完成/跳过时末行带「完整通过」**）；`params`（缺来源默认只告警，`--strict` 判失败，
 缺来源时打一行 `[note]` 告知怎么改成阻塞；`--strict` 下**确缺参/悬空 rc=1、仅「未核对」rc=2**，两者并存按 rc=1 并同时列出未核对项）。
 
 > **原则：判定变严要喧哗、放松要留痕** —— 收紧必须让调用方**当场**看得见（`[FAIL]` / rc≠0）；

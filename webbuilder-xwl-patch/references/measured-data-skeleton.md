@@ -92,7 +92,6 @@ find <工程根> -name "*.xwl" -not -path "*/target/*" | sort > corpus-2026-10-1
 | `check`（全开） | **0.56 s** |
 | `params` | **0.05 s** |
 | `itemids` | **0.07 s** |
-| `diffguard` | 约 **0.9 s/文件**（每个文件起一次 `git show`；实测 60 个文件 52 s） |
 
 **另一个样本**（**486 KB** 多行源 / 246 事件段 —— 与上表的 728.8 KB **不是同一个文件**）的分项耗时：
 `check --no-js --no-itemid` **~0.4 s**（只跑格式五项）、`check --no-js` **~0.4 s**（加上 ⑦ 重名分级）、

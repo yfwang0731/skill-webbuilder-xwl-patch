@@ -2039,7 +2039,7 @@ def _ng_platform(tmp, node, failures, write) -> None:
     #   ⭐ **两站点各一条**：store 支（`xwl.py:5563`）与 direct 支（`xwl.py:5612`）**独立** ⇒ 缺一即漏（故两处都造）。
     #   判据（先红后绿）：① 坏 root（非 `modules` 名、且**零 `.xwl`**）⇒ 两站点都出「未核对」＋原因；
     #     ② 正确 `modules` 根 ⇒ 两处**均无**「未核对」（防「永远未核对」）。
-    #   ⚠️ 用 `_run` **直调**（实测 +0.02s；走 `_run_cli` 会 +1.0s 子进程启动）；本块不验异常隔离 ⇒ 直调可。
+    #   ⚠️ 用 `_run` **直调**，避免 `_run_cli` 的子进程启动开销；本块不验异常隔离 ⇒ 直调可。
     p75_fail: list[str] = []
     _r75 = os.path.join(tmp, "pm_p75")
     _r75bad = os.path.join(_r75, "notmodules")      # 非 `modules` 名

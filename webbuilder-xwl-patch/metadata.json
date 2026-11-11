@@ -3,7 +3,7 @@
   "name_en": "webbuilder-xwl-patch",
   "displayName": "webbuilder-xwl-patch",
   "author": "yfwang0731",
-  "version": "1.8.2",
+  "version": "1.8.3",
   "schema_version": "1.0",
   "description": "WebBuilder（wb）平台 .xwl 定义文件的处理与安全编辑：结构级 patch（只给值 / 子树，工具按设计器自己的算法重建整份文件）+ 格式校验 + 相对 git 基线的压平检测。",
   "core_capabilities": [
@@ -18,7 +18,7 @@
     "patch 的 ops 契约：`set` 新建键**默认被拒绝**（rc=2）、两条出路（op 上 `\"create\": true` 逐条放行 / 全局 `--allow-new-key` 放行）；非 `set` 带 `create` 报 rc=2 + 越界 / 缺失键统一可读 [FAIL]（rc=2）",
     "params --upstream：核对「谁在调用本页」—— 单根全扫上游调用方与传入键，末尾独立分组输出（默认关、零成本；只认字面量键，动态 url 只计数）",
     "patch 全局逃生开关 `--allow-new-key`：一次放行全部新建键（恢复旧行为、以 `[warn]` 留痕；与逐条 `\"create\": true` 任一即放行）",
-    "params 逃生开关 `--strict`：缺来源时判失败（rc=1）；默认只告警（rc=0），与 `diffguard --strict` 同名同义"
+    "params 逃生开关 `--strict`：确缺参或确悬空判 rc=1；仅未核对或依赖读取失败判 rc=2；读取失败与已确认内容失败并存判 rc=1。默认缺参只告警，依赖读取失败仍判 rc=2"
   ],
   "trace_dimensions": {
     "T": {
@@ -94,7 +94,7 @@
     "note": "纯本地离线工具，无网络调用与外部服务依赖，故不设重试；失败即给出可读原因与回退指引（--backup 的 .bak / git checkout --）"
   },
   "security_checks": {
-    "network": "无任何网络请求（diffguard 仅调用本地 git show）",
+    "network": "无任何网络请求（diffguard 仅调用本地 git cat-file / rev-parse）",
     "file_ops": "只读写用户显式指定的 .xwl 与 folder.json，不擅自遍历未指定的树、不批量删除",
     "secrets": "不读取、不打印任何凭据"
   },
@@ -161,6 +161,11 @@
     "references/workflow-notes-guards-maintenance.md": "evidence"
   },
   "update_history": [
+    {
+      "version": "1.8.3",
+      "date": "2026-11-11",
+      "summary": "说明与账本收口（patch）：无新子命令或参数。① diffguard --strict 的帮助、SKILL、判据注释、套件概述与测试提示统一为：疑似压平优先 rc=1，仅检查未完成 rc=2，全部跳过 rc=2，部分跳过只记 note。② params --strict 的帮助、现行能力句与测试提示对齐现行退出码，删除过时的同名同义与规模耗时表述。③ 删除正本无调用的基线、实时自检模块与换行检测辅助函数，两份运行封装保持独立。④ 维护说明对齐非 UTF-8 入口、写后回读、行首标记、基线更新入口、依据层与豁免面份数，以及缺运行时的完成状态。⑤ 语料文件数、样本大小与命令耗时只由实测账本、历史、基线承载；17q 以先红后绿证明禁令生效，并修复中文复合大小单位与基础字节单位重叠命中。"
+    },
     {
       "version": "1.8.2",
       "date": "2026-11-10",

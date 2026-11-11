@@ -39,8 +39,8 @@
     （报「锚点出现次数: 0」，看着像用户写错了锚点），单行锚点 + 多行 new 还会把
     LF 文件写成 CRLF/LF **混用**。另：**把多行拍平时必须有 `[warn]`** ——
     这类损坏 `check` 查不出（压平后仍是合法 JSON），只有 `edit` 这一处能提示。
-    （实测样本工程 2780 个 xwl：1878 全 CRLF / 902 为「单行且末尾无换行符」/ **0 个 LF** ——
-    两条路径仍都要覆盖，因为 `expand` 按 `--eol auto` 会把无换行的单行源产出成 LF）
+    （样本工程以 CRLF 与无换行单行源为主，纯 LF 稀少；两条路径仍都要覆盖，
+    因为 `expand` 按 `--eol auto` 会把无换行的单行源产出成 LF）
   · **`check` 的 ③ 必须在 CRLF / LF / CR 三种换行下都生效** —— 用
     `text.split("\\r\\n")` 切行时，**纯 LF 文件切不出行**（整份成一个元素），于是 ③ 静默退化成
     "只看最后一行"；`new` 的默认产出就是 LF，`expand --eol auto` 也会产出 LF。
@@ -55,8 +55,8 @@
   · **`diffguard`：相对 git 基线检测「多行被压平」** —— 补的是 §2.3 承认的洞
     （压平后文件**仍合法**，`check` 与 `node --check` 都放行，只靠人工读 `git diff` 很容易漏）。
     主判据是**定义级**的（工作区某行 == 基线连续多行去掉续行符后的拼接），且只认**新发生的合并**
-    （续行组须涉及基线变更行 ＋ 工作区出现次数多于基线）；「续行符净减少 且 最长行显著变长」
-    只是**粗筛**。正反两侧都要钉：压平必须报（含净计数被别处新增续行抵消的补偿式压平）、
+    （续行组每行都涉及基线变更行 ＋ 命中位置是工作区新行）；最长行粗筛与相似度档补充其他形态。
+    正反两侧都要钉：压平必须报（含净计数被别处新增续行抵消的补偿式压平）、
     合法删减 / 单行变长 / 内容移动 / 极短行拼接连巧必须不报。
     另钉住降级路径：新文件、非 git 目录 → `[note]` 跳过 + rc=0；`--strict` 下跳过即 rc=2；
     `--rev` 写错是用法错、恒 rc=2（且不得被说成"新增文件"）。
@@ -104,19 +104,9 @@ SKILL_ROOT = os.environ.get(
 _BASELINE_PATH = os.path.join(os.path.dirname(HERE), "tests", "baseline.json")
 
 
-def _load_baseline():
-    try:
-        with io.open(_BASELINE_PATH, encoding="utf-8") as _f:
-            _d = json.load(_f)
-        return _d if isinstance(_d, dict) else {}
-    except Exception:
-        return {}
-
-
 def _baseline_read():
     """读独立基线，返回 `(data_or_None, err)`；`err` ∈ `None` / `"missing"` / `"badjson"` / `"notdict"`。
 
-    与 `_load_baseline()` 分开：`_load_baseline()` 是**宽容读**（老用法兜底 `{}`）；
     基线守卫（块清单/文档守卫多重集）**必须用本函数** —— 基线缺失 / 坏 JSON / 非对象时**显式失败**，
     ⛔ 不回退当前源码自举当通过。
     """
@@ -130,15 +120,6 @@ def _baseline_read():
     if not isinstance(_d, dict):
         return None, "notdict"
     return _d, None
-
-
-def _baseline_err_text(err):
-    return {
-        "missing": "独立基线缺失（%s 不存在）" % _BASELINE_PATH,
-        "badjson": "独立基线不是合法 JSON（%s）" % _BASELINE_PATH,
-        "notdict": "独立基线顶层不是对象（%s）" % _BASELINE_PATH,
-    }.get(err, "独立基线不可用（%s）" % _BASELINE_PATH)
-
 
 
 _CAP_FN_NAMES = set()
@@ -521,18 +502,6 @@ def _fresh_subchecks(block_id: str) -> dict:
     }
 
 
-def _live_selftest():
-    """返回正在执行的自检模块。
-
-    启动器用 spec 加载，模块名不是 selftest。套件若写 import selftest，
-    会另外装入一份，标记就写丢了。
-    """
-    for mod in sys.modules.values():
-        if mod is not None and getattr(mod, "_SELFTEST_SENTINEL", False):
-            return mod
-    return sys.modules.get(__name__)
-
-
 def _mark_sub(checks: dict, sid: str, state: str, reason: str) -> None:
     """改一条已登记子检查。未登记的 id 直接留下，避免静默丢掉。
 
@@ -757,7 +726,8 @@ _help_caps = {
     #   ⚠️ 上限 36 不动 —— `36-27=9 ≤ 10`，仍满足"上限不得比实测大 10 行以上"的设计余量。
     None: 36,
     # `check`：实测 15（新增 `--no-cfgtype` 后 +1）⇒ 15 ＋ 设计余量 5 ＝ 20。
-    "check": 20, "edit": 22, "patch": 47, "params": 23, "paths": 12,
+    # `diffguard`：COLUMNS=80 实测 9 ⇒ 9 ＋ 5 ＝ 14；`params` 实测 17 ⇒ 上限 22。
+    "check": 20, "edit": 22, "patch": 47, "params": 22, "paths": 12,
     "new": 29, "folders": 15, "itemids": 27, "sqlrefs": 12, "diffguard": 14,
     "schema": 26, "dump": 12, "expand": 26, "sql": 12, "events": 13,
 }
@@ -795,8 +765,8 @@ _ver_re = re.compile(r"\d+\.\d+\.\d+")
 #     用 `spec` / `evidence` 两个**闭集字面量**，键值域由代码钉死（`_DECL_LAYER`），
 #     非法值在读入口就折成 `None`（见 `_layers_map`）⇒ 坏数据不会伪装成"合法但选错对象"。
 #   ⇒ **依据层**（`layers[rel] == "evidence"` 且 stem 属依据层家族）＝ measured-data 主＋4、
-#     workflow-notes 主＋1 ＝ **7 份**；
-#     **编年豁免面** ＝ {`CHANGELOG.md`, `metadata.json`} ∪ 依据层 ＝ 2 ＋ 7 ＝ **9 份**。
+#     workflow-notes 主＋2 ＝ **8 份**；
+#     **编年豁免面** ＝ {`CHANGELOG.md`, `metadata.json`} ∪ 依据层 ＝ 2 ＋ 8 ＝ **10 份**。
 _DECL_LAYER = ("spec", "evidence")
 
 # 依据层**家族前缀**（结构佐证）：只有 stem 落在这些前缀内的文件，登记 `evidence` 才**真的**享豁免。
@@ -1000,7 +970,7 @@ def _blk_declared(_k, _txt) -> bool:
 def _doc_guard_block_mismatch():
     """判「每个基线块名的份数不降」＋「基线外块名已在 `CHANGELOG.md` 独立提及」。
 
-    判据与残余见模块级 `_DOC_GUARD_BLOCK_BASELINE` 的注释
+    判据与残余见模块级 `_DOC_GUARD_BLOCK_BASE` 的注释
     —— 2026-10-19 只放宽"新增块"一侧（`_extra`），**保留**"丢块必红"（`_miss`）。
     放在函数体外（写法同上）：这段若留在 `_check_docs` 函数体里会把它推近 1300 行阈值。
     """
@@ -1014,7 +984,7 @@ def _doc_guard_block_mismatch():
     _miss = sorted(k for k in _DOC_GUARD_BLOCK_BASE if _ids.get(k, 0) < _DOC_GUARD_BLOCK_BASE[k])
     if _miss:
         return ("文档守卫块份数低于基线：%s —— 有守卫被整块删掉 / 被注释 / 同名副本被删"
-                "（丢块必须响）；确系**有意退役**时，按 `_DOC_GUARD_BLOCK_BASELINE` 的注释更新基线，"
+            "（丢块必须响）；确系**有意退役**时，用 `--write-baselines` 显式更新基线，"
                 "并在 `CHANGELOG.md` 写明退役项与被撤下的判据。" % _miss)
     _base_total = sum(_DOC_GUARD_BLOCK_BASE.values())
     _total = sum(_ids.values())
@@ -1238,7 +1208,7 @@ def _real_out_corpus(tmp: str) -> str:
 
 
 # ---- `_check_docs` 有界下沉（本轮）：自包含的纯数据 / 词表 / 正则表外移为模块级常量 ----
-#   位置口径：与既有 `_splits` / `_help_caps` / `_chron` / `doc_names` / `_DOC_GUARD_BLOCK_BASELINE`
+#   位置口径：与既有 `_splits` / `_help_caps` / `_chron` / `doc_names` / `_DOC_GUARD_BLOCK_BASE`
 #     同法 —— 移出函数体是为了给 `_check_docs` 减负（阈值 `>1300 行` 触发）。
 #   下沉＝**只搬位置**：判据、注释、扫描面**逐字未改**，函数体只留引用（指针）；被搬物**变量名不变**。
 #   只搬**自包含**项；引用了 `_check_docs` 局部量的（`_has_sec` 依赖 `docs`、`_real` 依赖 `_txt`）**不搬**。
@@ -1315,18 +1285,481 @@ _trig = ["加删控件", "挂改事件", "改网格列", "SQL 片段", "传参�
          "folder.json", "白屏", "压成一行", "压平", "事件 JS", "WebBuilder"]
 
 
-_qual = ("全文正则", "可解析", "全量", "全项目", "样本工程", "单工程", "抽样")
-_caveat = ("主口径", "不同口径", "口径不同", "不是同一口径", "两种口径")
+_MEASURE_COUNT_NUM = r"\d(?:[\d,_，]|\s+(?=\d))*(?:\.\d+)?"
+_MEASURE_COUNT_LINK = (
+    r"(?:共计|合计|总计|总数(?:为|是|共|合计|总计|达到|有)?|"
+    r"总量(?:为|是|共|合计|总计|达到|有)?|数量(?:为|是|共|合计|总计|达到|有)?|"
+    r"数(?:为|是|共)?|页数(?:为|是|共|合计|总计|达到|有)?|共有?|累计|"
+    r"量|达到|为|是|等于|is|was|has|have|约(?:为|有)?|有|总|"
+    r"count(?:ed)?(?:\s*(?:is|was|equals?))?|total|contains?|equals?)"
+)
+_MEASURE_COUNT_APPROX = r"(?:约|大约|about)"
+_MEASURE_COUNT_RELATION = r"(?:为|是|有|达到|is|was|equals?|has|have)"
+_MEASURE_COUNT_OBJECT = (
+    r"(?:"
+    r"\.?xwl\s*(?:(?:文件|页面|页|页数|样本|对象|files?|pages?|samples?)"
+    r"(?:\s*(?:文件|页面|页|页数|样本|对象|files?|pages?|samples?))*"
+    r"|(?:数量|总数|总量|数|count|total))"
+    r"|(?:语料|文件|页面|页|页数|样本|对象|资源)"
+    r"(?:\s*(?:数量|总数|总量|数|页数))?"
+    r"\s*[（(【\[]?\s*\.?xwl\s*[）)】\]]?"
+    r")"
+)
+_MEASURE_SIZE_UNIT = r"(?:[KMGTP]i?B|(?:千|兆|吉|太|拍)字节)"
+_MEASURE_SIZE_BASE_UNIT = r"(?:bytes?|b|(?<![千兆吉太拍])字节)"
+_MEASURE_SIZE_BASE_CONTEXT = (
+    r"(?:(?:样本|文件|数据)大小|缓存(?:大小|占用|容量)|内存容量|"
+    r"归档(?:大小|容量|体积)|(?:磁盘|存储)(?:大小|容量|占用)|"
+    r"大小|容量|占用|体积)"
+)
+_MEASURE_SIZE_VALUE = _MEASURE_COUNT_NUM
+_MEASURE_SIZE_DESC = r"(?:大小|容量|体积|占用|尺寸|数值|size|capacity)"
+_MEASURE_SIZE_LINK = r"(?:为|是|有|达到|is|was|equals|:|：|=|~|≈)"
+_MEASURE_DURATION_BASE_UNIT = r"(?:ms|毫秒|s|秒|sec(?:ond)?s?|min(?:ute)?s?|分钟)"
+_MEASURE_DURATION_HOUR_UNIT = r"(?:h|hrs?|hours?|小时|钟头)"
+_MEASURE_DURATION_UNIT = (
+    r"(?:" + _MEASURE_DURATION_BASE_UNIT + r"|" + _MEASURE_DURATION_HOUR_UNIT + r")"
+)
+_MEASURE_DURATION_CUE = (
+    r"(?:耗时|用时|执行时间|运行时间|花费(?:时间)?|花了|"
+    r"took|elapsed|duration|time)"
+)
+_MEASURE_PATTERNS = (
+    ("语料文件数", re.compile(
+        r"(?<![A-Za-z0-9_.])" + _MEASURE_COUNT_NUM
+        + r"\s*(?:(?:万|萬|千|仟|k)\s*)?(?:个|份)?\s*\.?xwl"
+        + r"(?![A-Za-z0-9_]|\.\w)", re.I)),
+    ("语料文件数", re.compile(
+        r"(?<![A-Za-z0-9_.])(?P<reverse_count>"
+        + _MEASURE_COUNT_OBJECT
+        + r"\s*[,，:：]?\s*" + _MEASURE_COUNT_LINK
+        + r"\s*[,，:：]?\s*(?:" + _MEASURE_COUNT_APPROX + r"\s*)?"
+        + r"(?:" + _MEASURE_COUNT_RELATION + r"\s*)?"
+        + r"[:：]?\s*" + _MEASURE_COUNT_NUM
+        + r"\s*(?:(?:万|萬|千|仟|k)\s*)?"
+        + r"(?:个|份|页|items?|files?|pages?|samples?)?)"
+        + r"(?![A-Za-z0-9_]|\.\w)", re.I)),
+    ("样本大小", re.compile(
+        r"(?<![A-Za-z0-9_.])\d+(?:\.\d+)?\s*" + _MEASURE_SIZE_UNIT
+        + r"(?![A-Za-z])",
+        re.I)),
+    ("样本大小", re.compile(
+        _MEASURE_SIZE_BASE_CONTEXT
+        + r"\s*(?:为|是|=|:|：)?\s*(?P<base_size_forward>"
+        + _MEASURE_SIZE_VALUE + r"\s*"
+        + _MEASURE_SIZE_BASE_UNIT + r")(?![A-Za-z0-9_])", re.I)),
+    ("样本大小", re.compile(
+        r"(?<![A-Za-z0-9_.])(?P<reverse_size>" + _MEASURE_SIZE_UNIT
+        + r"\s*[,，]?\s*(?:" + _MEASURE_SIZE_DESC
+        + r"\s*(?:约|大约)?\s*(?:" + _MEASURE_SIZE_LINK + r")?\s*"
+        + _MEASURE_SIZE_VALUE
+        + r"|(?:约|大约)?\s*" + _MEASURE_SIZE_LINK + r"\s*"
+        + _MEASURE_SIZE_VALUE + r"))(?![A-Za-z])", re.I)),
+    ("样本大小", re.compile(
+        r"(?<![A-Za-z0-9_.])(?P<base_size_reverse>"
+        + _MEASURE_SIZE_BASE_UNIT + r"(?![A-Za-z0-9_])\s*[,，]?\s*"
+        + _MEASURE_SIZE_DESC + r"\s*(?:约|大约)?\s*(?:"
+        + _MEASURE_SIZE_LINK + r")?\s*" + _MEASURE_SIZE_VALUE
+        + r")(?![A-Za-z])", re.I)),
+    ("命令耗时", re.compile(
+        r"(?<![A-Za-z0-9_.])(?:\d+(?:\.\d+)?\s+"
+        + _MEASURE_DURATION_BASE_UNIT
+        + r"|\d+\.\d+\s*" + _MEASURE_DURATION_BASE_UNIT + r")(?![A-Za-z])",
+        re.I)),
+    ("命令耗时", re.compile(
+        _MEASURE_DURATION_CUE
+        + r"\s*(?:数值|时间|时长|值)?\s*(?:约|大约)?\s*(?:"
+        + _MEASURE_SIZE_LINK + r")?\s*(?P<context_token>\d+(?:\.\d+)?\s*"
+        + _MEASURE_DURATION_UNIT + r")(?![A-Za-z])"
+        + r"|(?<![A-Za-z0-9_.])(?P<suffix_token>\d+(?:\.\d+)?\s*"
+        + _MEASURE_DURATION_UNIT + r")(?![A-Za-z])\s*(?:的)?\s*"
+        + _MEASURE_DURATION_CUE,
+        re.I)),
+    ("命令耗时", re.compile(
+        r"(?<![A-Za-z0-9_.])(?P<reverse_duration>"
+        + _MEASURE_DURATION_UNIT + r"\s*(?:的)?\s*"
+        + _MEASURE_DURATION_CUE + r"\s*(?:约|大约)?\s*(?:"
+        + _MEASURE_SIZE_LINK + r")?\s*\d+(?:\.\d+)?)(?![A-Za-z])",
+        re.I)),
+)
+_MEASURE_REQUIRED = (
+    "webbuilder-xwl-patch/SKILL.md",
+    "webbuilder-xwl-patch/README.md",
+    "webbuilder-xwl-patch/metadata.json",
+    "webbuilder-xwl-patch/scripts/xwl.py",
+    "webbuilder-xwl-patch/test-prompts.json",
+    "scripts/selftest.py",
+    "tests/baseline.json",
+    "tests/selftest_suites/__init__.py",
+    ".github/workflows/selftest.yml",
+)
 
 
-_q_probe = ["统计甲：1234 个 xwl（全量）。",
-            "统计乙：5678 个 xwl（全项目）—— 与统计甲不是同一口径。"]
+def _json_update_history_lines(text):
+    """返回 `metadata.json` 的 `update_history` 值覆盖行号（1-based）。"""
+    _key = '"update_history"'
+    _kp = text.find(_key)
+    if _kp < 0:
+        return set()
+    _start = text.find("[", _kp + len(_key))
+    if _start < 0:
+        return set()
+    try:
+        _, _size = json.JSONDecoder().raw_decode(text[_start:])
+    except ValueError:
+        return set()
+    _first = text.count("\n", 0, _start) + 1
+    _last = text.count("\n", 0, _start + _size) + 1
+    return set(range(_first, _last + 1))
 
 
-# 阳性对照（与 `_q_probe` 只差第二行**带了采集日期**）：新增 `_caveat_undated` 支路后，反向夹具的红因
-#   从 1 条变 2 条 ⇒ 判别力被稀释；这条把「同行带日期 ⇒ 放行」单独钉回来，两条合起来才覆盖完整。
-_q_probe_ok = ["统计甲：1234 个 xwl（全量）。",
-               "统计乙：5678 个 xwl（全项目）—— 与统计甲不是同一口径（采集日 2026-09-22）。"]
+def _measurement_tokens(rel, text):
+    """在给定文本里找三类禁写实测数字；返回 `(行号, 类别, token, 原行)`。"""
+    _rel = rel.replace("\\", "/")
+    if _rel == "webbuilder-xwl-patch/CHANGELOG.md":
+        return []
+    if _rel == "tests/baseline.json":
+        return []
+    if (_rel.startswith("webbuilder-xwl-patch/references/measured-data")
+            and _rel.endswith(".md")):
+        return []
+    _skip = _json_update_history_lines(text) if _rel == "webbuilder-xwl-patch/metadata.json" else set()
+    _hits = []
+    for _ln, _line in enumerate(text.splitlines(), 1):
+        if _ln in _skip:
+            continue
+        _seen = set()
+        for _label, _rx in _MEASURE_PATTERNS:
+            for _match in _rx.finditer(_line):
+                _named = [v for v in _match.groupdict().values() if v]
+                _tok = _named[0] if _named else _match.group(0)
+                if _label == "样本大小" and re.sub(r"\s+", "", _tok).upper() == "1MB":
+                    continue
+                if (_label, _tok) in _seen:
+                    continue
+                _seen.add((_label, _tok))
+                _hits.append((_ln, _label, _tok, _line.strip()))
+    return _hits
+
+
+def _measurement_regression_failures():
+    """17q 的持久语法回归面。
+
+    覆盖三类数字的正反分支：语料计数与对象的大小写、量词、分隔与量级；
+    样本大小的空格/紧排、十进制/二进制单位别名与常见中文字节单位；命令
+    耗时的空格/紧排、秒/毫秒/分钟/小时别名，以及对象、单位、线索与数值
+    的两种先后语序。另钉住四类豁免、
+    metadata 历史段边界、能力边界和普通常量，防止扩展语法时误伤。
+    """
+    _rel = "webbuilder-xwl-patch/references/probe.rst"
+    _positive = (
+        ("count-quantifier", "共纳入 " + str(713) + " 份 .xw" + "l 页面",
+         ("语料文件数",)),
+        ("count-upper", "覆盖 24," + str(986) + " 个XW" + "L 文件",
+         ("语料文件数",)),
+        ("count-tight", "当前语料为" + str(713) + "份.xw" + "l页面",
+         ("语料文件数",)),
+        ("count-underscore", "样本 1_" + str(234) + " 份.XW" + "L",
+         ("语料文件数",)),
+        ("count-space-group", "样本 23 " + str(451) + " 个 xw" + "l",
+         ("语料文件数",)),
+        ("count-wan", "样本 1." + str(8) + "万.xw" + "l",
+         ("语料文件数",)),
+        ("count-object-quantity",
+         "页面数量（.xw" + "l）为 " + str(7) + " " + str(409) + " 份",
+         ("语料文件数",)),
+        ("count-object-magnitude",
+         "本批 xw" + "l 样本约有 " + str(6) + "k 份",
+         ("语料文件数",)),
+        ("count-object-punctuation",
+         ".XW" + "L 文件数量：" + str(713) + " 个",
+         ("语料文件数",)),
+        ("count-object-case-space",
+         "Xw" + "L 页面样本合计 24," + str(986),
+         ("语料文件数",)),
+        ("count-object-english",
+         "XW" + "L count is 1_" + str(234) + " files",
+         ("语料文件数",)),
+        ("count-link-approx-relation",
+         "XW" + "L 页面合计约为 " + str(843) + " 份",
+         ("语料文件数",)),
+        ("count-object-punctuation-combo",
+         "页面数量（.xw" + "l）：合计约 " + str(7) + " " + str(409) + " 份",
+         ("语料文件数",)),
+        ("count-english-about",
+         "XW" + "L pages count is about 1," + str(24),
+         ("语料文件数",)),
+        ("size-lower", "缓存 " + str(5) + " g" + "b",
+         ("样本大小",)),
+        ("size-tight", "缓存" + str(5) + "gi" + "b",
+         ("样本大小",)),
+        ("size-decimal-alias", "样本 " + str(2) + "." + str(3) + " Ti" + "B",
+         ("样本大小",)),
+        ("size-chinese-megabyte",
+         "缓存占用 " + str(640) + " 兆字节",
+         ("样本大小",)),
+        ("size-chinese-gigabyte-tight",
+         "样本大小" + str(5) + "吉字节",
+         ("样本大小",)),
+        ("size-base-forward",
+         "样本大小 " + str(512) + " B",
+         ("样本大小",)),
+        ("size-base-forward-word",
+         "缓存占用 " + str(1) + "." + str(5) + " byte",
+         ("样本大小",)),
+        ("size-base-reverse",
+         "bytes 大小是 " + str(640),
+         ("样本大小",)),
+        ("size-base-compact",
+         "样本大小为" + str(512) + "B",
+         ("样本大小",)),
+        ("duration-compact-prefix", "耗时" + str(7) + "s",
+         ("命令耗时",)),
+        ("duration-compact-suffix", str(7) + "s 的耗时",
+         ("命令耗时",)),
+        ("duration-minute", "运行时间=" + str(2) + "分钟",
+         ("命令耗时",)),
+        ("duration-min-alias", "time: " + str(2) + "min",
+         ("命令耗时",)),
+        ("duration-ms", "took " + str(850) + "ms",
+         ("命令耗时",)),
+        ("duration-decimal", "duration=" + str(2) + "." + str(5) + "s",
+         ("命令耗时",)),
+        ("duration-hour-decimal",
+         "基准运行耗时 " + str(1) + "." + str(5) + " 小时",
+         ("命令耗时",)),
+        ("duration-hour-english",
+         "benchmark took " + str(2) + " hours",
+         ("命令耗时",)),
+        ("duration-hour-compact",
+         "单次运行耗时 " + str(3) + "h",
+         ("命令耗时",)),
+        ("duration-value-link",
+         "耗时数值是 " + str(7) + "s",
+         ("命令耗时",)),
+        ("duration-value-unit-context",
+         str(1) + "." + str(25) + "钟头用时",
+         ("命令耗时",)),
+        ("count-reverse", "XW" + "L 页面共计 " + str(843) + " 份",
+         ("语料文件数",)),
+        ("count-reverse-upper", "xw" + "l 文件合计 24," + str(986) + " 个",
+         ("语料文件数",)),
+        ("count-reverse-mixed-case", "Xw" + "L页面总数为" + str(713),
+         ("语料文件数",)),
+        ("count-reverse-magnitude",
+         "XW" + "L 文件累计 2." + str(5) + " 万份",
+         ("语料文件数",)),
+        ("count-reverse-punctuation",
+         ".XW" + "L 页面量：" + str(843) + "份",
+         ("语料文件数",)),
+        ("count-reverse-english",
+         "XW" + "L pages total 1," + str(234),
+         ("语料文件数",)),
+        ("size-reverse", "G" + "B 大小是 " + str(3) + "." + str(5),
+         ("样本大小",)),
+        ("size-reverse-lower", "g" + "b 容量约为 " + str(5),
+         ("样本大小",)),
+        ("size-reverse-punctuation", "M" + "B大小：" + str(2) + "." + str(5),
+         ("样本大小",)),
+        ("size-reverse-direct", "Ti" + "B 占用 " + str(4),
+         ("样本大小",)),
+        ("size-reverse-prefix",
+         "单位 G" + "B，大小是 " + str(3) + "." + str(5),
+         ("样本大小",)),
+        ("size-reverse-colon", "G" + "B：" + str(3) + "." + str(5),
+         ("样本大小",)),
+        ("size-reverse-english",
+         "G" + "B capacity is " + str(3) + "." + str(5),
+         ("样本大小",)),
+        ("duration-reverse", "sec" + "onds 用时 3." + str(25),
+         ("命令耗时",)),
+        ("duration-reverse-ms", "m" + "s耗时" + str(8),
+         ("命令耗时",)),
+        ("duration-reverse-minute", "分钟用时为" + str(2),
+         ("命令耗时",)),
+        ("duration-reverse-min", "m" + "in took 2." + str(5),
+         ("命令耗时",)),
+        ("duration-reverse-elapsed", "s elapsed: " + str(3),
+         ("命令耗时",)),
+        ("duration-reverse-de", "秒 的 耗时 " + str(7),
+         ("命令耗时",)),
+    )
+    _negative = (
+        ("guard-label", "块 " + str(17) + "s 缺起因"),
+        ("timeout-constant", "timeout=" + str(7) + "s"),
+        ("python-version", "Python " + str(3) + "." + str(9) + "+"),
+        ("size-boundary", str(1) + " MB 以上未验证"),
+        ("file-name", "文件名为 a.xw" + "l"),
+        ("ordinary-label", "guard " + str(17) + "b 不是统计"),
+        ("count-reverse-not-count",
+         "XW" + "L 格式适合 " + str(3) + " 个场景"),
+        ("count-reverse-version",
+         "XW" + "L 页面版本是 " + str(843)),
+        ("count-bare-xwl-unrelated",
+         "XW" + "L 有 " + str(3) + " 个命令"),
+        ("count-batch-xwl-unrelated",
+         "本批 xw" + "l 有 " + str(3) + " 个命令"),
+        ("size-unit-only", "G" + "B 字段说明"),
+        ("size-boundary-word", "G" + "B 大小为能力边界"),
+        ("size-base-block-lower", "块 " + str(17) + "b 缺起因"),
+        ("size-base-block-upper", "块 " + str(17) + "B 缺起因"),
+        ("size-base-file-name", "file-" + str(512) + "B.log"),
+        ("size-base-variable", "变量 sample" + str(512) + "B"),
+        ("size-base-field-word", "bytes 字段名"),
+        ("size-base-no-value", "样本大小字段名不含值"),
+        ("size-base-unrelated-context",
+         "单行样本保持单行）；" + str(11) + " B"),
+        ("size-base-js-binding", "var b = " + str(2)),
+        ("size-base-js-field", "b: " + str(2)),
+        ("duration-unit-only", "sec" + "onds 字段名"),
+    )
+    _failures = []
+    for _name, _text, _want in _positive:
+        _got = tuple(hit[1] for hit in _measurement_tokens(_rel, _text))
+        if _got != _want:
+            _failures.append("%s：期望 %r，实际 %r" % (_name, _want, _got))
+    for _name, _text in _negative:
+        _got = tuple(hit[1] for hit in _measurement_tokens(_rel, _text))
+        if _got:
+            _failures.append("%s：合法反例误命中 %r" % (_name, _got))
+
+    _all = " / ".join((
+        str(713) + " 份 .xw" + "l",
+        str(5) + " g" + "b",
+        "耗时" + str(7) + "s",
+        "XW" + "L 页面共计 " + str(843) + " 份",
+        "XW" + "L 页面合计约为 " + str(843) + " 份",
+        "页面数量（.xw" + "l）为 " + str(7) + " " + str(409) + " 份",
+        "G" + "B 大小是 " + str(3) + "." + str(5),
+        "样本大小 " + str(512) + " B",
+        "缓存占用 " + str(640) + " 兆字节",
+        "sec" + "onds 用时 3." + str(25),
+        "benchmark took " + str(2) + " hours",
+    ))
+    for _name, _exempt_rel in (
+        ("changelog", "webbuilder-xwl-patch/CHANGELOG.md"),
+        ("baseline", "tests/baseline.json"),
+        ("measured-data", "webbuilder-xwl-patch/references/measured-data.md"),
+    ):
+        if _measurement_tokens(_exempt_rel, _all):
+            _failures.append("%s：豁免面误命中" % _name)
+    _history = (
+        '{\n  "update_history": [\n    {"summary": "'
+        + _all
+        + '"}\n  ]\n}\n'
+    )
+    if _measurement_tokens("webbuilder-xwl-patch/metadata.json", _history):
+        _failures.append("metadata.update_history：豁免面误命中")
+    _outside = _measurement_tokens(
+        "webbuilder-xwl-patch/metadata.json", '{"summary": "' + _all + '"}'
+    )
+    if {hit[1] for hit in _outside} != {
+            "语料文件数", "样本大小", "命令耗时"}:
+        _failures.append("metadata 历史段外：三类 token 未完整命中")
+    return _failures
+
+
+def _measurement_scan_paths(root):
+    """数字禁令扫描面：分发包全树、主自检、tests 与 CI workflow。
+
+    候选按文件身份枚举，不按扩展名白名单；`.git` 与编译缓存目录只是目录遍历排除。
+    """
+    _repo = os.path.dirname(HERE)
+    _roots = (
+        root,
+        os.path.join(_repo, "tests"),
+        os.path.join(_repo, ".github", "workflows"),
+    )
+    _paths = []
+    for _root in _roots:
+        for _dp, _dns, _fns in os.walk(_root):
+            _dns[:] = [_d for _d in _dns if _d not in (".git", "__pycache__")]
+            for _fn in _fns:
+                _p = os.path.join(_dp, _fn)
+                _paths.append(_p)
+    _paths.append(os.path.abspath(__file__))
+    return sorted(set(_paths))
+
+
+def _measurement_expected_paths(root):
+    """用独立目录遍历生成 17q 应有的完整候选集合（不按扩展名筛选）。"""
+    _repo = os.path.dirname(HERE)
+    _roots = (
+        os.path.abspath(root),
+        os.path.join(_repo, "tests"),
+        os.path.join(_repo, ".github", "workflows"),
+    )
+    _paths = []
+
+    def _walk(directory):
+        try:
+            _entries = list(os.scandir(directory))
+        except OSError:
+            return
+        for _entry in _entries:
+            try:
+                if _entry.is_dir(follow_symlinks=False):
+                    if _entry.name not in (".git", "__pycache__"):
+                        _walk(_entry.path)
+                elif _entry.is_file(follow_symlinks=False):
+                    _paths.append(os.path.abspath(_entry.path))
+            except OSError:
+                continue
+
+    for _scan_root in _roots:
+        _walk(_scan_root)
+    _paths.append(os.path.abspath(__file__))
+    return {os.path.normcase(os.path.abspath(path)) for path in _paths}
+
+
+def _measurement_coverage(root):
+    """比较独立预期集合、实际扫描集合与最小必需文件；返回问题列表。"""
+    _repo = os.path.dirname(HERE)
+    _expected = _measurement_expected_paths(root)
+    _actual = {
+        os.path.normcase(os.path.abspath(path))
+        for path in _measurement_scan_paths(root)
+    }
+    _required = {
+        os.path.normcase(os.path.abspath(os.path.join(_repo, rel)))
+        for rel in _MEASURE_REQUIRED
+    }
+    _issues = []
+    if not _actual:
+        _issues.append("实际扫描集合为空")
+    if not _expected:
+        _issues.append("独立预期集合为空")
+    _missing_required = sorted(_required - _actual)
+    _missing_expected = sorted(_expected - _actual)
+    _unexpected = sorted(_actual - _expected)
+    if _missing_required:
+        _issues.append("缺最小必需文件：%s" % "、".join(
+            os.path.relpath(path, _repo).replace(os.sep, "/") for path in _missing_required))
+    if _missing_expected:
+        _issues.append("实际扫描漏件：%s" % "、".join(
+            os.path.relpath(path, _repo).replace(os.sep, "/") for path in _missing_expected))
+    if _unexpected:
+        _issues.append("实际扫描越界：%s" % "、".join(
+            os.path.relpath(path, _repo).replace(os.sep, "/") for path in _unexpected))
+    return _issues
+
+
+def _measurement_hits(root):
+    """返回 `(扫描文件数, 命中列表, 扫描面问题)`；命中项绑定仓库相对路径。"""
+    _repo = os.path.dirname(HERE)
+    _paths = _measurement_scan_paths(root)
+    _hits = []
+    for _path in _paths:
+        _rel = os.path.relpath(_path, _repo).replace(os.sep, "/")
+        try:
+            with open(_path, "r", encoding="utf-8", newline="") as _fh:
+                _text = _fh.read()
+        except (OSError, UnicodeDecodeError) as _exc:
+            _hits.append((_rel, 0, "读取失败", type(_exc).__name__, str(_exc)))
+            continue
+        for _ln, _label, _tok, _line in _measurement_tokens(_rel, _text):
+            _hits.append((_rel, _ln, _label, _tok, _line))
+    return len(_paths), _hits, _measurement_coverage(root)
 
 
 _b17r_docs = ("《验收基线》", "《落地清单》", "施工索引", "施工单")
@@ -1748,26 +2181,6 @@ def _doc_guard_xfile_pt(docs, doc_fail, real_out):
                     doc_fail.append("行号锚点（%s）%s:%d 出现 `%s` —— 现值面不写行号"
                                     "（行号随平台版本漂移、本机不可复核）；要定位就写**符号名**"
                                     % (_lab4, _nm4, _i4, _m4.group(0)))
-
-
-def _q_scan(_lines):
-    """在给定行列表里查规模取值 / 逐行口径限定 / 带日期的差异声明 / 无日期的口径词。
-    返回 4 元组 `(取值表, 有同日期的差异声明, 有只带口径词不带日期的行, 缺口径词的规模数字)`。"""
-    _vals = {}
-    _caveat_dated = False
-    _caveat_undated = False
-    _bad = []
-    for _i2, _l2 in enumerate(_lines, 1):
-        for _m2 in re.finditer(r"(\d{4,})\s*个\s*xwl", _l2):
-            _vals.setdefault(_m2.group(1), []).append(_i2)
-            if any(_c in _l2 for _c in _caveat) and re.search(r"\d{4}-\d{2}-\d{2}", _l2):
-                _caveat_dated = True
-            if any(_c in _l2 for _c in _caveat) and not re.search(r"\d{4}-\d{2}-\d{2}", _l2):
-                _caveat_undated = True
-            if not any(_q in _l2 for _q in _qual):
-                _bad.append((_i2, _m2.group(0).strip()))
-    return _vals, _caveat_dated, _caveat_undated, _bad
-
 
 
 def _b17r_mask_strings(_text):
@@ -2311,7 +2724,7 @@ def _docs_contract(_S) -> None:
 
 # ---- 版本三处机械守卫与仓库根 README 机械守卫（验收缺口的机械收口）----
 #   两条臂都**并进** `--only docs` 的既有文档守卫块（⛔ 不新开 `# 17<字母>` 块名：
-#   新块名会撞 `_DOC_GUARD_BLOCK_BASELINE`）；判定文本只在失败时进 `doc_fail`，
+#   新块名会撞 `_DOC_GUARD_BLOCK_BASE`）；判定文本只在失败时进 `doc_fail`，
 #   ⛔ 不新增 `[ok]` 行（避免改动文档守卫大绿行的计数口径）。
 #   位置放在函数体外：这两段若塞进 `_docs_numbers_and_tables` 函数体，会把该受管函数推向 400 行上限。
 _VER_HEAD_RE = re.compile(r"^##\s*\[(\d+\.\d+\.\d+)\]\s*-\s*(\d{4}-\d{2}-\d{2})\s*$", re.M)
@@ -2967,7 +3380,7 @@ def _docs_numbers_and_tables(_S) -> None:
     #     正解即本臂：逐条喂 `build_parser().parse_args()`，与具体 flag / 子命令清单无关。
     #     抽取面与跳过口径见模块级 `_PROMPT_CMD_RE` 上方注释（**可枚举、不写死文件清单**）。
     #     ⚠️ 与 17w 同属一类：**样例/语料必须与命令行接口同步**（那边是 test-prompts 的覆盖度，
-    #     这边是文档样例的可解析性）⇒ 故并入、⛔ 不新开块名（新块名会撞 `_DOC_GUARD_BLOCK_BASELINE`）。
+    #     这边是文档样例的可解析性）⇒ 故并入、⛔ 不新开块名（新块名会撞 `_DOC_GUARD_BLOCK_BASE`）。
     _pc_bad, _pc_n, _pc_skip = _doc_prompt_cmd_probe(root)
     if _pc_bad:
         doc_fail.append(_pc_bad)
@@ -3759,101 +4172,28 @@ def _docs_tail_scaffold(_S) -> None:
                             "（版本段 `## [x.y.z]` 或 Added/Changed/Fixed/Testing 小节）"
                             "—— 发版编年只许写在 CHANGELOG.md" % _bn)
 
-    # 17q 规模类数字必须在权威层（`measured-data.md`）里出现过。
-    #     起因（实测）：`SKILL.md` 的适用边界表写着 `25250 个 xwl`，而别处是 `24957` —— 同一个统计、
-    #     两套数，而"自称数字"那条守卫只认固定句式，**散文里的数字一条也看不见**。
-    #     判据**故意窄**：只钉"N 个 xwl"与"N KB / N.N s"三类 token —— 散文里数字太多，
-    #     全面比对必然踩出一片误报（"60 项断言""17 条 FAQ"这类不在规模层管辖内）。
-    # ⚠️ 权威面改「**拼接后的依据层文件**」（本轮）：不再单取 `measured-data.md` 一份 —— 拆分后规模
-    #    数字随节散在多份依据层文件里（§七/§九/§十一/§十二 等），单取一份会**查不到而误红**。
-    _auth_joined = "\n".join(_txt.get(r, "") for r in _auth_rels)
-    _auth = re.sub(r"\s+", "", _auth_joined)
-    for _rn, _rt in (("SKILL.md", _sk_txt), ("README.md", _rm_txt),
-                     ("references/faq.md", _txt.get("references/faq.md", ""))):
-        for _tok in sorted(set(re.findall(r"\d{4,}\s*个\s*xwl|\d+(?:\.\d+)?\s*KB|\d+\.\d+\s*s\b", _rt))):
-            if re.sub(r"\s+", "", _tok) not in _auth:
-                # ⚠️ 文案符实（本轮修正）：`_auth` 是**拼接后的依据层文件** ⇒ 红行须说「依据层」并列出
-                #    实际成员，不得再单指 references/measured-data.md 一份。
-                #    （任务书建议措辞是「依据层（measured-data 家族）」，但拼接面**实为全部依据层文件**
-                #     ＝ measured-data 家族 ＋ workflow-notes 家族 —— 照抄会把那 2 份 workflow-notes
-                #     文件**误称成 measured-data 家族**，又是一处不符实 ⇒ 改用「依据层＋成员清单」。）
-                doc_fail.append("%s 里的规模数字「%s」在依据层（%s）里找不到"
-                                "（规模类数字以依据层为准，别在别处另算一套）"
-                                % (_rn, _tok.strip(), "、".join(_auth_rels)))
-
-    # 17q-自洽：**权威层内部**同一指标只许一个主口径。
-    #     起因：measured-data §十 写 24957、§11.3 写 24986，两值都在**同一文件**内，
-    #     只查「数字是否存在别处」时那条件天然为真、抓不到这种自相矛盾。
-    #     判据：① 每个「NNNNN 个 xwl」都要有口径限定词；② 出现多个不同取值时，
-    #           文件里必须有一句显式的口径差异声明（否则读者会当成同一个统计）。
-    #     ⚠️ ② 收紧：「存在性类」判据会被**一句错话**合规绕过 —— 只要文件里出现「不是同一口径」这种词，
-    #       哪怕它根本指错了对象也算声明（实测被一句错的说明绕过）。故差异声明**必须与采集日期
-    #       （`YYYY-MM-DD`）落在同一行**才算数：日期是唯一**形状可锚定**的锚（只核 `YYYY-MM-DD`
-    #       这个形状、**不核真伪**），光含口径词、不带日期的不算。
-    #       （⚠️ 不改成「日期 **或** 范围词」—— 范围词那一支与 ① 的逐行臂在同一轮迭代里，等于空转。）
-    #     ⚠️ ② 再收窄：「带日期的声明」若做成**整面单个布尔** ⇒ 多份依据层文件拼成一份后，
-    #       A 文件里一句带日期的声明会把 B 文件里一句**只带口径词、不带日期**的说法白放过 —— 与红行文案
-    #       承诺的「未在**同处**声明」不符（`l18-bogus-caveat` 注入用例因此恒 FAIL）。故新增 `_caveat_undated`：
-    #       只要存在「规模数字行带口径词却不带 `YYYY-MM-DD`」⇒ 判红。红行文案**逐字未改**（注入用例靠它锚定），
-    #       新支路的语义写在本处注释里。配对地新增阳性对照 `_q_probe_ok`（同行带日期 ⇒ 必须放行），
-    #       防新支路收得过宽把合法语料整体误红。
-    # `_qual` / `_caveat` 已移出函数体（有界下沉）⇒ 见模块级同名常量。
-
-    # 有界下沉：`_q_scan`（纯助手）已移出函数体 ⇒ 见模块级同名函数。
-    # ⚠️ 与 `_auth` **同源**（同一份拼接后的权威面，不再各自单取 `measured-data.md`）—— 否则拆分后
-    #    本臂取值集合会缩成单值 ⇒ `len>1` 恒假 ⇒ **永久不触发**（静默失效，而其反向 fixture 仍绿）。
-    #   ⚠️ 行号真身（本轮修正）：`_md_lines` 是多份依据层文件的**拼合** ⇒ 对拼合文本 `splitlines()`
-    #     得到的行号是拼合偏移、不属任何单份文件，红行「文件:行」会不符实（静默误导）。故**逐份**拼装
-    #     并并行记录来源 `(rel, 该文件内行号)`；判据、`len>1` 触发条件、覆盖度断言、遍历面均**不改**。
-    _md_lines, _md_src = [], []
-    for _r in _auth_rels:
-        for _j, _l in enumerate(_txt.get(_r, "").splitlines(), 1):
-            _md_lines.append(_l)
-            _md_src.append((_r, _j))
-    _md_vals, _caveat_dated, _caveat_undated, _q_bad = _q_scan(_md_lines)
-    for _i, _tok in _q_bad:
-        _rel, _ln = _md_src[_i - 1]     # 换回「真正所在的那份文件 ＋ 该文件内行号」
-        doc_fail.append("%s:%d 的规模数字「%s」没带口径限定词（取词：%s）"
-                        % (_rel, _ln, _tok, "/".join(_qual)))
-    # ⚠️ 新增 `_caveat_undated` 支路：某处写了口径词却**没附采集日期** ⇒ 不足以算作「同处声明」
-    #   （判据从"整面存在一条带日期的声明"收窄为"每处口径词都得带日期"，否则别处一句带日期的声明
-    #   会把这一句白放过 —— 文案承诺的是「未在**同处**声明」）。为保持红行可锚定，文案**逐字沿用**原句。
-    if len(_md_vals) > 1 and (not _caveat_dated or _caveat_undated):
-        _hit = "、".join(sorted({_md_src[_n - 1][0]
-                                 for _ns in _md_vals.values() for _n in _ns}))
-        doc_fail.append("依据层（%s）内「NNNNN 个 xwl」有多个取值 %s 却未在**同处**"
-                        "声明口径差异（差异声明须与采集日期 `YYYY-MM-DD` 同行 —— 加「不是同一口径」等"
-                        "说明并附日期，别让读者当成同一统计）" % (_hit, "/".join(sorted(_md_vals))))
-    # ⚠️ **覆盖度断言**（本轮新增）：权威面（拼接后的依据层文件）里「NNNNN 个 xwl」取值 < 2 时，
-    #    上面那条差异声明臂的触发条件 `len>1` **恒假** ⇒ 该臂会**永久不触发**（静默失效；且它的
-    #    反向 fixture 仍绿 ⇒ 单靠 fixture 抓不到）。故取值 < 2 时**判红**、并要求与依据层文件数对账，
-    #    不得静默通过。
-    if len(_md_vals) < 2:
-        doc_fail.append("17q-自洽 覆盖度断言：拼接后的权威面（%d 份依据层文件）里「NNNNN 个 xwl」"
-                        "只有 %d 个取值（< 2）⇒ 差异声明臂会永久不触发；权威面可能被拆散 / 未拼接"
-                        % (len(_auth_rels), len(_md_vals)))
-    # 本臂自带 fixture（不依赖现网语料）：合成「两取值 + 无日期 caveat」样本 ⇒ 必须判红。
-    #   防将来编年被删后本臂静默失效。
-    #   ⚠️ 钉子（本夹具的判别力所在）：caveat 那句**落在规模数字行上**、**带范围词**、**但不带日期**
-    #     （「全项目 …… 不是同一口径」）。这样一旦差异声明判据被放宽成「日期 **或** 范围词」，
-    #     这一行会被误当"已声明" ⇒ 本夹具当场报红 —— 专门钉死"只认日期"这一支。
-    #   ⚠️ 同轮新增：这条夹具同时钉「只带口径词、不带日期」的新支路 `_caveat_undated`（见下），
-    #     故断言里一并要求 `_pu` 为真 —— 否则该支路退化成恒假也没人发现。
-    _pv, _pc, _pu, _pb = _q_scan(_q_probe)
-    if not (len(_pv) > 1 and not _pc and _pu):
-        doc_fail.append("17q-自洽 反向 fixture 失效：合成「两取值 + 无日期口径声明」样本竟未判红"
-                        "（本臂可能已空转，请检查差异声明判据）")
-    # 阳性对照（与反向夹具配对，必做）：同一份样本只把第二行**补上采集日期** ⇒ 必须放行。
-    #   反向夹具钉「不带日期要红」，这条钉「带日期就放行」；缺了这条，`_caveat_undated` 一旦收得过宽
-    #   （把所有口径词行都算红）就没人能发现 —— 那会把现网语料整体误红。
-    _ov, _oc, _ou, _ob = _q_scan(_q_probe_ok)
-    if not (len(_ov) > 1 and _oc and not _ou):
-        doc_fail.append("17q-自洽 阳性对照失效：同行带采集日期的差异声明竟仍被判红"
-                        "（新支路 `_caveat_undated` 收得过宽，会把合法语料误红）")
+    # 17q 实测数字禁令。
+    # 起因：语料文件数、样本大小与命令耗时在正文、帮助和测试注释里各留副本时，
+    # 任一处复采都会让同一事实出现多个现值。实测值只由 measured-data 家族承载；
+    # CHANGELOG、metadata.update_history 与 tests/baseline.json 保留各自历史/基线用途。
+    # 扫描面：分发包全树、主自检、tests 与 CI workflow；候选不按扩展名筛选，
+    # 仅排除版本库与编译缓存目录。三类 token 逐类可注入。
+    _measure_n, _measure_hits, _measure_face = _measurement_hits(root)
+    for _face_problem in _measure_face:
+        doc_fail.append("17q 扫描面不完整：%s" % _face_problem)
+    for _mrel, _mline, _mlabel, _mtok, _mtext in _measure_hits:
+        doc_fail.append("%s:%d 含实测数字「%s」（%s）：只许留在 measured-data 账本、"
+                        "CHANGELOG、metadata.update_history 或基线文件"
+                        % (_mrel, _mline, _mtok, _mlabel))
+    for _regression in _measurement_regression_failures():
+        doc_fail.append("17q 数字禁令回归失败：%s" % _regression)
+    if not _measure_hits and not _measure_face:
+        print("[ok]  17q 实测数字禁令：扫描 %d 个文件；语料数/样本大小/耗时只由账本、"
+              "历史段与基线承载" % _measure_n)
 
     # 17u 层归属声明：`references/` 下**每一份** md 在 `metadata.json` 的 `layers` 里**恰有一条**、
     #     值 ∈ {`spec`, `evidence`}；`layers` 里不得有 `references/` 以外的键、也不得指向不存在的文件。
-    #     起因（不这么做会漏什么）：编年豁免面（`17l`）与权威面（`17p`/`17q`）都按 `layers[rel] == "evidence"`
+    #     起因（不这么做会漏什么）：编年豁免面（`17l`）与引用权威面（`17p`）都按 `layers[rel] == "evidence"`
     #     机械选取 —— 条目缺失 / 值写错时那些守卫会**静默选错对象**（漏扫或误红），而单看它们的绿行看不出来，
     #     故把「条目齐不齐、值合不合法、有没有多出来的键」单列一块钉住。
     #     ⚠️ 扫描面**动态**取（遍历 `references/` 实际文件），⛔ 不许写死清单 —— 否则新文件对本块又静默隐形。
@@ -3965,7 +4305,7 @@ def _docs_tail_scaffold(_S) -> None:
     _check_docs_section_order(failures)
 
     # ⚠️ 破计数遮蔽（本轮仪表审计整改）：判**每个块名份数不降 ＋ 新增块名须在 `CHANGELOG` 声明**。
-    #   起因与"如何有意增删块时更新基线"见模块级 `_DOC_GUARD_BLOCK_BASELINE` 的注释。
+    #   起因与"如何有意增删块时更新基线"见模块级 `_DOC_GUARD_BLOCK_BASE` 的注释。
     _blk_bad = _doc_guard_block_mismatch()
     if _blk_bad:
         doc_fail.append(_blk_bad)
@@ -3994,7 +4334,7 @@ def _docs_tail_scaffold(_S) -> None:
               "导航表与目录索引一致 / 无业务路径残留 / 反模式有入口 / "
               "**编年三臂（事件词·施工日期·发版号）** / **scripts 里的点名式引用可解析** / "
               "**触发场景锚点未丢** / 注册表不认 controlsold / **依据层只放因果·作废·守卫说明** / "
-              "**规模数字出自权威层** / **`--help` 行数上限（顶层 36 / 子命令实测+5）** / "
+              "**实测数字禁令（语料数·样本大小·命令耗时）** / **`--help` 行数上限（顶层 36 / 子命令实测+5）** / "
               "**支持矩阵 OS 行（SKILL 适用范围表 + metadata.json limitations）** / "
               "**跨文件节号指针可解析（17j-12）** / **目录顺序与实际小节一致（17j-13）** / "
               "**围栏块输出文案符实（17j-14）** / **行号锚点四形（现值面 0 命中）** / "
@@ -4253,7 +4593,7 @@ def _blocks() -> list[tuple[str, object]]:
 # 自检块名基线：`_blocks()` 里那一组名字（即 `--list-blocks` 的输出）的**机器基线**。
 #   起因（不这么做会漏什么）：`_blocks()` 只是"定义序"的清单 —— 删掉一个块 ⇒ 该块**连同它的
 #     全部判据一起消失**，而剩下的块照旧全绿、汇总行照样 `ALL OK` ⇒ **整块删除没有任何守卫会响**
-#     （与文档守卫那一族同病；那族已由 `_DOC_GUARD_BLOCK_BASELINE` 治过，本清单治的是**自检块**这一层）。
+#     （与文档守卫那一族同病；那族已由 `_DOC_GUARD_BLOCK_BASE` 治过，本清单治的是**自检块**这一层）。
 #   判据：① **少一块** ⇒ 红并**点名缺哪个**（丢块必须响；确系有意退役时改本基线并在 `CHANGELOG` 写明）；
 #     ② **多一块** ⇒ 基线外的名字必须已在 `CHANGELOG.md` 被**独立提及**，否则红（新增＝显式；口径同
 #     文档守卫那一族 —— 已声明的新块**放行**，否则谁都加不了块）；
@@ -4290,7 +4630,7 @@ def _blocks_baseline_problem():
         except OSError as _exc:
             return ("自检块多了基线外的 %s，但读不出 `CHANGELOG.md`（%s）—— 判红"
                     % ("，".join(_extra), _exc))
-        # ⚠️ 声明必须写成**反引号包裹**（`` `块名` ``）：词边界匹配**太松** —— 本文件 231 KB，
+        # ⚠️ 声明必须写成**反引号包裹**（`` `块名` ``）：词边界匹配**太松** —— 本文件很大，
         #   一个叫 `patch`／`platform`／`schema` 的新块名会在正文里随便撞到，等于"零门槛声明"。
         _und = [n for n in _extra if ("`%s`" % n) not in _cl]
         if _und:

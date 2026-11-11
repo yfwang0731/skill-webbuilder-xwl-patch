@@ -50,8 +50,7 @@ CRLF = "\r\n"
 # **切行必须用它，不能用 `text.split(CRLF)`** —— 后者在纯 LF 文件上切不出行
 # （整份文件成一个元素），会让逐行检查静默退化成"只看最后一行"。
 # 纯 LF 是设计器写在 Linux 服务器上的产物形态，也是 `new` 的默认产出；
-# 它在**检出形态**下很稀少（实测 8 个 wb 根 / 24986 个 xwl 里 LF-only 只有 32 个），
-# 所以这条长期没被测到。
+# 它在**检出形态**下很稀少，所以这条长期没被测到。
 ANY_EOL_RE = re.compile(r"\r\n|\r|\n")
 
 # 风格名 → 真实换行串（`--eol` 的两层规则用**风格名**表达，避免 CR/LF 在字符串里肉眼难辨）
@@ -83,14 +82,6 @@ def eol_styles(text: str) -> set:
     if n_cr:
         styles.add("cr")
     return styles
-
-
-def detect_eol(text: str) -> str | None:
-    """文本的**单一**换行风格：`"crlf"` / `"lf"` / `"cr"`；无换行或多风格 → `None`。"""
-    styles = eol_styles(text)
-    if len(styles) == 1:
-        return next(iter(styles))
-    return None
 
 
 def pick_eol_for_auto(text: str) -> str:
@@ -474,7 +465,8 @@ def loader_normalize(t: str) -> str:
 
 
 def loader_parse(text: str):
-    """**按加载器的宽容面**解析 xwl —— `check`／`params`／`dump` 三条只读命令共用这一个入口。
+    """**按加载器的宽容面**解析 xwl —— `check ④`、`params`、`dump`、上游/观测扫描及
+    `edit` 写后提示共用同一套归一化与解析规则。
 
     与 `parse_xwl` 只差一步：解析前多跑一次 `loader_normalize`。
     ⭐ **取值一律交回 `parse_xwl`**：这里只用 `raw_decode` **量出第一个对象的右边界**
@@ -786,7 +778,9 @@ class XwlLoadError(Exception):
 
 
 #: 非 UTF-8 的**唯一一份**可读文案 —— `read_xwl_text`（抛 `XwlLoadError`）与 `check`（`[FAIL]`）都引用它。
-#: ⚠️ 两处必须同源：只改一侧会让另三个入口仍甩 Python codec 原文（`params` / `itemids` 同样走这条路）。
+#: 公共读取入口覆盖 `check` / `edit` / `patch` / `expand` / `itemids` / `paths` / `sqlrefs` /
+#: `params` / `dump` / `sql` / `events`，以及 `schema --observed` / `params --upstream` 的依赖扫描；
+#: 各入口必须继续引用同一份文案，避免甩出 Python codec 原文。
 _NOT_UTF8_HINT = ("不是 UTF-8 文本（xwl 必须是无 BOM 的 UTF-8）。**工具不猜编码** —— "
                   "猜错会写成乱码，而乱码文件本身是合法 UTF-8、会一路放行；"
                   "请另存为 UTF-8 或用 `iconv` 转换后覆盖")
@@ -811,8 +805,10 @@ def load_xwl(path: str, loader: bool = False):
 
     各子命令统一走它，避免把 `FileNotFoundError` / `JSONDecodeError` 冒到顶层变成裸 Traceback。
 
-    `loader=True` ⇒ 走**宽容面** `loader_parse`（多认单引号键／未引号键／未引号值／相邻 `{...}{...}`），
-    **只给 `params`／`dump` 这两条只读命令用**。
+    `loader=True` ⇒ 走**宽容面** `loader_parse`（多认单引号键／未引号键／未引号值／相邻 `{...}{...}`）。
+    它用于 `params`／`dump`、`params --upstream` 与 `schema --observed` 的只读扫描，也用于
+    `edit` 写后回读的能力提示；`check ④` 另有同一宽容面的独立入口。`patch`／`expand` 只借
+    宽容面识别输入，随后按设计器格式拒写，不会把宽容写法整份重排。
     起因（为什么做成**显式开关**、⛔ 不做成默认）：`load_xwl` 被十几个命令共用 —— 把默认行为切到
     宽容面，等于连带把 `patch`／`edit`／`expand`／`sqlrefs`／`itemids`／`paths` 全切过去；
     而"重排/写回一个文件"与"只读地看它"是两件事：加载器能读**不等于**可以安全重排
@@ -1130,7 +1126,7 @@ def _node_check_once(node: str, code: str) -> tuple[bool, str]:
 # **编译语义必须与 `node --check <x.js>` 对齐** —— 后者把 .js 当 **CommonJS 模块**
 # （包一层函数），所以顶层 `return` 是**合法**的；而 `vm.Script` 是当**脚本**编译的，
 # 会把 `return` 判成 Illegal return statement。
-# 实测教训：用 `vm.Script` 写这版时，一个 486 KB 页面的 FAIL 数从 16 涨到 120 —— 全是误报。
+# 实测教训：用 `vm.Script` 写这版时，大批合法事件段会变成误报。
 # 所以这里用 `new Function(code)`（函数体语义），才与 CommonJS 行为一致。
 _NODE_BATCH_JS = """
 let raw = '';
@@ -1159,9 +1155,8 @@ process.stdin.on('end', () => {
 def node_check_many(node: str, codes: list) -> list:
     """批量校验多段 JS，返回与 `codes` 等长的 [(ok, err)]。
 
-    **为什么批量**：逐段调 `node --check` 每次都要付 node 冷启动（本机实测 ~250 ms）。
-    实测一个 486 KB 的页面有 246 个事件段 ⇒ 逐段校验要 63 s，占了整个 `check` 的 99%。
-    批量后同样内容一次进程搞定（实测 63 s → 1.0 s）。
+    **为什么批量**：逐段调 `node --check` 每次都要付 node 冷启动；事件段多时，逐段校验
+    会让进程启动开销占主导。批量后同样内容一次进程搞定。
 
     **正确性怎么保证**：批量结果只用来**证明「合法」** —— 能让 `new Function` 编译过就一定
     也能过 `node --check`（后者是把 .js 包一层函数体编译，与 `new Function` 同语义）。
@@ -1171,7 +1166,7 @@ def node_check_many(node: str, codes: list) -> list:
     这条复核不能省：`new Function` 比 `node --check` **更严** —— Node 22 的 `--check`
     在 CJS 解析失败时会**自动按 ESM 重试**（`--experimental-detect-module` 默认开），
     因此接受**顶层 `await` / `import` / `export`**，而 `new Function` 不接受。
-    实测：漏掉复核会把一个 486 KB 页面的 FAIL 数从 16 顶到 120（全是误报）。
+    实测：漏掉复核会让批量驱动的误报无法回落到权威结论。
     """
     if not codes:
         return []
@@ -1647,7 +1642,7 @@ def cmd_check(args) -> int:
     #      ⛔ 也**不新造标记**（如 `[拒跑]`）：那会新开一个对外文案面、语料面也得跟着长。
     #   ⚠️ 不影响写盘路径：`_post_check` 的 Namespace 没有 `controls` 键（getattr ⇒ None）。
     #   ⚠️ **注册表只读一次**：入口这里解析一次、结果 `_reg` 传给 `_check_registry_dims`
-    #      （2.4 MB 注册表单次解析约 106 ms ⇒ 别让它被解析两遍）。
+    #      （大注册表不能被重复解析）。
     _controls = getattr(args, "controls", None)
     _reg = None
     _ctl_bad = False
@@ -2299,7 +2294,7 @@ _CHECK_IMMUTABLE_CFG_KEYS = frozenset({"itemId"})
 # 注册表事实源：一次命令上下文只加载一次（以文件强身份为键）
 # --------------------------------------------------------------------------- #
 # 起因：`field_types` / `normalname_types` / `_registry_configs` 各读各的 ⇒ 一次判定里同一份
-#   注册表可能被 `json` 解析 2～3 次（2.4 MB 约 106 ms/次），且同一读取失败在三个命令里
+#   注册表可能被 `json` 解析多次，且同一读取失败在三个命令里
 #   三种去向、三种文案。这里改成：**同一强身份（realpath, mtime_ns, size）只解析一次**，
 #   记录来源路径／身份／状态（ok / absent / failed）／人读原因；调用方按各自成功条件解释。
 # ⚠️ 缓存**不跨命令上下文**：`cmd_check` / `cmd_itemids` / `cmd_params` 入口各调一次
@@ -2458,7 +2453,7 @@ def _check_registry_dims(obj, controls: str, node, no_js: bool, reg=None):
     · `n_key_hits` —— 本文件 ⑨「键不在注册表」命中的**节点数**（供调用方打**运行级**汇总行）。
 
     `reg` —— **已解析**的注册表（`_registry_configs` 的返回值）。`cmd_check` 在入口探测时已解析过
-       一次，直接传下来 ⇒ **一次 `check` 只读一次注册表**（2.4 MB 注册表实测量级 106 ms/次，
+       一次，直接传下来 ⇒ **一次 `check` 只读一次注册表**（大注册表实测量级逐次累积，
        原来"探测 + 本函数"各读一次）。⚠️ 不传（`None`）时本函数自己读 —— 供其它调用方直接调，
        语义与从前一致。
 
@@ -4310,8 +4305,8 @@ def cmd_paths(args) -> int:
 # --------------------------------------------------------------------------- #
 # new（从零生成一个 xwl 文件）
 # --------------------------------------------------------------------------- #
-# 顶层页面钥匙的**真实键序** —— 实测样本工程 2780 个 xwl：2750 个是这个顺序，
-# 且**独立页面与被引用的 SQL 载体完全一样**。
+# 顶层页面钥匙的**真实键序** —— 实测样本工程绝大多数文件都是这个顺序，
+# 且**独立页面与被引用的 SQL 载体一样**。
 # 序列化按 dict 插入序输出 ⇒ 键序写错，产出即与设计器不一致（下次被设计器保存就产生额外 diff）。
 _PAGE_KEYS = ("hidden", "children", "roles", "title", "iconCls", "inframe", "pageLink")
 _PAGE_DEFAULTS = collections.OrderedDict([
@@ -4714,11 +4709,11 @@ def cmd_folders(args) -> int:
 # 文件**依然是合法 JSON**、`check` 九项全绿、`node --check` 也可能返回 0，
 # 唯一的发现手段是人工 `git diff`。这是本工具唯一"没有自动化防线"的损坏类型。
 #
-# 判据为什么是**两个条件**而不是"续行符变少"：
+# 判据为什么不能只看"续行符变少"：
 #   · 合法地删掉一段多行 JS / 删一个控件，续行符**也会**净减少 —— 只看数量必然误报；
-#   · 压平的真正指纹是「**原来好几行的内容挤进了同一行**」⇒ **最长行长度暴增**。
-#   两者同时成立才判疑似。实测对照：压平 → 最长行 96 → 412（+316，3.3 倍）；
-#   而"删掉一段多行 JS" → 续行符减少但最长行长度基本不变 ⇒ 不报。
+#   · 压平的稳定指纹是「原来好几行的内容挤进了同一行」。
+#   精确拼接、最长行粗筛与相似度档分别覆盖原样压平、最长行暴增与压平同时改内容。
+#   三者都不是唯一入口：任一命中即疑似，不能把某一种路径当成完整定义。
 _FLAT_RATIO = 1.5      # 最长行至少变成原来的 1.5 倍
 _FLAT_DELTA = 40       # 且绝对增量至少 40 字符（避免短行上比值虚高）
 
@@ -4813,11 +4808,6 @@ def _diff_line_maps(head_text: str, wd_text: str) -> tuple:
     return changed, new_wd
 
 
-def _changed_head_lines(head_text: str, wd_text: str) -> set:
-    """返回**基线里被本次改动覆盖**的行号集合（1-based）；`_diff_line_maps` 的薄包装（保留旧 API）。"""
-    return _diff_line_maps(head_text, wd_text)[0]
-
-
 def _similar_merge_hits(head_text: str, wd_text: str, exact_hits=(),
                         changed_lines=None, new_wd=None):
     """判据三（相似度档）：基线里**连续 ≥2 行**被压成工作区一行、**但内容已改**（逐字不等）。
@@ -4865,8 +4855,7 @@ def _similar_merge_hits(head_text: str, wd_text: str, exact_hits=(),
     #   仅排除**零长行**（空行当候选只会白跑 ratio）。
     # ⭐ **内容去重**（放开长度门槛后必须做的事）：ratio / 逐行覆盖**只取决于内容**，
     #   同一份内容的多行结论完全相同 ⇒ 只留最先出现的那一行当代表。
-    #   实测收益：`big-ok.xwl` 里 4000 行同长同内容的 `    "text": "xxxx…"`，
-    #   去重后每窗口的候选从 4000 塌到 4（判据三整体 0.54s → 数毫秒）。
+    #   实测收益：重复的 `    "text": "xxxx…"` 行去重后，每窗口候选数大幅收缩。
     bucket: dict = {}
     dups: dict = {}                           # 内容 → 该内容的全部行号（1-based，首行在首位）
     for k, ln in enumerate(wl, 1):
@@ -5187,8 +5176,8 @@ def _git_has_rev(rev: str, cwd: str):
 def _git_show_batch(rev: str, rels: list, cwd: str, timeout: int = 60):
     """一次 `git cat-file --batch` 取**多个** `<rev>:<rel>` 的内容（N 次 spawn → 1 次）。
 
-    `_git_show` 的批量形态：逐个文件起 `git show` 时，`rel` 每文件不同 ⇒ 缓存**无解**，
-    60 个文件就是 60 次进程（本机实测 13.4 s / 60 件）。本函数把 N 个 `<rev>:<rel>` 一次问完。
+    `_git_show` 的批量形态：逐个文件起 `git show` 时，`rel` 每文件不同 ⇒ 缓存**无解**。
+    本函数把 N 个 `<rev>:<rel>` 一次问完。
 
     ⭐ **只合并进程、不合并语义**：三个状态**逐文件**交回给调用方，本函数不下结论：
       · 命中 ⇒ `results[rel] = <bytes>`；
@@ -5274,7 +5263,7 @@ def cmd_diffguard(args) -> int:
         return 2
 
     # ⭐ **先把基线内容一次问完**，再进逐文件循环。
-    #   逐文件起 `git show` 时 `rel` 每件不同 ⇒ 缓存无解（60 件 ＝ 60 次进程，本机实测 13.4 s）；
+    #   逐文件起 `git show` 时 `rel` 每件不同 ⇒ 缓存无解；
     #   改成**按目录一次 `git cat-file --batch`**：同一目录下 N 个文件共用 **1 次**进程。
     #   ⚠️ 按 `cwd` 分组（不是全局一次）：入参可能跨目录／跨仓库，`cat-file` 只能在一个工作树里解析
     #     `<rev>:<rel>`；分组后仍是"每目录 1 次"，不会退化成每文件 1 次。
@@ -8598,10 +8587,10 @@ def build_parser() -> argparse.ArgumentParser:
     pm.add_argument("--upstream", action="store_true",
                     help="跨页反查（默认关）：扫模块根；候选不并入已证明供给。缺参/悬空 0/1，"
                          "读取失败 2/2，读取失败并存 2/1，仅未核对 0/2（默认/strict）；"
-                         "未定位模块根则跳过；上游候选仅供展示。代价约 3000 文件/5 秒")
+                         "未定位模块根则跳过；上游候选仅供展示")
     pm.add_argument("--strict", action="store_true",
-                    help="这是逃生开关：缺来源时判失败（rc=1）—— 与 `diffguard --strict` 同名同义"
-                         "（默认只告警、rc=0）")
+                    help="确缺参或确悬空 rc=1；仅未核对、依赖读取失败 rc=2；"
+                         "读取失败与已确认内容失败并存 rc=1。默认缺参只告警，依赖读取失败仍 rc=2")
     pm.set_defaults(func=cmd_params)
 
     pa = sub.add_parser("paths", help="列出可编辑字段位置（sql / totalSql / serverScript / url），供 patch 用")
@@ -8661,8 +8650,8 @@ def build_parser() -> argparse.ArgumentParser:
     dg.add_argument("targets", nargs="+", metavar="PATH", help=".xwl 文件，或要递归检查的目录（可给多个）")
     dg.add_argument("--rev", default="HEAD", help="比对基线（默认 HEAD；也可给 origin/main 等）")
     dg.add_argument("--strict", action="store_true",
-                    help="把「疑似压平」当成失败（rc=1）；且不允许跳过（跳过时 rc=2）。"
-                         "默认只告警、rc=0")
+                    help="疑似优先 rc=1；仅检查未完成或全部跳过 rc=2；部分跳过只记 note；"
+                         "默认疑似仍只告警（rc=0）")
     dg.set_defaults(func=cmd_diffguard)
 
     sc = sub.add_parser("schema", help="查设计器控件注册表：某控件合法的 configs / events",

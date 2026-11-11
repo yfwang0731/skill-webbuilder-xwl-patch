@@ -48,7 +48,7 @@ def _check_platform(tmp, node, failures, write) -> None:
     """node_check_many 等价性 + folders 给目录须报错 + 非 UTF-8 控制台 + 跨盘符 relpath（第 19~22 组）"""
 
     # ---- 19. node_check_many 必须与逐段 node_check 等价（性能优化不许改变结论）----
-    # 背景：把逐段 `node --check` 改成一次进程批量校验，486 KB 页面的 check 从 63 s 降到 1 s。
+    # 背景：把逐段 `node --check` 改成一次进程批量校验，避免每个事件段各付一次 node 启动开销。
     # 但这个优化踩过两次坑，所以用「与权威路径逐项对照」把它钉住：
     #   ① `vm.Script` 按**脚本**编译，顶层 return 非法；而 `node --check <x.js>` 按 **CommonJS** 编译，合法
     #      ⇒ 误报 104 项（一个页面 16 → 120）。

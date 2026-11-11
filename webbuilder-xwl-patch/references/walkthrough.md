@@ -199,9 +199,9 @@ python <本skill目录>/scripts/xwl.py check wb/modules/<模块>/orderQuery.xwl 
 
 **预期**：每个文件 `-> OK`，末行 `=== 结果: ALL OK`。有 `[FAIL]` 就按第五章 FAQ 排查。
 
-> 大文件上先跑 `check --no-js` 快得多（486 KB 实测：全开约 1 s、`--no-js` 约 0.4 s；
-> 跨 5 个工程实测最大的 746 KB 也仍在 1 s 上下）。
-> 耗时构成与原因见 [`faq.md`](faq.md)「`check` 慢，或者本机根本没装 `node`？」。
+> 大文件上先跑 `check --no-js` 会跳过最重的 JS 校验；
+> 耗时构成与原因见 [`faq.md`](faq.md)「`check` 慢，或者本机根本没装 `node`？」，
+> 当前样本与耗时账本见 [`measured-data-skeleton.md`](measured-data-skeleton.md) §十。
 
 ---
 
