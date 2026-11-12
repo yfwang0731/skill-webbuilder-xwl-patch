@@ -14,6 +14,25 @@
 
 ---
 
+## [1.8.5] - 2026-11-12
+
+文档/示例/打包/发布流程修复与任务级成果物验收执行器（patch）：**无新子命令或参数**，不改 `xwl.py` 任何字节。
+
+① **FAQ 条数一致**：`references/faq.md` 首段「按四组归类」声明 **24 → 25 条**（实计 `^\*\*Q：` ＝ 25）；`scripts/selftest.py` 的「自称数字」判据 **新增行首锚 claim 形态** `(?m)^\*\*(\d+)\s*条按四组归类\*\*` 抓 `faq.md` 自身声明数、与实计比对，不等即红。双负例：声明数≠实计 → 红；行内非行首的 `**N 条按四组归类**` 不计入、不误红。
+
+② **LICENSE 归一 + 派生进包**：`git mv` 到**仓库根 `skill/LICENSE`**（唯一正本，仓库根导航加 `[LICENSE]` 行）；`webbuilder-xwl-patch/README.md`、`references/distribution.md` 引用改指根 `LICENSE` 并明示「SkillHub 包不随附该文件」。打包 `collect` 改为**从根 LICENSE 派生 `LICENSE.md` 进包**（写 zip 时即时读取、不落仓、不持久化；`DROP_RULES_VERSION` 1→2 使旧缓存失效），zip 内 `LICENSE.md` 字节 == 根 LICENSE 字节（逐字节）。`release/scripts/selftest.py` 的 LICENSE 断言**反向改**（`LICENSE.md` 在包内、无扩展名 `LICENSE` 仍被排除），并新增**缺件负例**（临时移走根 LICENSE → `collect`/`doctor`/`zip` 报「缺 LICENSE」缺件、rc=2，非静默）。
+
+③ **示例与 README 修复**：
+- wave3：`examples/README.md` 的压平示范由**破坏性单行 `python -c "re.sub(r'\\\r?\n',…)"`**（经 universal newline 会把整份 CRLF 改写成 LF、换行被破坏）改为**字节级安全脚本**（只删「反斜杠+换行」续行对、其余字节含 CRLF/LF 原样保留），并写明正当做法一律走 `xwl.py patch`/`edit`（⛔ 不硬塞单行正则、不绕过 xwl.py）；对 CRLF 源跑换行不被破坏、`diffguard` 仍精确抓压平。
+- wave2：`references/distribution.md` **删净 §八 工具速查整节**（不留指针）；速查表**归位** `README.md`「## 工具速查」（标题＝真表，移不复制）；README 风格统一（目录结构瘦身为纯树、`path`/`@itemId` 解释压缩、上手后 `>` 块合并），字节/LF **143 行 ≤150**（`--only docs` 的 3814 判定，阈值不抬）；⛔ 全仓除 CHANGELOG 外不再引用 `distribution.md §八`。
+- wave1/4：两条规则落 `references/workflow-notes-guards-maintenance.md` 与 `plans/40`（⛔ 不动 AGENTS.md）——**①「整块文档守卫必须真跑才算通过，函数级替代整块输出不构成通过证据」②红线「判据先于产出：改产出前必须先有可失败的判据」**。
+
+④ **`--changelog` 硬闸（防复发）**：`release/scripts/release.py` 与 `skillhub_publish.py` **两层都改为缺 `--changelog` 直接 fail**（作用域仅 `target` 含 skillhub 时生效，纯 github 不误拦），⛔ 无默认模板、无 `--allow-empty-changelog` 后门；`release/scripts/selftest.py` 新增缺值拒绝负例（fail 而非 note）与纯 github 不误拦正例。
+
+⑤ **任务级成果物验收执行器（ITEM-1205）**：落 `skill/tests/task_acceptance.py`（selftest 家族，**不进 scripts/、不进分发包**），产出**机器可读 JSON + 人读摘要**；验收关联按 `.xwl` 页面关系**最多递归一层**、只做**静态应检清单**（不启 Tomcat）；golden 夹具（脱敏样本 + 黄金应检清单，候选待验收审定）给**覆盖率/精确率**；**三负例**——零对象（空任务→未执行/不通过，不假绿）/缺基线（无 git→UNVERIFIED，非通过）/歧义定位（itemId 重名→AMBIGUOUS，非任选）。以三证证明不改使用面（顶层 + 15 子命令 `--help` 改前/改后 diff 全空、既定子集 rc 全部 0、未改 xwl.py 一字节）。
+
+> **更正 v1.8.4 在 SkillHub 的变更说明**：SkillHub 上 v1.8.4 曾以 “Initial release” 作为变更说明——该说明**不代表 v1.8.4 的真实内容**，且**历史已发布说明不可覆盖、不可改动**（平台侧已固化）。v1.8.4 的真实变更摘要为：**示例可复制即跑、现行面口径收敛、文档守卫补「照抄即执行」判据**（patch，无新子命令/参数，不改 `xwl.py`）—— 详见本文件 [`[1.8.4]`](#184---2026-11-11) 段。本更正**不重发 v1.8.4**、只在此登记事实，供读者对照。
+
 ## [1.8.4] - 2026-11-11
 
 示例可复制即跑、现行面口径收敛与文档守卫补「照抄即执行」判据（patch）：**无新子命令或参数**，不改 `xwl.py` 任何字节。

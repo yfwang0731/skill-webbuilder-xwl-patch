@@ -11,6 +11,7 @@
 | [`scripts/selftest.py`](scripts/selftest.py) | **开发自测入口**（只在源码树里跑；安装副本不含它） |
 | [`tests/baseline.json`](tests/baseline.json) | 自检基线（块名等） |
 | [`.github/workflows/selftest.yml`](.github/workflows/selftest.yml) | CI：自测 ＋ 安装布局校验 |
+| [`LICENSE`](LICENSE) | 许可（MIT）：仓库根正本 |
 
 ## 最小用法
 

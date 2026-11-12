@@ -15,6 +15,8 @@
 **没有平台专属封装**；两条渠道使用同一套技能内容，但 CLI 安装副本**可能不含 `metadata.json`** 等源码树文件，
 开发用的 `scripts/selftest.py`、`tests/` 也不在副本里（见 §五），不能无条件承诺逐文件相同。
 
+**`LICENSE` 的例外**：许可正本是**仓库根** `LICENSE`，不在技能运行目录内、安装副本不随附；SkillHub 包内由打包工具现场派生 `LICENSE.md` 进包，机制与原因见 `release/scripts/skillhub_publish.py` 的 `collect` 文档。
+
 > **WorkBuddy 只能走手工那一条**：CLI 的 agent 表里没有它 ⇒ 把目录放到
 > `~/.workbuddy/skills/<name>`（Windows 上即 `%USERPROFILE%\.workbuddy\skills\<name>`）。
 
@@ -105,23 +107,3 @@ python "$SKILL_ROOT/scripts/xwl.py" check "<业务工程>/wb/modules/<模块>/�
 
 > 这几条都是**当场可复算**的，不依赖任何随版本漂移的体量数字。本 skill **不提供** `--version` 子命令，
 > 也不另外提供 `__main__.py` 或包装入口 —— 认准 `scripts/xwl.py` 这一个文件即可。
-
-## 八、工具速查（子命令一句话作用）
-
-参数与各自的边界／警告见 [`../SKILL.md`](../SKILL.md) §4.1，本表只给一句话作用。
-
-| 子命令 | 干什么 |
-|---|---|
-| `new <out.xwl> --kind page\|sql [--from-json F]` | **从零生成**：内置设计器真实键序的骨架（页面 / SQL 载体）；默认拒绝覆盖已有文件 |
-| `patch <file> --ops ops.json` | **结构级编辑（默认方式）**：只给值/子树，按设计器算法重建整份文件 |
-| `folders <path> [--register]` | `folder.json`（设计器导航树索引）一致性检查（**只读**）；`--register` 才写（只接文件路径） |
-| `check <file...>` | 九项校验：格式五项 + 事件 JS `node --check` + **注册键重名分级** + **`configs` 值类型** + 加载链完整性（只提示）；任一 FAIL 返回非 0；**给了 `--controls` 时另校 `configs` 键与内联 `[js]`** |
-| `diffguard <path...>` | **相对 git 基线检测「多行内容被压平」**（`check` 查不出的那类静默损坏）；默认只告警，`--strict` 才阻塞 |
-| `itemids <file>` | **注册键重名报告（只读）**：分级 + 候选清单 + 建议改名；`--suggest` 出 ops 草稿 |
-| `paths <file>` | 列出 `sql` / `totalSql` / `serverScript` / `url` 四类字段的位置（含 `@itemId` 写法） |
-| `params <page.xwl>` | 核对「参数控件 → store → SQL」传参链路（标出 `out` / `params` 两条通路） |
-| `sqlrefs <file>` | 校验 SQL 片段里 `{#名字#}` 与 `serverScript` 是否自洽 |
-| `schema [<type>] --controls <…/controls.json>` | 查控件注册表：`--tree` 面板分组树、`--list` 控件 id、`--skeleton` 设计器同款骨架、`--json` 机器可读（`--list --json` 出数组）、`--observed` 语料**实测**用过的 `configs` 键＋频次 |
-| `expand <file>` | 单行 → 设计器同款多行（含语义等价比对） |
-| `edit <file> --old-file O --new-file N` | 文本级安全替换（**例外**手段） |
-| `dump` / `sql` / `events` | 解析后美化输出 / 抽 SQL / 导出事件 JS |

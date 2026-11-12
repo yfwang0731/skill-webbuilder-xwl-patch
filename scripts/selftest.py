@@ -3189,6 +3189,14 @@ def _docs_xfile_consistency(_S) -> None:
         _claims.append(("SKILL §八 FAQ 条数", int(_m.group(1)), _real["faq"]))
     for _m in re.finditer(r"faq\.md\s+#\s*(\d+)\s*条", _rm_txt):
         _claims.append(("README 的 FAQ 条数", int(_m.group(1)), _real["faq"]))
+    # faq.md 自身的「**N 条按四组归类**」声明（本文件第 5 行）—— 起因：`faq.md` 首段的
+    # 归类总数曾写「24 条」而正文实计 25 条，旧 17i 只核 SKILL「**25 条**高频问题」与
+    # README「faq.md # N 条」（README 该句常缺=惰性），**faq.md 自身这句无守卫** ⇒ 陈旧数不红。
+    # 行首锚 `(?m)^`：只认行首独立成句的声明，行内夹带的「见 **30 条按四组归类** 说明」不计入
+    # （否则负例(ii) 无法自洽）。实计侧见 `_real["faq"]`（`^\*\*Q：` 计数）。
+    for _m in re.finditer(r"(?m)^\*\*(\d+)\s*条按四组归类\*\*",
+                          _txt.get("references/faq.md", "")):
+        _claims.append(("FAQ 首段「按四组归类」条数", int(_m.group(1)), _real["faq"]))
     for _m in re.finditer(r"\*\*(\d+)\s*项\*\*清单", _sk_txt):
         _claims.append(("SKILL §九 清单项数", int(_m.group(1)), _real["ck"]))
     for _m in re.finditer(r"checklist\.md\s+#\s*(\d+)\s*项", _rm_txt):

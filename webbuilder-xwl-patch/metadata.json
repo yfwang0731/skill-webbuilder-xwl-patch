@@ -3,7 +3,7 @@
   "name_en": "webbuilder-xwl-patch",
   "displayName": "webbuilder-xwl-patch",
   "author": "yfwang0731",
-  "version": "1.8.4",
+  "version": "1.8.5",
   "schema_version": "1.0",
   "description": "WebBuilder（wb）平台 .xwl 定义文件的处理与安全编辑：结构级 patch（只给值 / 子树，工具按设计器自己的算法重建整份文件）+ 格式校验 + 相对 git 基线的压平检测。",
   "core_capabilities": [
@@ -162,6 +162,11 @@
   },
   "update_history": [
   {
+      "version": "1.8.5",
+      "date": "2026-11-12",
+      "summary": "文档/示例/打包/发布流程修复与 ITEM-1205 任务级成果物验收执行器（patch）：无新子命令或参数，不改 xwl.py 任何字节。① FAQ 条数 faq.md 声明 24→25（实计 ^**Q：=25），selftest 17i 新增行首锚 claim 形态抓 faq.md 自身声明并与实计比对，双负例（声明≠实计→红 / 行内非行首不计入不误红）。② LICENSE 归一：git mv 到仓库根 skill/LICENSE（唯一正本），README/根README/distribution 引用改指根 LICENSE 并明示 SkillHub 包不随附；打包 collect 改为从根 LICENSE 派生 LICENSE.md 进包（即时生成不落仓，zip 内字节==根 LICENSE），DROP_RULES_VERSION 1→2；release selftest 反向改 LICENSE 断言 + 缺件负例（缺根 LICENSE→rc=2 缺件非静默）。③ wave3 压平示范改为字节级安全脚本（只删续行对、保留 CRLF，对 CRLF 源换行不被破坏）；wave2 删净 distribution §八整节、工具速查表归位 README（移不复制、不留指针），README 风格统一至字节/LF 143 行≤150（3814 阈值不抬）；wave1/4 两条规则（整块文档守卫必须真跑 / 判据先于产出）落 workflow-notes-guards-maintenance 与 plans/40。④ --changelog 硬闸两层（release.py / skillhub_publish.py），作用域仅 target 含 skillhub，缺值 fail 无后门；CHANGELOG 1.8.5 段含更正 v1.8.4 说明。⑤ ITEM-1205 任务级成果物验收执行器落 skill/tests/（不进脚本/不分发），静态应检 + 页面关系一层递归 + 机器 JSON/人读摘要 + 覆盖率/精确率 + 三负例（零对象不假绿/缺基线未执行/歧义定位不任选），三证证不改使用面。"
+    },
+    {
       "version": "1.8.4",
       "date": "2026-11-11",
       "summary": "示例可复制即跑、现行面口径收敛与文档守卫补「照抄即执行」判据（patch）：无新子命令或参数，不改 xwl.py 任何字节。① 所有写命令围栏块把 <skill根>/<你的临时目录>/<本skill目录>/<样例文件名> 等照抄即挂的占位改为先设 SKILL_ROOT/TMP_DIR 变量再引用的可复制写法，给 bash 与 PowerShell 双版；examples/README.md 的 POSIX heredoc 改单行 python -c 双平台可跑。② 现行面（SKILL/README/references 的 distribution/faq/js-api/sql-fragments/walkthrough/workflow-notes-guards-maintenance）里会过期的语料规模数、大小数与占比改为形状描述+采集命令，注「历史口径见 CHANGELOG」；历史记录类不动。③ references/distribution.md 增「如何确认程序完整」、README 增简述：核心程序是单一 scripts/xwl.py、纯标准库、shebang 起、if __name__ 收尾；判断完整性看 --help 列全 15 子命令、py_compile 通过、check ALL OK；不加 --version/入口。④ scripts/selftest.py 的 docs 块补「照抄即执行」判据（并入既有 _check_prompt_cmds 同块，不改 --list-blocks）：脚本路径含尖括号占位即判红，$SKILL_ROOT/$env:SKILL_ROOT/绝对路径/相对 scripts/xwl.py/续行等正确写法判绿不误报；定向负例旧绿新红、阳性对照 PASS、命中数=注入数。"

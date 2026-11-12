@@ -130,14 +130,20 @@ python "$SKILL_ROOT/scripts/xwl.py" patch page.xwl \
     --ops "$SKILL_ROOT/examples/ops-add-button.json"
 git add -A && git commit -qm base
 
-# 手动把多行 JS 的续行符删掉（= "合并行"，静默语义损坏）—— 单行 python -c，双平台可跑
-# （newline='' 防止 Windows 把 LF 改写成 CRLF；只删「反斜杠+换行」这一对）
-python -c "import re,pathlib; p=pathlib.Path('page.xwl'); s=p.read_text(encoding='utf-8'); p.write_text(re.sub(r'\\\r?\n','',s),encoding='utf-8',newline='')"
+# 手动把多行 JS 的续行符删掉（= "合并行"，静默语义损坏）—— 只为演示 diffguard。
+# ✅ 字节级单行命令：只删「反斜杠+CRLF」/「反斜杠+LF」续行对（bytes([92,13,10]) / bytes([92,10])），
+#    其余字节（含 CRLF / LF）原样保留。命令里用 bytes([92,…]) 表示反斜杠 ⇒ 一个反斜杠都不出现，免疫 shell 吞噬。
+# ⛔ 不要用 `re.sub(r'\\\r?\n',…)`（universal newline 会把整份 CRLF 改写成 LF、换行被破坏），也不要用 heredoc（POSIX 可复制性差）。
+python -c "import pathlib;p=pathlib.Path('page.xwl');b=p.read_bytes();p.write_bytes(b.replace(bytes([92,13,10]),b'').replace(bytes([92,10]),b''))"
 
 python "$SKILL_ROOT/scripts/xwl.py" check page.xwl          # ← 九项全绿：格式校验查不出来
 python "$SKILL_ROOT/scripts/xwl.py" diffguard page.xwl      # ← [warn] 疑似压平，并给出被合并的基线行号
 python "$SKILL_ROOT/scripts/xwl.py" diffguard page.xwl --strict   # ← rc=1，可接进 CI
 ```
+
+> **正当做法（日常编辑一律走这条）**：改 `.xwl` 用 `xwl.py patch`（结构化重建、天然保持原有换行），
+> 或 `xwl.py edit`（文本级但只认候选可解析）；⛔ 不要手写正则 / 单行脚本去"压平或拼回"多行字符串
+> —— 那正是本节要演示的破坏方式，diffguard 就是为抓它而存在。本节的删续行只为**造坏例**演示。
 
 PowerShell：
 
@@ -147,8 +153,11 @@ Set-Location "$env:TMP_DIR\flatdemo"; git init -q
 python "$env:SKILL_ROOT/scripts/xwl.py" new page.xwl --kind page --title "示例页面"
 python "$env:SKILL_ROOT/scripts/xwl.py" patch page.xwl --ops "$env:SKILL_ROOT/examples/ops-add-button.json"
 git add -A; git commit -qm base
-# 手动把多行 JS 的续行符删掉（= "合并行"，静默语义损坏）—— 单行 python -c，双平台可跑
-python -c "import re,pathlib; p=pathlib.Path('page.xwl'); s=p.read_text(encoding='utf-8'); p.write_text(re.sub(r'\\\r?\n','',s),encoding='utf-8',newline='')"
+# 手动把多行 JS 的续行符删掉（= "合并行"，静默语义损坏）—— 只为演示 diffguard。
+# ✅ 字节级单行命令：只删「反斜杠+CRLF」/「反斜杠+LF」续行对（bytes([92,13,10]) / bytes([92,10])），
+#    其余字节（含 CRLF / LF）原样保留。命令里用 bytes([92,…]) 表示反斜杠 ⇒ 一个反斜杠都不出现，免疫 shell 吞噬。
+# ⛔ 不要用 `re.sub(r'\\\r?\n',…)`（universal newline 会把整份 CRLF 改写成 LF、换行被破坏），也不要用 heredoc。
+python -c "import pathlib;p=pathlib.Path('page.xwl');b=p.read_bytes();p.write_bytes(b.replace(bytes([92,13,10]),b'').replace(bytes([92,10]),b''))"
 python "$env:SKILL_ROOT/scripts/xwl.py" check page.xwl
 python "$env:SKILL_ROOT/scripts/xwl.py" diffguard page.xwl
 python "$env:SKILL_ROOT/scripts/xwl.py" diffguard page.xwl --strict

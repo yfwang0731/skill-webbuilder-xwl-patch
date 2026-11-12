@@ -1,0 +1,11 @@
+{
+  "_note": "ITEM-1205 黄金应检清单（候选，待验收审定）。stable 项不含 baseline（随环境变），baseline 由执行器按有无 git 单独判 PASS/UNVERIFIED。",
+  "expected_ids": [
+    "object:orderPage.xwl",
+    "object:orderQuery.xwl",
+    "sql-content:orderQuery.xwl",
+    "page-link:orderPage.xwl->orderQuery.xwl",
+    "itemid-unique:orderPage.xwl",
+    "itemid-unique:orderQuery.xwl"
+  ]
+}
