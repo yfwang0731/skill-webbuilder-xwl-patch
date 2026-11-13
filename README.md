@@ -11,6 +11,7 @@
 |---|---|
 | [`webbuilder-xwl-patch/`](webbuilder-xwl-patch/) | **技能本体（也是安装目录）**：入口 [`SKILL.md`](webbuilder-xwl-patch/SKILL.md)、使用者文档 [`README.md`](webbuilder-xwl-patch/README.md)、`references/`、`examples/`、`scripts/xwl.py` |
 | [`scripts/selftest.py`](scripts/selftest.py) | **开发自测入口**（只在源码树里跑；安装副本不含它） |
+| [`contracts/registry.json`](contracts/registry.json) | **契约登记表**：派生值绑定（ID → 派生函数＋序类型，不存值）与数据契约，由自测判据校验（源码树侧，不进包） |
 | [`tests/baseline.json`](tests/baseline.json) | 自检基线（块名等） |
 | [`.github/workflows/selftest.yml`](.github/workflows/selftest.yml) | CI：自测 ＋ 安装布局校验 |
 | [`LICENSE`](LICENSE) | 许可（MIT）：仓库根正本 |
