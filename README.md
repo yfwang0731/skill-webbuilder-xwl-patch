@@ -34,4 +34,3 @@ python webbuilder-xwl-patch/scripts/xwl.py --help
   [`webbuilder-xwl-patch/SKILL.md`](webbuilder-xwl-patch/SKILL.md) 与其 `references/` ——
   本文件只作仓库导航，不复制技能正文、不另立第二份说明。
 - 仓库根**不放 `SKILL.md`**：安装器会把仓库内容当技能目录，根上出现 `SKILL.md` 会改变安装语义。
-- 发布材料、计划、事项台账与验收记录在**工作区**维护，**不随本仓库分发**；本文件不提供指向仓库外的链接。
