@@ -2,7 +2,7 @@
 name: webbuilder-xwl-patch
 slug: skill-webbuilder-xwl-patch
 displayName: webbuilder-xwl-patch
-version: 1.8.5
+version: 1.8.6
 license: MIT
 metadata:
   category: development-tools
@@ -45,13 +45,13 @@ WebBuilder 的页面与查询定义都写在 `.xwl` 里。它**看起来像 JSON
 | **对象** | 仅 `.xwl` 文件本身：格式、编辑、校验、抽取。**不含**后端 Java、模块打包、`target/` 部署副本同步、数据库菜单注册（`WB_MENU`） |
 | **操作系统** | Windows 与 POSIX（含 macOS）均支持；路径分隔符与换行按各平台惯例处理，跨平台时注意检出/存储形态差异 |
 | **环境** | Python 3.9+，**纯标准库零依赖**；`node` 可选，只用于事件 JS 语法校验，找不到时自动降级为提示 |
-| **规模** | 可修改范围只受可加载文件与本地资源约束。**工具没有任何文件大小上限**，但**未验证**过 1 MB 以上的文件、或单文件事件段极多的情形。规模样本、采集口径与复算入口只在 [`references/measured-data-skeleton.md`](references/measured-data-skeleton.md) §十维护 |
+| **规模** | 可修改范围只受可加载文件与本地资源约束。**工具没有任何文件大小上限**，但**未验证**过 1 MB 以上的文件、或单文件事件段极多的情形。规模样本、采集口径与复算入口只在 `references/measured-data-skeleton.md` §十维护 |
 | **能改的前提** | 目标文件能被加载器解析（即 `check` 的 ④ 通过）。已经是坏文件的，先用 `edit` 做文本级修复 |
 
 > 上表「规模」是能力边界。样本规模、统计口径和复算方法只由
-> [`references/measured-data*.md`](references/measured-data.md) 维护；换工程要按同一方法自行复采。
+> `references/measured-data*.md` 维护；换工程要按同一方法自行复采。
 > 大文件上 `check` 为什么慢、怎么绕开 —— 见
-> [`references/faq.md`](references/faq.md)「`check` 慢，或者本机根本没装 `node`？」。
+> `references/faq.md`「`check` 慢，或者本机根本没装 `node`？」。
 
 ## 怎么用
 
@@ -123,16 +123,16 @@ WebBuilder 的页面与查询定义都写在 `.xwl` 里。它**看起来像 JSON
 | **独立页面** | 能由菜单 / `inframe` / 直接 URL 打开 | 一般 `title` + `roles` 齐备，`inframe` / `pageLink` 有值 |
 | **被引用的片段** | 不是给人直接打开的页面，而是被别的 xwl 用 `url: 'm?xwl=…'` 加载：store 数据源、子面板、动作片段、SQL 载体 | 被别处引用；典型命名如 `xxxSql/queryXxx`、`.../insert`、`.../delete`、`.../fileUpload` |
 
-**两类的格式规则与处置方式完全相同**，区别只在于：改片段时你要额外确认"谁在用它"。SQL 类片段（`dataprovider` + `serverScript` + `{#…#}` / `{?…?}` 占位符）的写法见 §2.7。引用规则见 [`references/js-api.md`](references/js-api.md)「附录：引用通路总表与代码位置」。
+**两类的格式规则与处置方式完全相同**，区别只在于：改片段时你要额外确认"谁在用它"。SQL 类片段（`dataprovider` + `serverScript` + `{#…#}` / `{?…?}` 占位符）的写法见 §2.7。引用规则见 `references/js-api.md`「附录：引用通路总表与代码位置」。
 
 ### 1.2 控件节点的标准形态
 
 **别凭印象拼节点字段。** 权威来源是设计器自带的控件注册表 `wb/system/controls.json`。
 两种键集（**键序固定** `configs, expanded, children, type`，有事件时末尾多 `events`）、
 `itemId` 的**唯一性**（工具寻址用 `@itemId`）与「少写 `expanded` / `children` 会**与设计器产物不一致**」见
-[`references/controls.md`](references/controls.md) §4.2 典型骨架；查单个控件用 `xwl.py schema --help`。
+`references/controls.md` §4.2 典型骨架；查单个控件用 `xwl.py schema --help`。
 
-注册键取 `normalName`（优先），否则取 `itemId`。**必须唯一**；重名且被事件 JS 引用会**静默取不到值**（`error`），未被引用为 `benign`。处置顺序：**先读父子关系判断真实目标 → 把候选交给用户选**，⛔ 不要"删一个"或"挑一个"；精确表达式与分类表见 [`references/faq.md`](references/faq.md) 附录，框架机制（`ComponentManager`／`unregister`）见 [`references/measured-data-addressing.md`](references/measured-data-addressing.md) 的 `7.5`。
+注册键取 `normalName`（优先），否则取 `itemId`。**必须唯一**；重名且被事件 JS 引用会**静默取不到值**（`error`），未被引用为 `benign`。处置顺序：**先读父子关系判断真实目标 → 把候选交给用户选**，⛔ 不要"删一个"或"挑一个"；精确表达式与分类表见 `references/faq.md` 附录，框架机制（`ComponentManager`／`unregister`）见 `references/measured-data-addressing.md` 的 `7.5`。
 
 ### 1.3 页面顶层骨架（7 把钥匙，键序固定）
 
@@ -150,9 +150,9 @@ hidden, children, roles, title, iconCls, inframe, pageLink
 > （工程里确实存在这种「缺钥匙」的文件，如 `dev/ide/add-file.xwl`）。
 > 所以**新建时不要手写顶层键** —— 用 `xwl.py new`（内置了这套键序，见**第三章第 0 步**）。
 > 7 把钥匙各自的**取值形态与实测分布**（按你的工程现采计数）见
-> [`references/measured-data-skeleton.md`](references/measured-data-skeleton.md) §九；历史口径见 `CHANGELOG.md`。
+> `references/measured-data-skeleton.md` §九；历史口径见 `CHANGELOG.md`。
 
-引用三种写法：`m?xwl=<模块相对路径，不带 .xwl>`／注册短名／外部 URL，**外部地址须 `inframe:true`**；写在不同位置（事件／store／列配置／服务端脚本／页面顶层），位置表见 [`references/js-api.md`](references/js-api.md)「附录：引用通路总表与代码位置」。
+引用三种写法：`m?xwl=<模块相对路径，不带 .xwl>`／注册短名／外部 URL，**外部地址须 `inframe:true`**；写在不同位置（事件／store／列配置／服务端脚本／页面顶层），位置表见 `references/js-api.md`「附录：引用通路总表与代码位置」。
 
 > **要补齐这类「缺钥匙」文件时**：`set` 一个**原本不存在**的顶层键就是**新建键**，该 op 要带 `"create": true`
 > （或命令行加 `--allow-new-key` 全局放行；不给则默认拒绝、rc=2 —— 示例与两条出路见 §3.1）。
@@ -162,7 +162,7 @@ hidden, children, roles, title, iconCls, inframe, pageLink
 ### 2.1 硬规则（多行源的磁盘形态）
 
 > 磁盘形态与 5 条硬规则（**无 BOM** / **换行一致** / **续行符 `\`** 后不能有空白 / **末行不加** `\` /
-> 值里的 `"` 写成 `\"`、JS 用**单引号**）见 [`references/faq.md`](references/faq.md) §一。
+> 值里的 `"` 写成 `\"`、JS 用**单引号**）见 `references/faq.md` §一。
 
 ### 2.2 单行源 vs 多行源（**决定性规则**）
 
@@ -171,7 +171,7 @@ hidden, children, roles, title, iconCls, inframe, pageLink
 **单行源**（整份紧凑一行）就在一行形态上改，**可以**转成多行、且能做到与设计器逐字节一致。
 
 > 上一句「单行源就在一行形态上改」只说**格式上允许** —— 用 `patch` 改单行源的结果**一定是多行**，
-> 想保住单行形态只能走 3.2 的 `edit`（完整说明见 [`references/faq.md`](references/faq.md) §四）。
+> 想保住单行形态只能走 3.2 的 `edit`（完整说明见 `references/faq.md` §四）。
 
 ### 2.3 多行源为什么绝不能压成一行
 
@@ -182,31 +182,31 @@ hidden, children, roles, title, iconCls, inframe, pageLink
 | **A 正确** | `\`+换行 → `\n`（两个字符的转义） | ✅ | 换行**保留**，语义等价 | — |
 | **B 错误** | `\`+换行 → **直接删除**（"合并行"） | ✅ **依然合法** | 换行**消失**，代码粘连 | ❌ 拦不住（走 `edit` 时会有 `[warn]`） |
 
-> 静默语义损坏的逐条后果、"绝不能压一行"与相对基线判据见 [references/anti-patterns.md](references/anti-patterns.md) 第 4 条。
+> 静默语义损坏的逐条后果、"绝不能压一行"与相对基线判据见 references/anti-patterns.md 第 4 条。
 
 ### 2.4 换行与展开：`expand` / `patch` / `edit` 的三个共同规则
 
 > **单行源可以转成多行，且能做到与设计器逐字节一致**（写回算法 = `IDE.updateModule` 四步，
 > 反编译复刻 + 回放校验）。三个共同规则：`--eol` 沿用·多数·**回退 LF**（三命令共用、不静默）；
 > `patch` **整份重建**（单行源改完一定是多行）；`edit` 按目标文件的实际换行**推断**、无换行时按 LF。
-> 详见 [`references/faq.md`](references/faq.md) §四，写回算法与规模占比见
-> [`references/measured-data-designer.md`](references/measured-data-designer.md) §五。
+> 详见 `references/faq.md` §四，写回算法与规模占比见
+> `references/measured-data-designer.md` §五。
 
 `auto` 怎么定：**只有一种**换行（全 CRLF / 全 LF / 全 CR）⇒ **沿用它**（含纯 CR）；**混用多种** ⇒ 只在
-**CRLF / LF** 取多数（等量取 CRLF）、**裸 CR 不参与投票**；**一个换行符都没有**（紧凑单行源正属此类，样本工程里确有这类文件）⇒ 无从"沿用"、**回退 LF**（计数与采集口径见 [`references/measured-data-designer.md`](references/measured-data-designer.md)，历史口径见 `CHANGELOG.md`）。
+**CRLF / LF** 取多数（等量取 CRLF）、**裸 CR 不参与投票**；**一个换行符都没有**（紧凑单行源正属此类，样本工程里确有这类文件）⇒ 无从"沿用"、**回退 LF**（计数与采集口径见 `references/measured-data-designer.md`，历史口径见 `CHANGELOG.md`）。
 
 ### 2.5 值里的「字面反斜杠 + n」为什么长得别扭
 
 > 「字面反斜杠 + n」的**机制**、**语义无损**（与原文件**逐字节相同**）与**默认 / `--safe`** 的取舍
 > （**按"这个文件给谁看"决定**：要提交用默认、只人读用 `--safe`）见
-> [`references/measured-data-designer.md`](references/measured-data-designer.md) §5.2；反例与替代（人读用 `xwl.py sql` / `events`）见
-> [`references/anti-patterns.md`](references/anti-patterns.md) 第 20 条。
+> `references/measured-data-designer.md` §5.2；反例与替代（人读用 `xwl.py sql` / `events`）见
+> `references/anti-patterns.md` 第 20 条。
 
 ### 2.6 压平检测：`diffguard`（相对 git 基线）
 
 > `diffguard` 的**判据**（精确拼接 / 最长行粗筛 / 相似度档）、漏报面、只认新发生合并的两道闸
 > （基线变更行对齐 ＋ 工作区新行）、跳过与退出码、成本与 `--rev` 用法见
-> [`references/faq.md`](references/faq.md) §三 与 [`references/workflow-notes-guards.md`](references/workflow-notes-guards.md) §二③；
+> `references/faq.md` §三 与 `references/workflow-notes-guards.md` §二③；
 > **它只在 git 仓库里有意义**，且**只扫改动过的文件**，别对整个 `wb/` 跑。提交前该跑一次，见**第三章第 5 步**。
 
 ### 2.7 SQL 载体的两级结构
@@ -219,7 +219,7 @@ hidden, children, roles, title, iconCls, inframe, pageLink
    └─ type="dataprovider"  configs{ itemId, sql, totalSql?, … }  ← 执行 SQL、出数据
 ```
 
-`serverScript` 只产**条件片段**（`{#x#}` 是**文本替换**，⛔ 别在 `dataprovider` 再写一遍完整 SELECT），其余见 [`references/sql-fragments.md`](references/sql-fragments.md)。`params --upstream` **默认关**：开时单根全扫、多两段分组；上游候选不加入已证明供给，不能抵消本页缺参。退出码按默认/strict 为：无问题 `0/0`、确缺参或确悬空 `0/1`、读取失败 `2/2`、读取失败与内容失败并存 `2/1`、仅未核对 `0/2`。strict 为 `1` 时读取未完成仍并列报告；未定位模块根明确提示跳过。零成本与那条 `[note]` 见 [`references/faq.md`](references/faq.md)，口径见 [`references/measured-data-criteria.md`](references/measured-data-criteria.md) 的 `11.3`／`11.4`。
+`serverScript` 只产**条件片段**（`{#x#}` 是**文本替换**，⛔ 别在 `dataprovider` 再写一遍完整 SELECT），其余见 `references/sql-fragments.md`。`params --upstream` **默认关**：开时单根全扫、多两段分组；上游候选不加入已证明供给，不能抵消本页缺参。退出码按默认/strict 为：无问题 `0/0`、确缺参或确悬空 `0/1`、读取失败 `2/2`、读取失败与内容失败并存 `2/1`、仅未核对 `0/2`。strict 为 `1` 时读取未完成仍并列报告；未定位模块根明确提示跳过。零成本与那条 `[note]` 见 `references/faq.md`，口径见 `references/measured-data-criteria.md` 的 `11.3`／`11.4`。
 
 ## 三、处理流程
 
@@ -228,7 +228,7 @@ hidden, children, roles, title, iconCls, inframe, pageLink
 
 **改已有文件从第 1 步起；从零造新文件先走第 0 步。**
 
-> **转写（HTML → xwl）的决策归属**：skill 直接拍三件**默认做法** —— ① 不可见参数 ⇒ 用其**语义类型**的控件（`text` / `combo` / `button`）＋ `configs.hidden:"true"` 属性（⛔ **不是** `type:"hidden"`）；② 列表分页 ⇒ **不填 `pageSize`**；③ 必填校验 ⇒ **命令式**写进触发按钮的 `click`。只**回问两件**：真实后台取数（表名 / 字段 / 接口）与页面标题 / 菜单名。产物落点（模块路径 / 页面名）**既不预设、也不回问**，留待使用时提供。⚠️ **同名不同型**：页面**顶层** `hidden` 是 **bool**，控件 **`configs` 级** `hidden` 是**字符串**。详见 [`references/transcription-defaults.md`](references/transcription-defaults.md)。
+> **转写（HTML → xwl）的决策归属**：skill 直接拍三件**默认做法** —— ① 不可见参数 ⇒ 用其**语义类型**的控件（`text` / `combo` / `button`）＋ `configs.hidden:"true"` 属性（⛔ **不是** `type:"hidden"`）；② 列表分页 ⇒ **不填 `pageSize`**；③ 必填校验 ⇒ **命令式**写进触发按钮的 `click`。只**回问两件**：真实后台取数（表名 / 字段 / 接口）与页面标题 / 菜单名。产物落点（模块路径 / 页面名）**既不预设、也不回问**，留待使用时提供。⚠️ **同名不同型**：页面**顶层** `hidden` 是 **bool**，控件 **`configs` 级** `hidden` 是**字符串**。详见 `references/transcription-defaults.md`。
 
 ### 第 0 步 · 新建文件
 
@@ -248,7 +248,7 @@ PowerShell 版把 `export SKILL_ROOT=…` 换成 `$env:SKILL_ROOT = "…";`，�
 - **顶层键不用管** —— 手写时漏掉 `inframe` / `pageLink`，`check` 照样 ALL OK，问题会被静默吞掉；
 - **也不要用 `cp` 别的文件再整树重写** —— 种子是**继承式**的：它顶层没被显式覆盖的键会
   **静默残留**（种子的 `roles:{"demo":1}` 会跟着进新页面）。实测证据见
-  [`references/measured-data-skeleton.md`](references/measured-data-skeleton.md) §九；
+  `references/measured-data-skeleton.md` §九；
 - 默认**拒绝覆盖已存在文件**（要覆盖得显式 `--force`；改已有文件应该用 `patch`）；
 - `--from-json <obj.json>` 可以喂一个自己拼的顶层对象，它会**按设计器键序重排并补齐缺失的页面钥匙**
   （补齐了哪些会明确回报），且不覆盖你给的 `title` / `roles`。
@@ -261,8 +261,8 @@ PowerShell 版把 `export SKILL_ROOT=…` 换成 `$env:SKILL_ROOT = "…";`，�
 | ② | SQL 载体验引用自洽 / 页面验传参链路 | `xwl.py sqlrefs` / `xwl.py params` |
 | ③ | **在设计器里打开一次**（真正的冒烟） | `check` 只证"格式能加载"，不证"页面能用" |
 
-> `folder.json` 的机制与前提（**不登记就看不到**、`--register` **只认文件路径**、缺 `folder.json` 时**不替你创建**）见 [references/faq.md](references/faq.md) §四。
-> 想看一次**完整实操**（从零造页面 + SQL 载体，含 `folder.json` 登记与设计器冒烟）见 [references/walkthrough.md](references/walkthrough.md)。
+> `folder.json` 的机制与前提（**不登记就看不到**、`--register` **只认文件路径**、缺 `folder.json` 时**不替你创建**）见 references/faq.md §四。
+> 想看一次**完整实操**（从零造页面 + SQL 载体，含 `folder.json` 登记与设计器冒烟）见 references/walkthrough.md。
 
 ### 第 1 步 · 定位文件
 
@@ -289,7 +289,7 @@ PowerShell 版把 `export SKILL_ROOT=…` 换成 `$env:SKILL_ROOT = "…";`，�
 
 #### 3.1 结构级 `patch`（默认方式）
 
-`ops.json` 是操作数组，`path` 是「键 / 数组下标」的列表。**节点请用设计器的标准形态**（见 [`references/controls.md`](references/controls.md) §4.2 典型骨架）：
+`ops.json` 是操作数组，`path` 是「键 / 数组下标」的列表。**节点请用设计器的标准形态**（见 `references/controls.md` §4.2 典型骨架）：
 
 > `ops.json` 的五种 op（`set` / `insertKey` / `insert` / `append` / `delete`）示例见 `xwl.py patch --help`（`epilog`）。
 
@@ -351,7 +351,7 @@ python "$SKILL_ROOT/scripts/xwl.py" patch <file.xwl> --ops ops.json --backup
    同一个数组上先 `insert` 再 `delete`，下标要按前一步之后的数组算。
 2. **事件 JS / SQL / serverScript 都写普通多行字符串**（`\n` 照常写）—— 序列化器会按设计器规则
    转成续行形态，你不用管。JS 里请用**单引号**。
-> 重排的"顺带规整"与 diff 最小化口径见 [references/measured-data-designer.md](references/measured-data-designer.md) §五；想压小 diff 改用 3.2 的 `edit`（语义相同、只含你改的那一处）。
+> 重排的"顺带规整"与 diff 最小化口径见 references/measured-data-designer.md §五；想压小 diff 改用 3.2 的 `edit`（语义相同、只含你改的那一处）。
 
 > 改 **SQL / serverScript** 时，`path` 用 `["@dataprovider","configs","sql"]` 这类写法 —— 见 §2.7。
 
@@ -371,9 +371,9 @@ python "$SKILL_ROOT/scripts/xwl.py" edit <file.xwl> --old-file old.txt --new-fil
 
 ### 第 4 步 · 格式校验（**改完必跑**）
 
-`check` 只做静态、文件级校验，不证页面可用；改完必跑，逐项判据与命令见 [references/faq.md](references/faq.md)「附录：格式校验与页面交付验收」。
+`check` 只做静态、文件级校验，不证页面可用；改完必跑，逐项判据与命令见 references/faq.md「附录：格式校验与页面交付验收」。
 页面类交付须过四道验收：`check`、`check --controls`、设计器打开、人工看布局交互；有库时条件追加连库实跑 SQL。
-完整的 ①–⑩ 分工、写盘后自动校验边界、回退与脚本两坑一并在该附录，布局判据见 [references/layout.md](references/layout.md)。
+完整的 ①–⑩ 分工、写盘后自动校验边界、回退与脚本两坑一并在该附录，布局判据见 references/layout.md。
 
 ### 第 5 步 · 提交前扫一遍（`diffguard`。**只在 git 仓库里有意义**）
 
@@ -386,7 +386,7 @@ python "$SKILL_ROOT/scripts/xwl.py" diffguard <改过的文件或目录>        
 python "$SKILL_ROOT/scripts/xwl.py" diffguard <改过的文件或目录> --strict    # CI / pre-commit：让它阻塞
 ```
 
-- **判据、已知边界与退出码都在 [`references/faq.md`](references/faq.md) §三** —— 这里不重复。
+- **判据、已知边界与退出码都在 `references/faq.md` §三** —— 这里不重复。
 - **没有 git 也没关系**：这一项以 `[note]` 跳过，前四步不受影响。
 - CI / pre-commit 里用 `--strict`：疑似优先 `rc=1`；仅检查未完成或全部跳过 `rc=2`；部分跳过只记 `[note]`。给它的路径**尽量只列改过的文件**，
   别每次都把整个 `wb/` 拖一遍（大工程上万个 xwl，没必要）。
@@ -433,7 +433,7 @@ python "$SKILL_ROOT/scripts/xwl.py" diffguard <改过的文件或目录> --stric
 
 > **原则：判定变严要喧哗、放松要留痕** —— 收紧必须让调用方**当场**看得见（`[FAIL]` / rc≠0）；
 > 放松必须留一条**可查的预告行**（`[note]`），不能悄悄改掉默认行为。
-> 退出码与行首标记（`[warn]` **不影响退出码**，"1 与 2"**不是严格二分**）见 [references/faq.md](references/faq.md) §四。
+> 退出码与行首标记（`[warn]` **不影响退出码**，"1 与 2"**不是严格二分**）见 references/faq.md §四。
 
 ### 4.3 环境依赖与自检
 
@@ -443,16 +443,16 @@ python "$SKILL_ROOT/scripts/xwl.py" diffguard <改过的文件或目录> --stric
 
 ## 五、常见问题（FAQ）
 
-**25 条**高频问题在 [`references/faq.md`](references/faq.md)，按四组归类：① 格式与解析 / ② 命名与引用 /
+**25 条**高频问题在 `references/faq.md`，按四组归类：① 格式与解析 / ② 命名与引用 /
 ③ 能不能这么改 / ④ 命令行为（设计器看不到新文件、SQL 抽取报 `1064`、`check` 慢或没装 `node`、脚本 / CI 怎么判断成败等）。
 
 > 出问题**第一站是那份 FAQ**（按症状查）；**动手前**想避开已知的坑，看
-> [`references/anti-patterns.md`](references/anti-patterns.md)。
+> `references/anti-patterns.md`。
 
 ## 六、改完的自检清单
 
-**30 项**清单（改已有文件 24 项 + 新建文件 6 项）在 [`references/checklist.md`](references/checklist.md) ——
-交活前逐条过一遍。按主题分了七组，**与 [`references/anti-patterns.md`](references/anti-patterns.md) 的分组对齐**（七组 ↔ 反模式组的对照表在 [`references/checklist.md`](references/checklist.md) 开头）。
+**30 项**清单（改已有文件 24 项 + 新建文件 6 项）在 `references/checklist.md` ——
+交活前逐条过一遍。按主题分了七组，**与 `references/anti-patterns.md` 的分组对齐**（七组 ↔ 反模式组的对照表在 `references/checklist.md` 开头）。
 
 > 其中最容易跳过、后果最重的三条：① 多行源**绝不能**压成一行（改完用 `diffguard` 扫一遍，
 > 这是唯一能自动发现它的手段）；② 真跑 `patch` 必须带 `--backup`；③ 新建文件必须在**设计器里打开过一次**

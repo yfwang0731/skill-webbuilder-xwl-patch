@@ -140,4 +140,4 @@ webbuilder-xwl-patch/
   可用 `--node <path>` 或环境变量 `NODE_BIN` 指定；
 - 用 `npx skills` 装／更新 ⇒ **Node ＋ npm**，这条**不是可选**。
 
-MIT，见[仓库根 `LICENSE`](../LICENSE)。
+MIT 许可；许可全文随包在 `LICENSE.md`。

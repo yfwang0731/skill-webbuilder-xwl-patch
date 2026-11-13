@@ -871,6 +871,7 @@ def _chron_exempt(root):
     """
     _ex = set()
     _ex.add("CHANGELOG.md")
+    _ex.add("CHANGELOG-archive.md")
     _ex.add("metadata.json")
     _ex.update(_authority_files(root))
     return _ex
@@ -957,6 +958,16 @@ def _doc_guard_block_base():
 
 
 _DOC_GUARD_BLOCK_BASE = _doc_guard_block_base()
+
+
+def _gate_note(_msg: str) -> None:
+    """**无门禁效力**的提示统一走这里：写 stderr，不进门禁 stdout、不进 rc。
+
+    起因（§七 / §4.7）：观察期 `note` 混在门禁 stdout 里，会让"全绿输出"读起来像
+    有判定、实际不进 rc ⇒ 语义被噪声稀释。凡"只提示、不阻断、不进 rc"的提示一律经本函数
+    走 stderr；门禁 stdout 只留 `[ok]`／`[FAIL]`／块结论等**有门禁效力**的输出。
+    """
+    print("[note] " + _msg, file=sys.stderr)
 
 
 def _blk_declared(_k, _txt) -> bool:
@@ -1417,6 +1428,8 @@ def _measurement_tokens(rel, text):
     """在给定文本里找三类禁写实测数字；返回 `(行号, 类别, token, 原行)`。"""
     _rel = rel.replace("\\", "/")
     if _rel == "webbuilder-xwl-patch/CHANGELOG.md":
+        return []
+    if _rel == "webbuilder-xwl-patch/CHANGELOG-archive.md":
         return []
     if _rel == "tests/baseline.json":
         return []
@@ -2897,6 +2910,90 @@ def _doc_guard_root_readme() -> list:
     return fail
 
 
+def _read_doc_chars(root, rel):
+    """读文档字符数（＝ `wc -m` 口径）：返回 `(chars, None)`；读不出 `(None, exc)`。
+
+    B1 迁入：`17j-4` 篇幅上限的读字符数助手（原 inline 于 `_docs_layers_and_distribution`），
+    现作为 `contract_scanner.guard_length_caps` 的注入依赖。
+    """
+    try:
+        return len(io.open(os.path.join(root, rel), encoding="utf-8", newline="").read()), None
+    except (OSError, UnicodeDecodeError) as _exc:   # UnicodeDecodeError 是 ValueError 子类 ⇒ 必须并列
+        return None, _exc
+
+
+def _load_contract_scanner():
+    """按需加载 `skill/tests/contract_scanner.py`（与 `_contract_scan_fails` 同路径；失败 ⇒ `None`）。
+
+    B1 迁入：17b/17l/17r/17j-4 的判定逻辑已物理迁入该模块，本文件的对应段函数改为调用其函数。
+    模块级缓存到 `sys.modules`；加载失败返回 `None`，调用方**判红**（不算通过），与 M3 接入门一致。
+    """
+    name = "xwl_contract_scanner"
+    mod = sys.modules.get(name)
+    if mod is not None:
+        return mod
+    tests_dir = os.path.join(os.path.dirname(HERE), "tests")
+    path = os.path.join(tests_dir, "contract_scanner.py")
+    try:
+        import importlib.util as _ilu
+        spec = _ilu.spec_from_file_location(name, path)
+        mod = _ilu.module_from_spec(spec)
+        sys.modules[name] = mod
+        spec.loader.exec_module(mod)
+        return mod
+    except Exception:  # noqa: BLE001
+        return None
+
+
+def _contract_scan_fails(repo_root):
+    """M3 契约扫描/校验接入门禁（§7 / B2）：把「未绑定 / 漂移 / 待登记 + 4.7 十六条」并入判定。
+
+    起因（B2）：独立脚本 `contract_scanner.py` / `contract_validator.py` 此前只报告不判红，
+    `--require-all --profile package` 的 rc 因此不反映契约判定。本函数把两者并入 docs 块的
+    `doc_fail`（进而进 rc）：任一违规即红。
+
+    面与门控：
+      - 仅当 `<repo>/skill/contracts/registry.json` 存在时执行（契约登记表不进分发包 ⇒
+        隔离安装/分发解包时无此文件，属**不适用**，走 `_gate_note`，不判红）。
+      - `repo_root` = `SKILL_ROOT` 的父级（扫描器/校验器按工作区根取 `skill/…`、`ledger/…`）。
+    """
+    reg_rel = "skill/contracts/registry.json"
+    reg_path = os.path.join(repo_root, reg_rel.replace("/", os.sep))
+    if not os.path.isfile(reg_path):
+        _gate_note("契约扫描：无 skill/contracts/registry.json（非工作区/分发面）—— 本项不适用")
+        return []
+    import importlib.util as _ilu
+    out = []
+
+    def _load_mod(name, path):
+        mod = sys.modules.get(name)
+        if mod is None:
+            spec = _ilu.spec_from_file_location(name, path)
+            mod = _ilu.module_from_spec(spec)
+            sys.modules[name] = mod
+            spec.loader.exec_module(mod)
+        return mod
+
+    tests_dir = os.path.join(os.path.dirname(HERE), "tests")
+    try:
+        cs = _load_mod("xwl_contract_scanner", os.path.join(tests_dir, "contract_scanner.py"))
+        for x in cs.check_scan(repo_root, cs._load_registry(repo_root)):
+            out.append("契约扫描：" + x)
+    except Exception as _exc:  # noqa
+        out.append("契约扫描跑不起来（%s: %s）—— 报错，不算通过" % (type(_exc).__name__, _exc))
+    try:
+        cv = _load_mod("xwl_contract_validator", os.path.join(tests_dir, "contract_validator.py"))
+        res, _ = cv.run_all(repo_root)
+        for jid, vs, st in res:
+            if st == "SKIP":
+                continue  # 域不适用（如 skill-only 树缺 workspace 数据）⇒ 不判红
+            for x in vs:
+                out.append("契约校验[%s]：%s" % (jid, x))
+    except Exception as _exc:  # noqa
+        out.append("契约校验跑不起来（%s: %s）—— 报错，不算通过" % (type(_exc).__name__, _exc))
+    return out
+
+
 @_cap
 def _check_docs(tmp, node, failures, write) -> None:
     """文档一致性守卫（跨文件）：重复表格 / 引用可解析 / 格式 / 自称数字 / 索引与节号（第 17~18 组）"""
@@ -2921,6 +3018,10 @@ def _check_docs(tmp, node, failures, write) -> None:
     _docs_layers_and_distribution(_S)
     # 契约段必须在尾段**之前**：尾段把 `doc_fail` 并进 `failures`，之后再追加就落不到 rc 上。
     _docs_contract(_S)
+    # M3 契约扫描/校验接入（B2）：未绑定/漂移/待登记 + 4.7 十六条并入 doc_fail ⇒ 进 rc。
+    # repo_root = SKILL_ROOT 的上两级（SKILL_ROOT=<repo>/webbuilder-xwl-patch）。分发面无
+    # skill/contracts 时 _contract_scan_fails 走 _gate_note 不适用。
+    _S["doc_fail"].extend(_contract_scan_fails(os.path.dirname(os.path.dirname(SKILL_ROOT))))
     _docs_tail_scaffold(_S)
 
 
@@ -2961,14 +3062,12 @@ def _docs_xfile_consistency(_S) -> None:
     # 17b **任意两份文档**之间不得有逐字重复的表格行（同一张表不该在两处各写一遍）。
     #     原来只比 README↔SKILL —— 实测 SKILL↔faq 也会重复（退出码表就是这么漏掉的）。
     #     起因：只比 README↔SKILL 会漏掉其余文档对之间的重复（退出码表就因 SKILL↔faq 重复而漏检）—— 不扩到任意两文档，同一张表两处各写一遍发现不了。
-    # 有界下沉：`_trows`（纯助手）已移出函数体 ⇒ 见模块级同名函数。
-    _names = [k for k in docs if k != "CHANGELOG.md"]
-    for _i in range(len(_names)):
-        for _j in range(_i + 1, len(_names)):
-            _dup = _trows(docs[_names[_i]]) & _trows(docs[_names[_j]])
-            if _dup:
-                doc_fail.append("%s 与 %s 有 %d 行表格逐字重复（同一张表别写两处）：%s"
-                                % (_names[_i], _names[_j], len(_dup), sorted(_dup)[0][:60]))
+    # B1 迁入：判定逻辑已迁入 `contract_scanner.guard_dup_table_rows`（`_trows` 由本文件注入保单一真源）。
+    _cs_17b = _load_contract_scanner()
+    if _cs_17b is None:
+        doc_fail.append("17b 表格重复守卫跑不起来：contract_scanner 加载失败 —— 报错，不算通过")
+    else:
+        doc_fail.extend(_cs_17b.guard_dup_table_rows(docs, trows=_trows))
 
     # 17c 「§N.M」/「见 N.M」引用必须可解析 —— **本文件与跨文件都查**。
     #     原来含 `.md` 的行整行跳过 ⇒ 跨文件引用无人管：把 §五/§四 外移时漏掉两处
@@ -3276,28 +3375,35 @@ def _hist_span_scan(text):
 
 
 def _doc_guard_hist_span_residue(root: str) -> list:
-    """DIST-HIST-SPAN：CHANGELOG 全文 ＋ `metadata.update_history[*].summary` 的围栏感知残骸检查。
+    """DIST-HIST-SPAN：历史面全文（`CHANGELOG.md` ＋ 归档冻结件 `CHANGELOG-archive.md`）
+    ＋ `metadata.update_history[*].summary` 的围栏感知残骸检查。
 
-    只看**围栏外**、反引号 run 长度恰为 2 的 run；白名单见上（内容锚定）。残骸 run ⇒ 判红并给行例；
-    白名单命中数与 `_HIST_LEGAL_RUNS` 不符也判红（新增合法 span 时须同步白名单与自校验数）。
+    只看**围栏外**、反引号 run 长度恰为 2 的 run；白名单见上（内容锚定）。
+    **legal 计数按件从内容派生**（根治方案 §6：废硬编码 8）——活层窗口外旧段迁入归档件后，
+    两个文件的合法 span 分布会变，写死单文件的常量必误报；判据只看「残骸 run 数＝总数−合法数＝0」，
+    不再与固定常量比对（残骸数才是判定语义）。缺 CHANGELOG.md 判红；归档件不存在时按「无旧段」跳过。
     """
     problems: list = []
-    cl_path = os.path.join(root, "CHANGELOG.md")
-    try:
-        with open(cl_path, encoding="utf-8", newline="") as f:
-            cl = f.read()
-    except OSError as exc:
-        return ["DIST-HIST-SPAN：CHANGELOG.md 读不出（%s）" % exc]
-    total, legal, samples = _hist_span_scan(cl)
-    if legal != _HIST_LEGAL_RUNS["CHANGELOG"]:
-        problems.append(
-            "DIST-HIST-SPAN：CHANGELOG.md 白名单命中 %d 个 run（自校验应为 %d）—— "
-            "新增/删除合法双反引号 span 时须同步白名单与自校验数"
-            % (legal, _HIST_LEGAL_RUNS["CHANGELOG"]))
-    if total - legal:
-        problems.append(
-            "DIST-HIST-SPAN：CHANGELOG.md 有 %d 个空代码 span 残骸 run（围栏外 run=2 总数 %d − "
-            "白名单 %d）；行例：%r" % (total - legal, total, legal, samples[:3]))
+    # 历史面按件：CHANGELOG.md 必在；CHANGELOG-archive.md 为归档冻结件（活层窗口外的旧版本段）。
+    hist_files = [("CHANGELOG.md", True), ("CHANGELOG-archive.md", False)]
+    for _rel, _required in hist_files:
+        _p = os.path.join(root, _rel)
+        if not os.path.exists(_p):
+            if _required:
+                problems.append("DIST-HIST-SPAN：%s 读不出（文件不存在）" % _rel)
+            continue
+        try:
+            with open(_p, encoding="utf-8", newline="") as f:
+                _txt = f.read()
+        except OSError as exc:
+            problems.append("DIST-HIST-SPAN：%s 读不出（%s）" % (_rel, exc))
+            continue
+        total, legal, samples = _hist_span_scan(_txt)
+        # legal 按件从内容派生（不再与硬编码常量比对）；判据＝残骸 run 数为 0。
+        if total - legal:
+            problems.append(
+                "DIST-HIST-SPAN：%s 有 %d 个空代码 span 残骸 run（围栏外 run=2 总数 %d − "
+                "白名单 %d）；行例：%r" % (_rel, total - legal, total, legal, samples[:3]))
     md_path = os.path.join(root, "metadata.json")
     try:
         with open(md_path, encoding="utf-8-sig") as f:
@@ -3314,10 +3420,6 @@ def _doc_guard_hist_span_residue(root: str) -> list:
         mtotal += t
         mlegal += lg
         msamp += [("summary.version=%s" % h.get("version"), c[1]) for c in sp[:2]]
-    if mlegal != _HIST_LEGAL_RUNS["metadata"]:
-        problems.append(
-            "DIST-HIST-SPAN：metadata.update_history[*].summary 白名单命中 %d 个 run（自校验应为 %d）"
-            % (mlegal, _HIST_LEGAL_RUNS["metadata"]))
     if mtotal - mlegal:
         problems.append(
             "DIST-HIST-SPAN：metadata.update_history[*].summary 有 %d 个空代码 span 残骸 run；例：%r"
@@ -3523,7 +3625,7 @@ def _docs_numbers_and_tables(_S) -> None:
                     pass
                 _idn_cand = sorted(_idn_own - _idn_pool)
                 if _idn_cand:
-                    print("[note] 17x-note 交付物标识一致性：最新版 summary 出现 %d 个别处没有的标识 %s"
+                    _gate_note("17x-note 交付物标识一致性：最新版 summary 出现 %d 个别处没有的标识 %s"
                           " ⇒ 可能是包内无法解析的内部标号，须人工确认（不进 rc）"
                           % (len(_idn_cand), "、".join(_idn_cand)))
             # ⭐ 版本三处机械对账：CHANGELOG 首段 ↔ metadata.version ↔ update_history[0]
@@ -3793,51 +3895,19 @@ def _docs_layers_and_distribution(_S) -> None:
     #       起因②：改阈值**必须走版本位 ＋ 写明起因**（防"顺手抬上限"）。
     #       起因③：**它证明不了"本次新增没让它涨"**（**跨版本**属性、单树判不了）；且**不为它引 git 历史**
     #              （多一条 `git ls-files` 门控守卫 ⇒ **非 git 时红** ⇒ zip 假报警，与既有方向冲突）。
-    _SK_HARD, _SK_SOFT, _SK_GOAL = 32000, 28000, 12000
-    try:
-        # ⚠️ 直接读文件取字符数（＝ `wc -m` 的口径）；不从 `docs` 的行数折算 —— 那正是要摆脱的旧尺子。
-        _sk_chars = len(io.open(os.path.join(root, "SKILL.md"), encoding="utf-8",
-                                newline="").read())
-    except (OSError, UnicodeDecodeError) as _sk_exc:   # UnicodeDecodeError 是 ValueError 子类 ⇒ 必须并列
-        _sk_chars = None
-        doc_fail.append("篇幅上限：读不出 SKILL.md（%s）—— 报错，不算通过" % _sk_exc)
-    if _sk_chars is not None:
-        if _sk_chars > _SK_HARD:
-            doc_fail.append("SKILL.md 已 %d 字符，超过硬上限 %d 字符"
-                            "（新增内容请考虑下沉到 references/）" % (_sk_chars, _SK_HARD))
-        elif _sk_chars > _SK_SOFT:
-            try:
-                _rf = sorted(f for f in os.listdir(os.path.join(root, "references")) if f.endswith(".md"))
-                _rl = sum(len(open(os.path.join(root, "references", f), encoding="utf-8").read().splitlines()) for f in _rf)
-                _stat = ("`references/` 现有 %d 份、合计 %d 行；`SKILL.md` 里已有 %d 处指针可挂"
-                         % (len(_rf), _rl, sum("references/" in _l for _l in docs.get("SKILL.md", []))))
-            except (OSError, UnicodeDecodeError):   # UnicodeDecodeError 是 ValueError 子类、非 OSError ⇒ 必须并列
-                _stat = "统计不出（references/ 不可读）"
-            doc_fail.append("SKILL.md %d 字符已超软上限 %d（硬上限 %d）⇒ **新增内容默认走 "
-                            "`references/`**（%s）。" % (_sk_chars, _SK_SOFT, _SK_HARD, _stat))
-        print("[note] SKILL.md %d 字符（硬上限 %d／软上限 %d；远期目标 %d，尚差 %d）"
-              % (_sk_chars, _SK_HARD, _SK_SOFT, _SK_GOAL, max(0, _sk_chars - _SK_GOAL)))
-    # `README.md` 仍按**行数**（未换单位的理由见上）
-    _rd_n = len(docs.get("README.md", []))
-    if _rd_n > 150:
-        doc_fail.append("README.md 已 %d 行，超过 150 行上限（新增内容请考虑下沉到 references/）"
-                        % _rd_n)
-
-    #     同类护栏（篇幅族）第 3 小条：`CHANGELOG.md` **文首区**（首个 `## [` 之前）的非空行 ≤ 14。
-    #       起因：文首区该只放**使用者向**内容（介绍段 ＋ 数字说明）；一旦把"只有维护者
-    #         写这个文件时才需要"的规程堆回去，"读者分层"就破了 —— 用上限钉住，超级别即提示下沉。
-    #       ⚠️ 红行自带解法：**发版判据应落在依据层／记忆，文首只留使用者向内容**。
-    _cl_head_lines = docs.get("CHANGELOG.md", [])
-    _cl_ne = 0
-    for _cl_l in _cl_head_lines:
-        if _cl_l.startswith("## ["):
-            break
-        if _cl_l.strip() != "":
-            _cl_ne += 1
-    if _cl_ne > 14:
-        doc_fail.append("CHANGELOG.md 文首区（首个 `## [` 之前）非空行 %d 行 > 上限 14 —— "
-                        "发版判据应落在依据层／记忆，文首只留使用者向内容（哪一版改了什么、升了要注意什么）"
-                        % _cl_ne)
+    #     B1 迁入：判定逻辑已迁入 `contract_scanner.guard_length_caps`（读字符数/`_gate_note` 由本文件注入）。
+    #       返回 `(violations, notes)`：violations 进 doc_fail（判红），notes 走 `_gate_note`（不进 rc）。
+    _cs_17j4 = _load_contract_scanner()
+    if _cs_17j4 is None:
+        doc_fail.append("篇幅上限：contract_scanner 加载失败 —— 报错，不算通过")
+    else:
+        _sk_hard, _sk_soft, _sk_goal = 32000, 28000, 12000
+        _l4_v, _l4_notes = _cs_17j4.guard_length_caps(
+            root, docs, sk_hard=_sk_hard, sk_soft=_sk_soft, sk_goal=_sk_goal,
+            read_chars=_read_doc_chars, gate_note=_gate_note)
+        doc_fail.extend(_l4_v)
+        for _l4_note in _l4_notes:
+            _gate_note(_l4_note)
 
     # 17j-7 `--help` 篇幅上限（通道 B 的护栏）：把 §一/§三/§五/§七 的细节搬进
     #     `xwl.py` 的 `help=` / 参数 help / `epilog` 之后，`--help` 会变长；这条钉住它别再涨。
@@ -3988,37 +4058,17 @@ def _docs_layers_and_distribution(_S) -> None:
     #    {`CHANGELOG.md`, `metadata.json`} ∪ `metadata.json` 的 `layers` 里登记为 `evidence` 的文件
     #    （唯一真源在打包元数据，各份参考材料的首行声明已删）⇒ 拆分后新增的依据层文件**自动**进豁免面；
     #    把某份的 `layers` 值改回 `spec` ⇒ 该份**立刻失豁免**（可注入验证）。
-    _chron_ex = _chron_exempt(root)
-    _shipped, _ = _git_scan_scope(root)
-    if not _docs_git_arm("编年守卫", _shipped, doc_fail, _nogit_arms, _SUBCHECKS, "git.chron"):
-        pass
+    # B1 迁入：判定逻辑已迁入 `contract_scanner.guard_chronology`；词表/正则、`_chron_exempt`、
+    #   `_git_scan_scope`、`_docs_git_arm` 均由本文件注入（保持单一真源、结果逐条等价）。
+    _cs_17l = _load_contract_scanner()
+    if _cs_17l is None:
+        doc_fail.append("编年守卫：contract_scanner 加载失败 —— 报错，不算通过")
     else:
-        for _rel in _shipped:
-            if _rel in _chron_ex:
-                continue
-            try:
-                _bl = open(os.path.join(root, _rel.replace("/", os.sep)),
-                           encoding="utf-8", newline="").read().splitlines()
-            except (OSError, UnicodeDecodeError) as _exc:
-                doc_fail.append("编年守卫：读不出 %s（%s）—— 报错，不算「没命中」" % (_rel, _exc))
-                continue
-            for _i, _l in enumerate(_bl, 1):
-                if _rel == "SKILL.md" and re.match(r"^version:\s*\S+\s*$", _l):
-                    continue      # frontmatter 的当前版本号是契约字段，不是编年
-                _hit = next((_w for _w in _chron if _w in _l), None)
-                if _hit:
-                    doc_fail.append("编年：%s:%d 出现施工事件词「%s」"
-                                    "（正文只留结论；编年留在 CHANGELOG 与 workflow-notes.md）"
-                                    % (_rel, _i, _hit))
-                for _m in _date_re.finditer(_l):
-                    if any(_v in _l[max(0, _m.start() - 25): _m.end() + 25] for _v in _date_verb):
-                        doc_fail.append("编年：%s:%d 出现施工日期 %s（±25 字内有施工动词）"
-                                        % (_rel, _i, _m.group(0)))
-                _vm = _ver_re.search(_l)
-                if _vm:
-                    doc_fail.append("编年：%s:%d 出现发版号 %s（正文不写版本号；"
-                                    "frontmatter 的 version: 与依据层文件除外）"
-                                    % (_rel, _i, _vm.group(0)))
+        _cs_17l.guard_chronology(
+            root, doc_fail, _nogit_arms, _SUBCHECKS, "编年守卫",
+            chron=_chron, date_verb=_date_verb, date_re=_date_re, ver_re=_ver_re,
+            chron_exempt=_chron_exempt, git_scan_scope=_git_scan_scope,
+            docs_git_arm=_docs_git_arm)
 
     # 17m 判据溯源自检：`scripts/*.py` 里的**点名式引用**必须可解析（点名 = 写了文档名）。
     #     裸 `§N.M`（没写文档名）不判 —— 那会把各文件自己的节号当成跨文件引用，踩出一片误报。
@@ -4321,49 +4371,24 @@ def _docs_tail_scaffold(_S) -> None:
     # 有界下沉：`_b17r_docs` / `_b17r_code` / `_b17r_code_ok` / `_b17r_sec` / `_b17r_proc` 已移出函数体 ⇒ 见模块级同名常量。
 
     # 有界下沉：`_b17r_mask_strings` / `_b17r_history_skip`（纯助手）已移出函数体 ⇒ 见模块级同名函数。
-    _b17r_files, _ = _git_scan_scope(root)
-    if not _docs_git_arm("17r 分发面自包含", _b17r_files, doc_fail, _nogit_arms, _SUBCHECKS, "git.dist"):
-        pass
+    # B1 迁入：判定逻辑已迁入 `contract_scanner.guard_dist_selfcontained`；判据表/助手、`_git_scan_scope`、
+    #   `_docs_git_arm` 均由本文件注入（保持单一真源、结果逐条等价）。
+    _cs_17r = _load_contract_scanner()
+    if _cs_17r is None:
+        doc_fail.append("17r 分发面自包含：contract_scanner 加载失败 —— 报错，不算通过")
     else:
-        _b17r_fail = []
-        for _rel17 in _b17r_files:
-            if not _rel17 or _rel17 == "CHANGELOG.md":
-                continue
-            _fp17 = os.path.join(root, _rel17.replace("/", os.sep))
-            if not os.path.exists(_fp17):
-                continue
-            try:
-                with open(_fp17, "r", encoding="utf-8", newline="") as _fh17:
-                    _raw17 = _fh17.read()
-            except Exception as _exc17:  # noqa: BLE001
-                _b17r_fail.append("17r 分发面自包含：读不出 %s（%s）—— 报错，不算「没命中」" % (_rel17, _exc17))
-                continue
-            if _rel17.endswith(".py"):
-                _judge17 = _b17r_mask_strings(_raw17)
-                if _judge17 is None:
-                    _b17r_fail.append("17r 分发面自包含：%s 词法解析失败 ⇒ 不敢判（保守报错）" % _rel17)
-                    continue
-            else:
-                _judge17 = _raw17
-            _skip17 = _b17r_history_skip(_rel17, _judge17)
-            for _i17, _l17 in enumerate(_judge17.split("\n"), 1):
-                if _i17 in _skip17:
-                    continue
-                _hit17 = ([_m.group(0) for _m in _b17r_code.finditer(_l17)
-                           if not _b17r_code_ok.match(_m.group(0))]
-                          + [_m.group(0) for _m in _b17r_sec.finditer(_l17)]
-                          + [_m.group(0) for _m in _b17r_proc.finditer(_l17)]
-                          + [_w for _w in _b17r_docs if _w in _l17])
-                if _hit17:
-                    _b17r_fail.append("17r 分发面自包含：%s:%d 出现包外引用 %s —— 原文：%s"
-                                      % (_rel17, _i17, "/".join(sorted(set(_hit17))), _l17.strip()[:80]))
-        if _b17r_fail:
-            doc_fail.extend(_b17r_fail[:12])
-        else:
-            print("[ok]  17r 分发面自包含：%d 个分发文件里无包外引用"
-                  "（无《验收基线》/《落地清单》/施工索引/施工单、无施工单条目代号（**A–L 单字母**-数字 ／ 字母-短横-数字〔任意 1–3 个字母〕／ **A–L 单字母**-短横-小写字母 形态）、"
-                  "无 §N-M 形式的节号指针、无前置批次号/过程角色编号；"
-                  "`.py` 只判字符串字面量之外；CHANGELOG 整文件 ＋ 历史记录段 ＋ 编码名词形豁免）" % len(_b17r_files))
+        _cs_17r.guard_dist_selfcontained(
+            root, doc_fail, _nogit_arms, _SUBCHECKS, "17r 分发面自包含",
+            b17r_docs=_b17r_docs, b17r_code=_b17r_code, b17r_code_ok=_b17r_code_ok,
+            b17r_sec=_b17r_sec, b17r_proc=_b17r_proc,
+            mask_strings=_b17r_mask_strings, history_skip=_b17r_history_skip,
+            git_scan_scope=_git_scan_scope, docs_git_arm=_docs_git_arm,
+            ok_print=lambda _files: print(
+                "[ok]  17r 分发面自包含：%d 个分发文件里无包外引用"
+                "（无《验收基线》/《落地清单》/施工索引/施工单、无施工单条目代号（**A–L 单字母**-数字 ／ 字母-短横-数字〔任意 1–3 个字母〕／ **A–L 单字母**-短横-小写字母 形态）、"
+                "无 §N-M 形式的节号指针、无前置批次号/过程角色编号；"
+                "`.py` 只判字符串字面量之外；CHANGELOG 整文件 ＋ 历史记录段 ＋ 编码名词形豁免）"
+                % len(_files)))
 
     _check_docs_section_order(failures)
 
@@ -4501,7 +4526,7 @@ def _check_docs_section_order(failures) -> None:
         # 上限：超过 10 个只提示、不阻断。「10」没有任何可引用的出处，写成阻断就是拿拍的数当判据。
         # ⛔ 上限不再当阻断；要给上限找出处才可恢复阻断。
         if len(numbered) > 10:
-            print("[note] SKILL.md 带编号章 %d 个，超过 10 —— 只提示、不阻断"
+            _gate_note("SKILL.md 带编号章 %d 个，超过 10 —— 只提示、不阻断"
                   "（上限没有出处；要恢复阻断先给出处）" % len(numbered))
         # ④ 「单行源 vs 多行源」不得单列一章（应并入格式章）。
         if any("单行源" in t for t in raw if t.startswith("## ")):

@@ -15,7 +15,7 @@
 **没有平台专属封装**；两条渠道使用同一套技能内容，但 CLI 安装副本**可能不含 `metadata.json`** 等源码树文件，
 开发用的 `scripts/selftest.py`、`tests/` 也不在副本里（见 §五），不能无条件承诺逐文件相同。
 
-**`LICENSE` 的例外**：许可正本是**仓库根** `LICENSE`，不在技能运行目录内、安装副本不随附；SkillHub 包内由打包工具现场派生 `LICENSE.md` 进包，机制与原因见 `release/scripts/skillhub_publish.py` 的 `collect` 文档。
+许可为 **MIT**，许可全文随包在 `LICENSE.md`。
 
 > **WorkBuddy 只能走手工那一条**：CLI 的 agent 表里没有它 ⇒ 把目录放到
 > `~/.workbuddy/skills/<name>`（Windows 上即 `%USERPROFILE%\.workbuddy\skills\<name>`）。

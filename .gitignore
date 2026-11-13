@@ -21,3 +21,9 @@ __pycache__/
 .idea/
 Thumbs.db
 desktop.ini
+
+# 构建期产物目录（`tools/maintenance/generate.py` 与打包路径生成 derived-values/file-manifest）。
+# 该目录位于工作树内、纳入忽略规则、随打包清单登记（AGENTS.md §3：不属于临时件散落）。
+# 技能目录内的 `.build/`（打包时派生 derived-values 到此处）与工作区根的 `build/` 一并忽略。
+.build/
+build/

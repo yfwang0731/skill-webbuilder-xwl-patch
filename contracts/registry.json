@@ -1,0 +1,395 @@
+{
+  "schema_version": "1.0.0",
+  "note": "契约登记表：只登记「绑定ID -> 派生函数标识 + 参数 + 序类型」，不存任何派生值。值由工具从真实源现场算出；本文件不进分发包。见根治方案 §3.1/§4.2/§4.6。",
+  "principle": "任何派生事实只在此声明一次；未绑定到本表 ID 的派生值出现一律判红。生成器与判据须走不同代码路径（§3.2）。",
+  "registry_root": "skill/contracts/registry.json",
+  "value_authority": "真实源（文档与代码本体、磁盘文件）",
+  "scale_ref_basis": "scale_ref 为当前真实源规模的瞬时参照数（供判据/负例对账定位用），不是值正本；真实规模以现场重算为准，随真实源变化重新对齐，不手写第二份值。M2 已按当前实值对齐：items=249、checkpoints=92、examples.ops=9、references/layers=20、update_history=44、test_prompts=22、blocks=13、doc_guard_blocks=35、golden=6、protected=4、exempt=1、injection.cases=68、plans.archive.manifests=8。",
+  "order_types": {
+    "set_canonical": {
+      "meaning": "集合，按字典序规范排列",
+      "judge": "与自身 sorted() 相等，且无重复"
+    },
+    "by_id": {
+      "meaning": "按标识升序",
+      "judge": "ID 升序、唯一、字段集合统一"
+    },
+    "by_version_desc": {
+      "meaning": "按版本号降序",
+      "judge": "版本降序、无重复版本、字段集合统一"
+    },
+    "by_time": {
+      "meaning": "按时间戳升序",
+      "judge": "文件名/字段时间升序，无重复"
+    },
+    "semantic": {
+      "meaning": "语义序，顺序承载行为，禁止重排",
+      "judge": "与声明的权威序源逐项相等，序源在登记表中具名"
+    }
+  },
+  "shape_whitelist": {
+    "note": "派生值出现须解析出绑定 ID；新增形状须附负例（§3.4）。形状白名单为有限闭集。",
+    "count_anchors_note": "count_anchors 是「派生声明锚位」的有限闭集：整行正则含命名组 (?<n>\\d+)，命中即把该计数绑定到 binding 并现场重算比对（值不等=drift 红、算不出=unbound 红）。不在任何锚位的「N 个/条/项…」归 prose（正文语用/实测账本数字，非派生值），不判红。新增派生声明句式＝在此登记一条锚（登记驱动，不改扫描代码）。",
+    "count_anchors": [
+      {"id": "subcommands.count", "regex": "共\\s*(?<n>\\d+)\\s*个子命令", "binding": "subcommands", "label": "xwl.py 子命令数（SKILL 正文）"},
+      {"id": "subcommands.count.readme", "regex": "(?<n>\\d+)\\s*个子命令一句话作用", "binding": "subcommands", "label": "xwl.py 子命令数（README）"},
+      {"id": "subcommands.count.dist", "regex": "列出全部\\s*\\*\\*(?<n>\\d+)\\s*个\\*\\*子命令", "binding": "subcommands", "label": "xwl.py 子命令数（distribution）"},
+      {"id": "references.count", "regex": "references/?(?:\\*?\\.?m?d?)?\\s*(?:共|有)?\\s*(?<n>\\d+)\\s*份", "binding": "metadata.references", "label": "references 份数"}
+    ],
+    "version_anchors_note": "版本声明锚（有限闭集）：只在「版本声明句式」上比对版本号，散文里的示例版本号（如路线图 2.0.0）不计。整行正则含命名组 (?<n>x.y.z)。",
+    "version_anchors": [
+      {"id": "skill.frontmatter_version", "regex": "^version:\\s*(?<n>\\d+\\.\\d+\\.\\d+)\\s*$", "binding": "metadata.version", "label": "SKILL.md frontmatter version"}
+    ],
+    "patterns": [
+      {
+        "shape_id": "count_unit",
+        "regex": "(?<n>\\d+)\\s*(条|项|个|把|处)",
+        "binding_rule": "n 须由对应派生函数算出并与文档声明相等"
+      },
+      {
+        "shape_id": "semver",
+        "regex": "\\d+\\.\\d+\\.\\d+",
+        "binding_rule": "版本号须与 metadata.version 派生同源"
+      },
+      {
+        "shape_id": "explicit_key",
+        "regex": "显式键声明（键名=值）",
+        "binding_rule": "键值须绑定到登记表中具名派生参数"
+      }
+    ]
+  },
+  "binding_rule": {
+    "note": "文档中每个派生值出现 -> 解析出绑定 ID -> 由该绑定 derive.fn 从真实源重算 -> 与文档声明比对，不等即红。生成器实现与判据重算实现必须不同代码路径（derive.source_drift 负例）。",
+    "cross_block": [
+      "references <-> layers <-> 磁盘",
+      "version <-> SKILL.md <-> CHANGELOG <-> update_history[0]",
+      "blocks <-> baseline.json 注册序",
+      "layers 键 <-> metadata.references",
+      "file-manifest <-> collect() 实际集合",
+      "sources <-> 桶 <-> 归档件",
+      "archive_path <-> 冻结件",
+      "指纹 <-> 磁盘",
+      "derived-values 源指纹 <-> 真实源",
+      "injection-case id <-> 文件名",
+      "视图三段指纹 <-> 正本小节"
+    ]
+  },
+  "derived_claims": {
+    "note": "登记式「文档自称数字」声明（§3.4 形状白名单 × 绑定）。每条：锚正则（在文档里捕获数字）-> 绑定ID -> 该绑定从真实源现场重算的值。扫描器对每条登记声明做「声明值 == 重算值」判定，不等或解析不到即红。新增声明＝在此登记一条（登记驱动，不改扫描代码）。这是把 17i 逐句式字面量登记收敛为数据驱动的通用面。",
+    "claims": [
+      {"id": "skill.faq_count", "doc": "SKILL.md", "regex": "\\*\\*(\\d+)\\s*条\\*\\*高频问题", "binding": "faq.count", "label": "SKILL §八 FAQ 条数"},
+      {"id": "faq.first_block_count", "doc": "references/faq.md", "regex": "(?m)^\\*\\*(\\d+)\\s*条按四组归类\\*\\*", "binding": "faq.count", "label": "FAQ 首段「按四组归类」条数"},
+      {"id": "skill.checklist_count", "doc": "SKILL.md", "regex": "\\*\\*(\\d+)\\s*项\\*\\*清单", "binding": "checklist.count", "label": "SKILL §九 清单项数"},
+      {"id": "skill.ref_checklist_count", "doc": "SKILL.md", "regex": "改完自检清单\\*\\*：(\\d+) 项", "binding": "checklist.count", "label": "SKILL 参考清单的清单项数"},
+      {"id": "readme.faq_count", "doc": "README.md", "regex": "faq\\.md\\s+#\\s*(\\d+)\\s*条", "binding": "faq.count", "label": "README 的 FAQ 条数"},
+      {"id": "readme.checklist_count", "doc": "README.md", "regex": "checklist\\.md\\s+#\\s*(\\d+)\\s*项", "binding": "checklist.count", "label": "README 的清单项数"},
+      {"id": "readme.anti_patterns_count", "doc": "README.md", "regex": "anti-patterns\\.md\\s+#\\s*(\\d+)\\s*条", "binding": "anti_patterns.count", "label": "README 的反模式条数"},
+      {"id": "readme.test_prompts_count", "doc": "README.md", "regex": "test-prompts\\.json\\s+#\\s*(\\d+)\\s*条", "binding": "test_prompts.count", "label": "README 的 prompt 条数"}
+    ],
+    "claim_bindings": {
+      "faq.count": {"fn": "derive.faq_count", "args": {"doc": "references/faq.md", "marker": "^\\*\\*Q："}},
+      "checklist.count": {"fn": "derive.checklist_count", "args": {"doc": "references/checklist.md", "marker": "- \\[ \\]"}},
+      "anti_patterns.count": {"fn": "derive.anti_patterns_count", "args": {"doc": "references/anti-patterns.md", "marker": "^### "}},
+      "test_prompts.count": {"fn": "derive.test_prompts_count", "args": {"file": "test-prompts.json"}}
+    }
+  },
+  "bindings": [
+    {
+      "id": "metadata.references",
+      "file": "skill/webbuilder-xwl-patch/metadata.json",
+      "block": "references",
+      "scale_ref": 20,
+      "order_type": "set_canonical",
+      "derive": {
+        "fn": "derive.disk_references",
+        "args": { "dir": "skill/webbuilder-xwl-patch/references", "ext": ".md", "prefix": "references/" }
+      },
+      "consistency": [
+        "与磁盘 references/*.md 双向差集为空",
+        "与 layers 键集相同",
+        "无重复"
+      ],
+      "negative_ids": ["metadata.ref_layer_diff", "contract.canonical_order"]
+    },
+    {
+      "id": "metadata.layers",
+      "file": "skill/webbuilder-xwl-patch/metadata.json",
+      "block": "layers",
+      "scale_ref": 20,
+      "order_type": "set_canonical",
+      "derive": {
+        "fn": "derive.layers_keys",
+        "args": { "from": "metadata.references" }
+      },
+      "consistency": [
+        "键序与 references 同源",
+        "值 in (spec, evidence)",
+        "键均为实际存在的 references/*.md"
+      ],
+      "negative_ids": ["metadata.ref_layer_diff", "metadata.layers_enum", "contract.canonical_order"]
+    },
+    {
+      "id": "metadata.update_history",
+      "file": "skill/webbuilder-xwl-patch/metadata.json",
+      "block": "update_history",
+      "scale_ref": 44,
+      "order_type": "by_version_desc",
+      "derive": {
+        "fn": "derive.update_history",
+        "args": { "required_fields": ["version", "date", "summary"] }
+      },
+      "consistency": [
+        "字段集合恒为 (version,date,summary)",
+        "首条版本 = metadata.version = CHANGELOG.md 首段版本",
+        "首条日期 = CHANGELOG 首段日期"
+      ],
+      "negative_ids": ["metadata.history_consistency", "metadata.version_sync"]
+    },
+    {
+      "id": "metadata.top_level",
+      "file": "skill/webbuilder-xwl-patch/metadata.json",
+      "block": "$top",
+      "scale_ref": null,
+      "order_type": "set_canonical",
+      "derive": {
+        "fn": "derive.metadata_toplevel",
+        "args": {
+          "version_sources": [
+            "skill/webbuilder-xwl-patch/SKILL.md:frontmatter.version",
+            "skill/webbuilder-xwl-patch/CHANGELOG.md:first_segment.version"
+          ],
+          "required_field_closed_set": true
+        }
+      },
+      "consistency": [
+        "version/name 与 SKILL.md frontmatter 一致",
+        "必填字段闭集齐全"
+      ],
+      "negative_ids": ["metadata.version_sync"]
+    },
+    {
+      "id": "test_prompts",
+      "file": "skill/webbuilder-xwl-patch/test-prompts.json",
+      "block": "$list",
+      "scale_ref": 22,
+      "order_type": "by_id",
+      "derive": {
+        "fn": "derive.test_prompts_coverage",
+        "args": {
+          "required_fields": ["id", "prompt", "expected"],
+          "subcommands_source": "derive.subcommands_from_xwl"
+        }
+      },
+      "consistency": [
+        "字段集合恒为 (id,prompt,expected)",
+        "每个子命令至少一条 prompt"
+      ],
+      "negative_ids": ["test-prompts.coverage", "contract.canonical_order"]
+    },
+    {
+      "id": "baseline.blocks",
+      "file": "skill/tests/baseline.json",
+      "block": "blocks",
+      "scale_ref": 13,
+      "order_type": "semantic",
+      "derive": {
+        "fn": "derive.blocks_registry_order",
+        "args": { "source": "skill/scripts/selftest.py:_blocks" }
+      },
+      "consistency": [
+        "与 _blocks() 注册序逐项相等",
+        "每名份数不降"
+      ],
+      "negative_ids": ["baseline.registry_order", "baseline.deduction", "contract.semantic_order"]
+    },
+    {
+      "id": "baseline.doc_guard_blocks",
+      "file": "skill/tests/baseline.json",
+      "block": "doc_guard_blocks",
+      "scale_ref": 35,
+      "order_type": "set_canonical",
+      "derive": {
+        "fn": "derive.doc_guard_blocks",
+        "args": { "changelog_mentions_source": "skill/webbuilder-xwl-patch/CHANGELOG.md" }
+      },
+      "consistency": [
+        "键规范序",
+        "每名份数不降",
+        "基线外新名须在 CHANGELOG.md 独立提及"
+      ],
+      "negative_ids": ["baseline.deduction", "contract.canonical_order"]
+    },
+    {
+      "id": "golden.expected_ids",
+      "file": "skill/tests/task_acceptance_fixtures/golden.json",
+      "block": "expected_ids",
+      "scale_ref": 6,
+      "order_type": "set_canonical",
+      "derive": {
+        "fn": "derive.golden_expected_ids",
+        "args": { "fixture_dir": "skill/tests/task_acceptance_fixtures", "coverage_source": "应检清单同源" }
+      },
+      "consistency": [
+        "无重复",
+        "与实际应检清单同源"
+      ],
+      "negative_ids": ["golden.derived", "contract.canonical_order"]
+    },
+    {
+      "id": "examples.ops",
+      "file": "skill/webbuilder-xwl-patch/examples/ops-*.json",
+      "block": "$operation_array",
+      "scale_ref": 9,
+      "order_type": "semantic",
+      "derive": {
+        "fn": "derive.ops_sequence",
+        "args": { "op_enum": ["set", "insertKey", "insert", "append", "delete"], "order_source": "执行序不可重排" }
+      },
+      "consistency": [
+        "op in (set,insertKey,insert,append,delete)",
+        "path 为键/下标列表",
+        "执行序不可重排"
+      ],
+      "negative_ids": ["contract.semantic_order"]
+    },
+    {
+      "id": "gate.rules.protected",
+      "file": "gate/spec/rules.json",
+      "block": "protected",
+      "scale_ref": 4,
+      "order_type": "set_canonical",
+      "derive": {
+        "fn": "derive.gate_protected",
+        "args": { "version_source": "gate/spec/rules.json:version" }
+      },
+      "consistency": ["无重复", "version 为 hook 版本标识，两侧同值"],
+      "negative_ids": ["contract.canonical_order", "contract.cross_ref"]
+    },
+    {
+      "id": "gate.rules.exempt",
+      "file": "gate/spec/rules.json",
+      "block": "exempt",
+      "scale_ref": 1,
+      "order_type": "set_canonical",
+      "derive": {
+        "fn": "derive.gate_exempt",
+        "args": { "version_source": "gate/spec/rules.json:version" }
+      },
+      "consistency": ["无重复", "version 为 hook 版本标识，两侧同值"],
+      "negative_ids": ["contract.canonical_order", "contract.cross_ref"]
+    },
+    {
+      "id": "ledger.items",
+      "file": "ledger/data/items.json",
+      "block": "items",
+      "scale_ref": 249,
+      "order_type": "by_id",
+      "derive": {
+        "fn": "derive.ledger_items",
+        "args": { "id_field": "id", "id_pattern": "ITEM-\\d+" }
+      },
+      "consistency": [
+        "ID 升序、唯一、字段集合统一",
+        "身份/状态/事件以 ledger 为唯一权威"
+      ],
+      "negative_ids": ["ledger.item_order"]
+    },
+    {
+      "id": "ledger.views",
+      "file": "ledger/data/{versions,aliases,book_buckets,archived_buckets,segment-map,locators,schema,state,baseline,archive-manifest}.json",
+      "block": "$per_block",
+      "scale_ref": null,
+      "order_type": "by_block",
+      "derive": {
+        "fn": "derive.ledger_views",
+        "args": {
+          "cross_refs": [
+            "sources <-> 桶",
+            "archive_path <-> 归档件",
+            "指纹 <-> 磁盘",
+            "视图三段指纹 <-> 正本"
+          ]
+        }
+      },
+      "consistency": [
+        "必填块齐全",
+        "跨块双向一致"
+      ],
+      "negative_ids": ["contract.cross_ref"]
+    },
+    {
+      "id": "ledger.checkpoints",
+      "file": "ledger/data/checkpoints/*.json",
+      "block": "$file_by_time",
+      "scale_ref": 92,
+      "order_type": "by_time",
+      "derive": {
+        "fn": "derive.checkpoints_by_time",
+        "args": { "name_pattern": "时间戳命名", "archive_window": "第六章归档窗口" }
+      },
+      "consistency": [
+        "文件名时间序",
+        "字段集合统一",
+        "单调集合按第六章归档窗口管理"
+      ],
+      "negative_ids": ["contract.write_form"]
+    },
+    {
+      "id": "injection.cases",
+      "file": "tools/testing/injection/injection-cases/*.json",
+      "block": "$each_file",
+      "scale_ref": 68,
+      "order_type": "by_id",
+      "derive": {
+        "fn": "derive.injection_cases",
+        "args": {
+          "id_from_filename": true,
+          "required": ["id", "provenance", "type", "desc", "file", "find", "replace", "cmd", "expect", "expect_re"],
+          "optional": ["targets", "note", "requires", "provenance_ref"]
+        }
+      },
+      "consistency": [
+        "id = 文件名去扩展名",
+        "统一 schema",
+        "provenance/expect/expect_re 必填"
+      ],
+      "negative_ids": ["case.schema_uniform"]
+    },
+    {
+      "id": "plans.archive.manifests",
+      "file": "plans/archive/*/_MANIFEST.json",
+      "block": "$frozen",
+      "scale_ref": 8,
+      "order_type": "frozen",
+      "derive": {
+        "fn": "derive.frozen_manifests",
+        "args": { "exempt": "编码/排序校正豁免，登记在案" }
+      },
+      "consistency": ["历史形态，编码/排序校正豁免，登记在案"],
+      "negative_ids": []
+    }
+  ],
+  "doc_guard_baseline_names": [
+    "17a", "17b", "17c", "17c-2", "17d", "17e", "17f", "17g", "17h", "17i",
+    "17j", "17j-10", "17j-11", "17j-12", "17j-13", "17j-14", "17j-3", "17j-4",
+    "17j-6", "17j-7", "17j-8", "17j-9", "17k", "17l", "17m", "17n", "17o",
+    "17p", "17q", "17r", "17t", "17u", "17v", "17w", "17x"
+  ],
+  "doc_guard_baseline_names_note": "冻结的 doc_guard_blocks 基线名集合（35 个）。作为 baseline.deduction 判「基线外新名」的权威基线；新增守卫块须在此登记并在 CHANGELOG 独立提及。与 baseline.json 的键集在干净树上应相等（相等即无「基线外新名」）。",
+  "exempt_forms": {
+    "note": "冻结归档件的既有形态登记为豁免，不回改（§4.3 写入形态）。",
+    "items": [
+      {
+        "path": "plans/archive/2026-10-06-1.5.0及以前-正本/_MANIFEST.json",
+        "reason": "冻结归档件 CRLF 且无尾换行，历史形态豁免"
+      }
+    ]
+  },
+  "write_form": {
+    "note": "本表及其派生产物写入形态：UTF-8 无 BOM、LF、文件末尾换行。",
+    "encoding": "utf-8",
+    "bom": false,
+    "eol": "LF",
+    "trailing_newline": true
+  }
+}

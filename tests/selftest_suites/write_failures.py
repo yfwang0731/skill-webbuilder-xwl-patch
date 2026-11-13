@@ -652,7 +652,8 @@ def _check_write_gate_rest(tmp, node, failures, write, _cli, _ops, _bytes, _page
         except OSError:
             held = True
         if not held:
-            print("[note] 未执行：Windows 目录位无效")
+            _gate_note("未执行：Windows 目录位无效（chmod 后目录仍可写，"
+                       "跳过「备份目录不可写仍写目标」用例）")
         else:
             rc, out = _cli(["patch", p, "--backup", "--ops", _ops("wg_g8.json", [
                 {"op": "set", "path": ["title"], "value": "z"}])])
