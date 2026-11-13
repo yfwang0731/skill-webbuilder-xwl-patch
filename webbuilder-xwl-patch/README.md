@@ -1,7 +1,5 @@
 # webbuilder-xwl-patch
 
-[![selftest](https://github.com/yfwang0731/skill-webbuilder-xwl-patch/actions/workflows/selftest.yml/badge.svg)](https://github.com/yfwang0731/skill-webbuilder-xwl-patch/actions/workflows/selftest.yml)
-
 处理 **WebBuilder（wb）平台 `.xwl` 定义文件**的 Agent Skill ——
 **用结构级 `patch` 改 xwl，不碰文本层。**
 面向**支持 Agent Skills 规范**的客户端（Codex / Cline / CodeBuddy 等）；WorkBuddy 同样可用 ——

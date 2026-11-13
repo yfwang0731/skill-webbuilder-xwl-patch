@@ -1,5 +1,7 @@
 # webbuilder-xwl-patch · 技能开发仓库
 
+[![selftest](https://github.com/yfwang0731/skill-webbuilder-xwl-patch/actions/workflows/selftest.yml/badge.svg)](https://github.com/yfwang0731/skill-webbuilder-xwl-patch/actions/workflows/selftest.yml)
+
 本仓库是 **webbuilder-xwl-patch** 技能的**开发仓库**：仓库根放开发资产，
 **技能本体在 [`webbuilder-xwl-patch/`](webbuilder-xwl-patch/)**（安装时只装这一层）。
 
