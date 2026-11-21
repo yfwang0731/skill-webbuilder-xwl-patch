@@ -3,7 +3,7 @@
   "name_en": "webbuilder-xwl-patch",
   "displayName": "webbuilder-xwl-patch",
   "author": "yfwang0731",
-  "version": "1.8.6",
+  "version": "1.9.0",
   "schema_version": "1.0",
   "description": "WebBuilder（wb）平台 .xwl 定义文件的处理与安全编辑：结构级 patch（只给值 / 子树，工具按设计器自己的算法重建整份文件）+ 格式校验 + 相对 git 基线的压平检测。",
   "core_capabilities": [
@@ -161,6 +161,11 @@
     "references/workflow-notes.md": "evidence"
   },
   "update_history": [
+    {
+      "version": "1.9.0",
+      "date": "2026-11-21",
+      "summary": "保留名与错槽位（minor）：槽位按父 type、子 type、子 itemId 三元组识别，命中后不再建议改 itemId，也不再计入 check ⑦。页根 toolbar 与 module/folder 根上的 store 仍按普通重名。check 新增 ⑪，默认警告、不进 rc，--strict 才 FAIL；不进 patch/edit/expand 写盘后自检。schema grid --skeleton 给出 store、tbar、columns 占位，tree 给出 store、tbar，column 不塞空 editor；无 --skeleton 的输出不变。说明只补 SKILL §1.2 一行、layout §六把 itemId 可自取限定到 grid/tree/propertygrid 之外、controls §4.2 在必须唯一后写槽位例外，并把文档里的 check 计数从九项改为十项。"
+    },
     {
       "version": "1.8.6",
       "date": "2026-11-13",

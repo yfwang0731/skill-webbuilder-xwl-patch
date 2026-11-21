@@ -185,14 +185,15 @@ def _check_itemids(tmp, node, failures, write) -> None:
         failures.append("重名 store 被引用却未判 error")
 
     # ---- 11d. 类型不接受 normalName 时，任何修法都不许写该键 ----
-    # ⚠️ 让 "columns" 组**被引用**（error 级）—— 否则未引用的重名落到 benign，
+    # ⚠️ 让该组**被引用**（error 级）—— 否则未引用的重名落到 benign，
     #    `recommend_fixes` 会整组跳过、`sk` 为空 ⇒ 断言变成"恒真/恒假"的假绿。
+    # 夹具不用槽位名 columns：那是保留名，不进重名组。合同仍是「array 不得写出 normalName」。
     rep_arr = xwl.audit_itemids({"children": [
         {"type": "grid", "configs": {"itemId": "g1"}, "children": [
-            {"type": "array", "configs": {"itemId": "columns"}, "children": [],
-             "events": {"click": "app.columns.focus();"}}]},
+            {"type": "array", "configs": {"itemId": "colArr"}, "children": [],
+             "events": {"click": "app.colArr.focus();"}}]},
         {"type": "grid", "configs": {"itemId": "g2"}, "children": [
-            {"type": "array", "configs": {"itemId": "columns"}, "children": []}]},
+            {"type": "array", "configs": {"itemId": "colArr"}, "children": []}]},
     ]})
     bad_keys = [o["path"][-1] for mode in ("auto", "normalName", "itemId")
                 for o in xwl.recommend_fixes(rep_arr, mode) if o["path"][-1] == "normalName"]
@@ -289,3 +290,238 @@ def _check_itemids(tmp, node, failures, write) -> None:
     except Exception as exc:  # noqa: BLE001
         failures.append("itemids --name --json 的输出不是 JSON: %s | %r" % (exc, out[:80]))
 
+    _check_reserved_slots(tmp, node, failures, write)
+
+
+
+def _check_reserved_slots(tmp, node, failures, write) -> None:
+    """序1至序3：保留名三元组、错槽位⑪、schema 骨架。挂在既有 itemids 块上，不是新自检块。"""
+
+    def _bar(iid):
+        return {"type": "toolbar", "configs": {"itemId": iid}, "children": []}
+
+    def _cols(array_iid, col_iid, editor_iid):
+        return {"type": "array", "configs": {"itemId": array_iid}, "children": [
+            {"type": "column", "configs": {"itemId": col_iid}, "children": [
+                {"type": "text", "configs": {"itemId": editor_iid}, "children": []},
+            ]},
+        ]}
+
+    def _grid(iid, children, events=None):
+        node_ = {"type": "grid", "configs": {"itemId": iid}, "children": children}
+        if events:
+            node_["events"] = events
+        return node_
+
+    def _dump(name, obj):
+        return write(name, xwl.dumps_designer(obj, 1, CRLF))
+
+    def _ambiguous(tree, name):
+        copied = json.loads(json.dumps(tree))
+        try:
+            xwl.apply_ops(copied, [{"op": "set", "path": ["@" + name, "configs", "itemId"],
+                                    "value": "zz"}])
+        except KeyError as exc:
+            return str(exc)
+        return "executed"
+
+    def _itemids(path, **kw):
+        attrs = {"file": path, "name": None, "dups_only": False, "suggest": False,
+                 "fix": "auto", "controls": None, "json": False}
+        attrs.update(kw)
+        out, err = io.StringIO(), io.StringIO()
+        with contextlib.redirect_stdout(out), contextlib.redirect_stderr(err):
+            rc = xwl.cmd_itemids(type("NS", (), attrs)())
+        return rc, out.getvalue(), err.getvalue()
+
+    def _check(files, **extra):
+        attrs = {"files": files, "node": node, "no_js": node is None}
+        attrs.update(extra)
+        buf = io.StringIO()
+        with contextlib.redirect_stdout(buf):
+            rc = xwl.cmd_check(type("NS", (), attrs)())
+        return rc, buf.getvalue()
+
+    def _ok(cond, label, detail):
+        if cond:
+            print("[ok]  " + label)
+        else:
+            failures.append(label + ": " + detail)
+
+    slot_page = {"children": [
+        _grid("grid1", [_bar("tbar"), _bar("bbar"), _cols("columns", "colA", "editor")],
+              {"click": "app.tbar.focus();"}),
+        _grid("grid2", [_bar("tbar"), _bar("bbar"), _cols("columns", "colB", "editor")]),
+    ]}
+    for name, bad in (("tbar", "grid2_tbar"), ("bbar", "grid2_bbar"),
+                      ("columns", "grid2_columns"), ("editor", "colB_editor")):
+        msg = _ambiguous(slot_page, name)
+        _ok(msg != "executed" and "建议改名" not in msg and bad not in msg,
+            "槽位 @%s 的重名报错去掉建议改名（无 %s）" % (name, bad), msg[:240])
+
+    root_page = {"children": [
+        {"type": "module", "configs": {"itemId": "mod"}, "children": [_bar("tbar"), _bar("tbar")]},
+    ]}
+    root_msg = _ambiguous(root_page, "tbar")
+    _ok("建议改名" in root_msg, "页根两个 tbar 仍出现建议改名", root_msg[:240])
+
+    rep = xwl.audit_itemids(slot_page)
+    hit = sorted({g["name"] for g in rep["groups"]} & {"tbar", "bbar", "columns", "editor"})
+    ops = xwl.recommend_fixes(rep, "auto")
+    _ok(not hit and not ops, "两个 grid 的 tbar/columns/editor/bbar 不进重名组、不生成修法",
+        "groups=%s ops=%s" % (hit, ops[:2]))
+
+    dock_page = {"children": [
+        {"type": "tree", "configs": {"itemId": "tree1"}, "children": [_bar("tbar")]},
+        {"type": "tree", "configs": {"itemId": "tree2"}, "children": [_bar("tbar")]},
+        {"type": "propertygrid", "configs": {"itemId": "pg1"}, "children": [_bar("bbar")]},
+        {"type": "propertygrid", "configs": {"itemId": "pg2"}, "children": [_bar("bbar")]},
+    ]}
+    dock_names = {g["name"] for g in xwl.audit_itemids(dock_page)["groups"]}
+    _ok("tbar" not in dock_names and "bbar" not in dock_names,
+        "tree 的 tbar 与 propertygrid 的 bbar 也不进重名组",
+        "groups=%s" % sorted(dock_names))
+
+    auto_ctl = write("autonames.json", json.dumps({"children": [
+        {"id": "store", "general": {"autoNames": {"any": "store"}},
+         "configs": {"itemId": {"type": "string"}, "normalName": {"type": "string"}}},
+    ]}, ensure_ascii=False))
+    root_stores = {"children": [
+        {"type": "module", "configs": {"itemId": "mod"}, "children": [
+            {"type": "store", "configs": {"itemId": "store"}, "children": [],
+             "events": {"load": "app.store.reload();"}},
+            {"type": "store", "configs": {"itemId": "store"}, "children": []},
+        ]},
+    ]}
+    root_rep = xwl.audit_itemids(root_stores, controls_path=auto_ctl)
+    root_lv = {g["name"]: g["level"] for g in root_rep["groups"]}
+    _ok(root_lv.get("store") == "error",
+        "module 根上的 store 不吃 autoNames.any，被 app.store 引用仍是 error",
+        "levels=%s" % root_lv)
+    grid_stores = {"children": [
+        {"type": "grid", "configs": {"itemId": "g1"}, "children": [
+            {"type": "store", "configs": {"itemId": "store"}, "children": []}]},
+        {"type": "grid", "configs": {"itemId": "g2"}, "children": [
+            {"type": "store", "configs": {"itemId": "store"}, "children": []}]},
+    ]}
+    grid_names = {g["name"] for g in xwl.audit_itemids(grid_stores, controls_path=auto_ctl)["groups"]}
+    _ok("store" not in grid_names,
+        "grid 下 itemId 等于 autoNames 首选名 store 的节点不进重名组",
+        "groups=%s" % sorted(grid_names))
+
+    slot_path = _dump("slots.xwl", slot_page)
+    rc, out, err = _itemids(slot_path, suggest=True)
+    _ok(rc == 0 and out.lstrip().startswith("[]") and "grid2_tbar" not in out
+        and "保留名" in err and "@grid1/@tbar" in err and "children[" not in err,
+        "--suggest 只剩槽位时 stdout 以 [] 开头、rc=0，保留名 note 在 stderr",
+        "rc=%s stdout=%r stderr=%r" % (rc, out[:180], err[:180]))
+    rc, out, err = _itemids(slot_path)
+    _ok(rc == 0 and "保留名" in out and "@grid1/@tbar" in out and "@grid2/@bbar" in out
+        and "children[" not in out, "itemids 打 [note] 保留名，定位用 @父itemId/@名",
+        out[:300])
+
+    rc, out = _check([slot_path])
+    _ok(rc == 0 and "保留名" in out and "[FAIL] ⑦" not in out,
+        "只因 app.tbar 引用重复槽位时 ⑦ rc=0 且有保留名 note",
+        "rc=%s %s" % (rc, " | ".join(ln.strip() for ln in out.splitlines()
+                                    if "⑦" in ln or "保留名" in ln)[:240]))
+
+    bad_page = {"children": [
+        _grid("grid1", [_bar("tb1"), _cols("cols", "colC", "ed1")]),
+    ]}
+    bad_path = _dump("badslot.xwl", bad_page)
+    rc, out = _check([bad_path])
+    _ok(rc == 0 and "⑪" in out and "[FAIL] ⑪" not in out
+        and all(s in out for s in ("tbar", "columns", "editor"))
+        and "grid1_tb1" not in out,
+        "tb1/cols/错 editor 默认 check rc=0 且 ⑪ 警告给出 tbar/columns/editor",
+        "rc=%s %s" % (rc, " | ".join(ln.strip() for ln in out.splitlines() if "⑪" in ln)[:300]))
+    rc, out = _check([bad_path], strict=True)
+    _ok(rc == 1 and "[FAIL] ⑪" in out and all(s in out for s in ("tbar", "columns", "editor")),
+        "check --strict 对三条错槽位 FAIL 且 rc=1",
+        "rc=%s %s" % (rc, " | ".join(ln.strip() for ln in out.splitlines() if "⑪" in ln)[:300]))
+
+    bbar_path = _dump("bbar_min.xwl", {"children": [_grid("grid1", [_bar("bbar")])]})
+    rc, out = _check([bbar_path])
+    _ok(rc == 0 and "⑪" not in out, "bbar 最小夹具默认不警告",
+        "rc=%s %s" % (rc, " | ".join(ln.strip() for ln in out.splitlines() if "⑪" in ln)[:200]))
+
+    neg_path = _dump("neg_slot.xwl", {"children": [
+        _grid("grid1", [
+            {"type": "array", "configs": {"itemId": "features"}, "children": [
+                {"type": "feature", "configs": {"itemId": "f1"}, "children": []}]},
+            {"type": "store", "configs": {"itemId": "tripFileStore"}, "children": []},
+        ]),
+        {"type": "tgrid", "configs": {"itemId": "tg"}, "children": [
+            {"type": "ttoolbar", "configs": {"itemId": "tb1"}, "children": []},
+        ]},
+    ]})
+    rc, out = _check([neg_path])
+    _ok(rc == 0 and "⑪" not in out, "features/feature、tripFileStore、触摸错名不进 ⑪",
+        "rc=%s %s" % (rc, " | ".join(ln.strip() for ln in out.splitlines() if "⑪" in ln)[:200]))
+
+    occ_path = _dump("occ_slot.xwl", {"children": [_grid("grid1", [_bar("tbar"), _bar("tb1")])]})
+    rc, out = _check([occ_path])
+    _ok(rc == 0 and "⑪" in out and "外置" in out and "tbar" in out and "grid1_tb1" not in out,
+        "同级已占用 tbar 时不发明带前缀的新名，并说明外置",
+        "rc=%s %s" % (rc, " | ".join(ln.strip() for ln in out.splitlines() if "⑪" in ln)[:300]))
+
+    dup_path = _dump("dup_tb1.xwl", {"children": [
+        _grid("grid1", [_bar("tb1")]), _grid("grid2", [_bar("tb1")]),
+    ]})
+    rc, out, err = _itemids(dup_path)
+    _ok("grid2_tb1" not in out and "grid1_tb1" not in out,
+        "两个错名彼此重复时 itemids 不再建议加前缀", out[:300])
+
+    post = _dump("post_tb1.xwl", {"title": "t", "children": [_grid("grid1", [_bar("tb1")])]})
+    ops = write("ops_tb1.json", json.dumps(
+        [{"op": "set", "path": ["title"], "value": "w"}], ensure_ascii=False))
+    rc, out = _run(xwl.cmd_patch, file=post, ops=ops, indent=1, eol="auto", dry_run=False,
+                   backup=False, node=None, no_js=True, allow_new_key=False)
+    _ok(rc == 0 and "⑪" not in out, "patch 写盘后自检不跑 ⑪", "rc=%s tail=%s" % (rc, out[-180:]))
+    rc, out = _run(xwl.cmd_expand, file=post, eol="auto", indent=1, safe=False, dry_run=False,
+                   out=None, backup=False, node=None, no_js=True)
+    _ok(rc == 0 and "⑪" not in out, "expand 写盘后自检不跑 ⑪", "rc=%s tail=%s" % (rc, out[-180:]))
+    src = open(post, encoding="utf-8").read()
+    import re as _re
+    found = _re.search(r'"title"\s*:\s*"[^"]*"', src)
+    oldp = write("edit_old_tb1.txt", found.group(0) if found else '"title": "MISSING"')
+    newp = write("edit_new_tb1.txt", '"title": "t2"')
+    rc, out = _run(xwl.cmd_edit, target=post, old_file=oldp, new_file=newp, expect=1,
+                   dry_run=False, backup=False, node=None, no_js=True)
+    _ok(rc == 0 and "⑪" not in out, "edit 写盘后自检不跑 ⑪", "rc=%s tail=%s" % (rc, out[-180:]))
+
+    reg = write("slot_controls.json", json.dumps({"children": [
+        {"id": kind, "general": {"design": True},
+         "configs": {"itemId": {"type": "string"}, "title": {"type": "string"}}, "events": {}}
+        for kind in ("grid", "tree", "column")
+    ]}, ensure_ascii=False))
+
+    def _schema(kind, skeleton):
+        return _run(xwl.cmd_schema, type=kind, controls=reg, list=False, tree=False,
+                    skeleton=skeleton)
+
+    def _kids(text):
+        mark = "设计器同款最小骨架"
+        if mark not in text:
+            return None
+        blob = text[text.find(mark):]
+        sk, _end = json.JSONDecoder().raw_decode(blob[blob.find("{"):])
+        return [c.get("configs", {}).get("itemId") for c in sk.get("children") or []]
+
+    rc, out = _schema("grid", False)
+    _ok(rc == 0 and "槽位不可改" not in out and '"itemId": "store"' not in out,
+        "schema grid 无 --skeleton 的输出不含槽位骨架", out[:200])
+    rc, out = _schema("grid", True)
+    _ok(rc == 0 and _kids(out) == ["store", "tbar", "columns"] and "槽位不可改" in out
+        and "必须唯一" not in out,
+        "schema grid --skeleton 含 store/tbar/columns，提示改为槽位不可改",
+        "kids=%s hint=%s" % (_kids(out), " | ".join(ln.strip() for ln in out.splitlines()
+                                                    if "提示" in ln)[:160]))
+    rc, out = _schema("tree", True)
+    _ok(rc == 0 and _kids(out) == ["store", "tbar"] and '"itemId": "columns"' not in out
+        and "槽位不可改" in out,
+        "schema tree --skeleton 只含 store 和 tbar", "kids=%s" % (_kids(out),))
+    rc, out = _schema("column", True)
+    _ok(rc == 0 and _kids(out) == [] and "editor" not in out,
+        "schema column --skeleton 不塞空 editor", "kids=%s has_editor=%s" % (_kids(out), "editor" in out))

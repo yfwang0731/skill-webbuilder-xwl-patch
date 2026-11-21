@@ -65,7 +65,7 @@ python "$SKILL_ROOT/scripts/xwl.py" patch "$TMP_DIR/demo-page.xwl" \
 python "$SKILL_ROOT/scripts/xwl.py" patch "$TMP_DIR/demo-page.xwl" \
     --ops "$SKILL_ROOT/examples/ops-add-button.json" --backup
 
-# 4) 改完必跑校验（默认九项；要连 `configs` 键 / 内联 `[js]` 一起校就加 `--controls`）
+# 4) 改完必跑校验（默认十项；要连 `configs` 键 / 内联 `[js]` 一起校就加 `--controls`）
 python "$SKILL_ROOT/scripts/xwl.py" check "$TMP_DIR/demo-page.xwl"
 
 # 5) 扫一遍：有没有把多行内容悄悄压平（需要 git 仓库；仓外页面不在仓库里 ⇒ 本步以 [note] 跳过、rc=0）
@@ -136,7 +136,7 @@ git add -A && git commit -qm base
 # ⛔ 不要用 `re.sub(r'\\\r?\n',…)`（universal newline 会把整份 CRLF 改写成 LF、换行被破坏），也不要用 heredoc（POSIX 可复制性差）。
 python -c "import pathlib;p=pathlib.Path('page.xwl');b=p.read_bytes();p.write_bytes(b.replace(bytes([92,13,10]),b'').replace(bytes([92,10]),b''))"
 
-python "$SKILL_ROOT/scripts/xwl.py" check page.xwl          # ← 九项全绿：格式校验查不出来
+python "$SKILL_ROOT/scripts/xwl.py" check page.xwl          # ← 十项全绿：格式校验查不出来
 python "$SKILL_ROOT/scripts/xwl.py" diffguard page.xwl      # ← [warn] 疑似压平，并给出被合并的基线行号
 python "$SKILL_ROOT/scripts/xwl.py" diffguard page.xwl --strict   # ← rc=1，可接进 CI
 ```

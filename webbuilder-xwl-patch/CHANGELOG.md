@@ -14,6 +14,14 @@
 
 ---
 
+## [1.9.0] - 2026-11-21
+
+保留名与错槽位（minor）。使用者装上后能看到三类变化：重名建议不再改槽位 `itemId`，`check` 新增 ⑪，`schema --skeleton` 给出槽位占位。
+
+- 保留名是父 `type`、子 `type`、子 `itemId`。命中后不进 `check` ⑦，也不再建议改 `itemId`。页根 `toolbar` 与 module/folder 根上的 `store` 仍按普通重名。
+- `check` ⑪ 默认 `[warn]`、不进 rc。`check --strict` 才把错槽位判 `[FAIL]`。`patch` / `edit` / `expand` 写盘后自检仍只跑 ①–⑥。
+- `schema grid --skeleton` 的 `children` 含 `store`、`tbar`、`columns`；`tree` 只含 `store`、`tbar`。`column` 骨架不塞空 `editor`。无 `--skeleton` 的输出不变。
+
 ## [1.8.6] - 2026-11-13
 
 工作区根治：契约登记、数据契约与老文件校正、统一扫描器与守卫等价、规则正本与宿主接入、文档精简、构建链接线、归档窗口（patch）：**无新子命令或参数**，不改 `xwl.py` 任何字节（`--help` 15 个子命令逐字节不变）。版本位依据：本次改动全为文档／工具／契约／规则／JSON 整理，使用者装好 skill 后**感知不到新的调用行为或输出**（`plans/30` §1.1 尺子「能感知 ⇒ 至少 minor；不能 ⇒ 至多 patch」），故判 **patch**、段 27、单一版本不拆号。

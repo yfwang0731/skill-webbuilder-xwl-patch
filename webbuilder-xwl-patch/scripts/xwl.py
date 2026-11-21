@@ -1661,14 +1661,14 @@ def cmd_check(args) -> int:
     cfg_hits_all = 0
     cfg_files_all = 0
     # 判定集合（**内部机制、不改 CLI 面貌**）：调用方显式给 `checks` 时优先；没给则由
-    # `--no-js` / `--no-itemid` / `--no-cfgtype` 回退到「全量 1–9」。起因：第 ⑧ 维只该在 `check`
+    # `--no-js` / `--no-itemid` / `--no-cfgtype` 回退到「全量 1–9 与 ⑪」。起因：第 ⑧ 维只该在 `check`
     # 出现、**不进写盘后自检**（`_post_check` 传 1–6）—— 由调用方说"跑哪几项"，而非让 ⑧ 猜"是不是自检"。
     # ⚠️ 第 ⑨ 个编号（`9`）＝ `⑩ configs 值类型`（判据与注册表无关，故 `--controls` 不影响它）。
     # ⚠️ 必须 `getattr(..., None)`：本仓惯用「手工 Namespace」，`selftest` 的 `_run_check`
     #    只带 `{files,node,no_js}`；直接取 `args.checks` 会让十余条 check 断言齐 `AttributeError`。
     checks = getattr(args, "checks", None)
     if checks is None:
-        checks = {1, 2, 3, 4, 5, 6, 7, 8, 9}
+        checks = {1, 2, 3, 4, 5, 6, 7, 8, 9, 11}
         if no_js:
             checks.discard(6)
         if getattr(args, "no_itemid", False):
@@ -1803,9 +1803,13 @@ def cmd_check(args) -> int:
         itemid_warns: list[str] = []
         itemid_note = ""
         no_itemid = bool(getattr(args, "no_itemid", False))
-        if obj is not None and not no_itemid and 7 in checks:
+        ctl_c = None
+        if obj is not None and ((not no_itemid and 7 in checks) or 11 in checks):
             ctl_c = discover_controls(path)
+        if obj is not None and not no_itemid and 7 in checks:
             rep = audit_itemids(obj, controls_path=ctl_c)
+            for _reserved in rep.get("reserved_notes") or []:
+                notes.append(_reserved)
             # 注册表来源 —— 与 `itemids` / `params` 逐字同一句（三处复用 controls_source_line）
             print("  " + controls_source_line(ctl_c))
             for m in rep["errors"]:
@@ -1816,6 +1820,14 @@ def cmd_check(args) -> int:
                 itemid_note = (f"⑦ 注册键重名 {n_g} 组（error {len(rep['errors'])} / "
                                f"benign {rep['n_benign']}）"
                                f" —— 明细: `xwl.py itemids {os.path.basename(path)}`")
+
+        slot_warns: list[str] = []
+        if obj is not None and 11 in checks:
+            _slot_msgs = scan_slot_issues(obj, ctl_c)
+            if getattr(args, "strict", False):
+                errors.extend("⑪ " + msg for msg in _slot_msgs)
+            else:
+                slot_warns = _slot_msgs
 
         # ⑨ 校 configs 键合法性（#48）＋ ⑥ 扩到 configs 内标 [js] 的键（#49）
         #    ⚠️ **只在显式给 `--controls` 时跑**（判据来源是注册表）⇒ 默认整段不跑、输出逐字节不变。
@@ -1899,6 +1911,8 @@ def cmd_check(args) -> int:
             print(f"  [warn] {w}")
         for w in itemid_warns:
             print(f"  [warn] {w}")
+        for w in slot_warns:
+            print(f"  [warn] ⑪ {w}")
         for w in reg_warn:
             print(f"  [warn] {w}")
         for n in notes:
@@ -2256,7 +2270,8 @@ def _post_check(file: str, args, obj=None, detail=None) -> int:
     · 加载链完整性（第 ⑧ 项）是**只提示**项、本来就不进 rc；
     · `configs` 值类型（第 ⑩ 项）是**文件既有的内容属性**（写盘只搬字节、不改值），
       且它对存量判 FAIL ⇒ 若在这里判，会让**本来能写盘**的坏文件突然 `patch` 失败（行为突变）。
-    若把 ⑦/⑧/⑩ 一并判定，会出现"写盘成功却返回非 0"的误导。故这里只传 ①–⑥（`checks`）。
+    · 错槽位（第 ⑪ 项）只在 `check` 出现，不进写盘后自检。
+    若把 ⑦/⑧/⑩/⑪ 一并判定，会出现"写盘成功却返回非 0"的误导。故这里只传 ①–⑥（`checks`）。
 
     ⭐ 唯一的 ⑩ 相关输出是**一条 `[warn]`**（`_cfg_nonstr_warn_line`）：本次写入的对象若含
       `configs` 非字符串值 ⇒ 明说"check 的 ⑩ 会判 FAIL"。⛔ 不进 rc、⛔ 不改值、⛔ 不阻断写盘；
@@ -3096,8 +3111,12 @@ def cmd_hint(tail: str) -> str:
     return "python -B %s %s" % (quote_arg(script_entry()), tail)
 
 
-def format_itemid_candidates(name, hits, scope_desc="当前范围", all_names=None) -> str:
-    """重名时输出「候选清单 + 建议值」——把选择权交回给用户，工具不猜顺序。"""
+def format_itemid_candidates(name, hits, scope_desc="当前范围", all_names=None,
+                              controls_path=None) -> str:
+    """重名时输出「候选清单 + 建议值」——把选择权交回给用户，工具不猜顺序。
+
+    命中节点本身是槽位三元组时，不生成「建议改名」。普通重名仍保留该块。
+    """
     taken = set(all_names or ())
     taken |= {h[2].get("itemId") for h in hits if isinstance(h[2].get("itemId"), str)}
     lines = [
@@ -3110,6 +3129,8 @@ def format_itemid_candidates(name, hits, scope_desc="当前范围", all_names=No
         "候选清单：",
     ]
     sug = []
+    auto_map = _auto_names_map(controls_path)
+    editor_ty = editor_types(auto_map=auto_map)
     for i, (node, t, cfg, path, anc, _c, _k) in enumerate(hits, 1):
         loc = "[" + ", ".join(json.dumps(x) if isinstance(x, str) else str(x) for x in path) + "]"
         lines.append("  #%d  %-12s 祖先: %s" % (i, t, _anc_str(anc)))
@@ -3118,6 +3139,11 @@ def format_itemid_candidates(name, hits, scope_desc="当前范围", all_names=No
         ch = _children_summary(node)
         lines.append("      其下: %s" % (ch or "（无子控件）"))
         if i > 1:
+            parent_type, _parent_item, parent_is_root = _parent_info(anc)
+            iid = cfg.get("itemId") if isinstance(cfg.get("itemId"), str) else ""
+            if is_reserved_slot(parent_type, t, iid, parent_is_root=parent_is_root,
+                                editor_ty=editor_ty, auto_map=auto_map):
+                continue
             s, why = suggest_itemid(name, cfg, anc, taken)
             sug.append((i, t, s, why))
             taken.add(s)
@@ -3161,7 +3187,8 @@ def _pick_itemid(cur, name, scope_desc="当前范围"):
         raise ItemIdError(format_itemid_candidates(
             name, hits, scope_desc,
             all_names={h[2].get("itemId") for h in _iter_controls(cur)
-                       if isinstance(h[2].get("itemId"), str)}))
+                       if isinstance(h[2].get("itemId"), str)},
+            controls_path=_SLOT_CTL))
     return hits[0][5], hits[0][6]
 
 
@@ -3460,6 +3487,218 @@ def apply_ops(obj, ops, created=None, warned=None, allow_new_key=False, inserted
     return obj
 
 
+
+_SLOT_BAR_PARENTS = frozenset({"grid", "tree", "propertygrid"})
+_SLOT_BAR_NAMES = frozenset({"tbar", "bbar", "lbar", "rbar", "fbar"})
+_SLOT_ROOT_TYPES = frozenset({"module", "folder"})
+_EDITOR_FALLBACK = frozenset({
+    "text", "number", "textarea", "combo", "date", "month", "time", "datetime",
+    "file", "check", "radio", "displayfield", "colorfield", "picker",
+})
+# `patch` 的 `@itemId` 歧义文案与 `itemids` 共用槽位判断；命令入口写入，结束时恢复。
+_SLOT_CTL = None
+
+
+def _parent_info(anc):
+    """直接父控件 `(type, itemId, 是否 module/folder 根)`。
+
+    没有带 type 的父级时按根处理：`autoNames.any` 不生效。
+    """
+    if not anc:
+        return None, None, True
+    parent_type, parent_item = anc[-1]
+    if not isinstance(parent_type, str) or not parent_type:
+        return None, None, True
+    if not (isinstance(parent_item, str) and parent_item):
+        parent_item = None
+    return parent_type, parent_item, parent_type in _SLOT_ROOT_TYPES
+
+
+def _auto_names_map(controls_path) -> dict:
+    """`{子 type: {父 type 或 any: 首选 itemId}}`。没有注册表时返回空表。
+
+    读不动注册表只当没有，不因此让 `check` 返回 2。
+    """
+    if not controls_path:
+        return {}
+    rec = _registry_load(controls_path)
+    if rec.get("state") != "ok" or not isinstance(rec.get("data"), (dict, list)):
+        return {}
+    cached = rec.get("auto_names")
+    if isinstance(cached, dict):
+        return cached
+    out: dict = {}
+
+    def walk(o):
+        if isinstance(o, dict):
+            general = o.get("general")
+            cid = o.get("id")
+            if (isinstance(cid, str) and isinstance(general, dict)
+                    and isinstance(general.get("autoNames"), dict)):
+                names = {key: val for key, val in general["autoNames"].items()
+                         if isinstance(key, str) and isinstance(val, str) and val}
+                if names:
+                    out[cid] = names
+            for val in o.values():
+                walk(val)
+        elif isinstance(o, list):
+            for val in o:
+                walk(val)
+
+    walk(rec["data"])
+    rec["auto_names"] = out
+    return out
+
+
+def _preferred_names(child_type, parent_type, parent_is_root, auto_map) -> set:
+    names = auto_map.get(child_type) or {}
+    if parent_type and parent_type in names:
+        raw = names[parent_type]
+    elif parent_type and not parent_is_root and "any" in names:
+        raw = names["any"]
+    else:
+        return set()
+    return {part.strip() for part in str(raw).split(",") if part.strip()}
+
+
+def editor_types(controls_path=None, auto_map=None) -> set:
+    """editor 类型 = 内置兜底 ∪ 注册表里父类型 column/tcolumn 的首选名是 editor 的类型。"""
+    ids = set(_EDITOR_FALLBACK)
+    amap = _auto_names_map(controls_path) if auto_map is None else auto_map
+    for cid, names in amap.items():
+        for parent, pref in names.items():
+            if parent in ("column", "tcolumn") and pref == "editor":
+                ids.add(cid)
+    return ids
+
+
+def _desc_has_column(node) -> bool:
+    for cur, typ, _cfg, _path, _anc, _container, _key in _iter_controls(node):
+        if cur is node:
+            continue
+        if typ in ("column", "tcolumn"):
+            return True
+    return False
+
+
+def _sibling_has_itemid(container, node, expected) -> bool:
+    if not isinstance(container, list):
+        return False
+    for sib in container:
+        if sib is node or not isinstance(sib, dict):
+            continue
+        cfg = sib.get("configs") if isinstance(sib.get("configs"), dict) else {}
+        if cfg.get("itemId") == expected:
+            return True
+    return False
+
+
+def _slot_loc(parent_item, parent_type, item_id) -> str:
+    parent = parent_item or parent_type or ""
+    return "@%s/@%s" % (parent, item_id)
+
+
+def is_reserved_slot(parent_type, child_type, item_id, *, parent_is_root=False,
+                     editor_ty=None, auto_map=None) -> bool:
+    """保留名是父 type、子 type、子 itemId 三元组。禁止按 itemId 字符串全局抑制。"""
+    if not isinstance(item_id, str) or not item_id:
+        return False
+    if (parent_type in _SLOT_BAR_PARENTS and child_type == "toolbar"
+            and item_id in _SLOT_BAR_NAMES):
+        return True
+    if parent_type == "grid" and child_type == "array" and item_id == "columns":
+        return True
+    types = _EDITOR_FALLBACK if editor_ty is None else editor_ty
+    if parent_type in ("column", "tcolumn") and child_type in types and item_id == "editor":
+        return True
+    if auto_map and item_id in _preferred_names(child_type, parent_type, parent_is_root, auto_map):
+        return True
+    return False
+
+
+def is_bad_slot(parent_type, child_type, item_id, node, editor_ty) -> bool:
+    """⑪ 的三条错槽位。允许的工具条名、已叫 columns、已叫 editor 都不是错槽位。"""
+    iid = item_id if isinstance(item_id, str) else ""
+    if parent_type in _SLOT_BAR_PARENTS and child_type == "toolbar" and iid not in _SLOT_BAR_NAMES:
+        return True
+    if (parent_type == "grid" and child_type == "array" and iid != "columns"
+            and _desc_has_column(node)):
+        return True
+    if parent_type in ("column", "tcolumn") and child_type in editor_ty and iid != "editor":
+        return True
+    return False
+
+
+def _slot_state(node, child_type, cfg, anc, editor_ty, auto_map):
+    parent_type, _parent_item, parent_is_root = _parent_info(anc)
+    item_id = cfg.get("itemId") if isinstance(cfg.get("itemId"), str) else ""
+    if is_reserved_slot(parent_type, child_type, item_id, parent_is_root=parent_is_root,
+                        editor_ty=editor_ty, auto_map=auto_map):
+        return "ok"
+    if is_bad_slot(parent_type, child_type, item_id, node, editor_ty):
+        return "bad"
+    return None
+
+
+def _reserved_note(items) -> str:
+    locs = []
+    seen = set()
+    for _node, _typ, cfg, _path, anc in items:
+        parent_type, parent_item, _root = _parent_info(anc)
+        item_id = cfg.get("itemId") if isinstance(cfg.get("itemId"), str) and cfg.get("itemId") else ""
+        loc = _slot_loc(parent_item, parent_type, item_id or "?")
+        if loc not in seen:
+            seen.add(loc)
+            locs.append(loc)
+    return "保留名 " + "、".join(locs)
+
+
+def scan_slot_issues(obj, controls_path=None) -> list:
+    """⑪ 正文直接写应使用的 itemId。同级已占用该槽位时不发明带前缀的新名。"""
+    auto_map = _auto_names_map(controls_path)
+    editor_ty = editor_types(auto_map=auto_map)
+    issues = []
+    for node, typ, cfg, _path, anc, container, _key in _iter_controls(obj):
+        parent_type, parent_item, _root = _parent_info(anc)
+        item_id = cfg.get("itemId") if isinstance(cfg.get("itemId"), str) else ""
+        if not is_bad_slot(parent_type, typ, item_id, node, editor_ty):
+            continue
+        if parent_type in _SLOT_BAR_PARENTS and typ == "toolbar":
+            expected, kind = "tbar", "toolbar"
+        elif parent_type == "grid" and typ == "array":
+            expected, kind = "columns", "array"
+        else:
+            expected, kind = "editor", "editor"
+        loc = _slot_loc(parent_item, parent_type, item_id or "?")
+        if _sibling_has_itemid(container, node, expected) and kind == "toolbar":
+            issues.append(
+                "槽位 itemId 应为 %s，但同级已占用：%s %s。按工具条硬规则把多余工具条外置，不另造带前缀的名字"
+                % (expected, typ, loc))
+        elif _sibling_has_itemid(container, node, expected):
+            issues.append("槽位 itemId 应为 %s，但同级已占用：%s %s。不另造带前缀的名字"
+                          % (expected, typ, loc))
+        else:
+            issues.append("槽位 itemId 应为 %s：%s %s" % (expected, typ, loc))
+    return issues
+
+
+def _slot_skeleton_children(type_name):
+    """`schema --skeleton` 的槽位占位。column 不塞空 editor。"""
+    def child(item_id, type_id):
+        node = collections.OrderedDict()
+        node["configs"] = collections.OrderedDict([("itemId", item_id)])
+        node["expanded"] = False
+        node["children"] = []
+        node["type"] = type_id
+        return node
+
+    if type_name == "grid":
+        return [child("store", "store"), child("tbar", "toolbar"), child("columns", "array")]
+    if type_name == "tree":
+        return [child("store", "store"), child("tbar", "toolbar")]
+    return []
+
+
 def audit_itemids(obj, js_refs=None, controls_path=None) -> dict:
     """给文件里每个**注册键** `normalName || itemId` 重建组并定级（**只两级**），给出候选清单与两种修法。
 
@@ -3486,8 +3725,23 @@ def audit_itemids(obj, js_refs=None, controls_path=None) -> dict:
                 taken_all.add(_v)
     field_ty = set(field_types(controls_path))
     nn_ty = set(normalname_types(controls_path))
+    auto_map = _auto_names_map(controls_path)
+    editor_ty = editor_types(auto_map=auto_map)
+    state_of = {id(it): _slot_state(it[0], it[1], it[2], it[4], editor_ty, auto_map)
+                for it in nodes}
+    by_key_all: dict = {}
+    for it in nodes:
+        by_key_all.setdefault(registry_key(it[2]), []).append(it)
+    note_items = []
+    for _name, _items in by_key_all.items():
+        if len(_items) < 2:
+            continue
+        note_items.extend(it for it in _items if state_of.get(id(it)) == "ok")
+    reserved_notes = [_reserved_note(note_items)] if note_items else []
     by_key: dict = {}
     for it in nodes:
+        if state_of.get(id(it)) == "ok":
+            continue
         by_key.setdefault(registry_key(it[2]), []).append(it)
 
     groups = []
@@ -3532,7 +3786,10 @@ def audit_itemids(obj, js_refs=None, controls_path=None) -> dict:
         fix_nn = []
         if any(not x for x in have_nn):
             taken_nn = set(taken_all)
-            for i, (n, t, cfg, p, anc) in enumerate(items):
+            for i, it in enumerate(items):
+                if state_of.get(id(it)) == "bad":
+                    continue
+                n, t, cfg, p, anc = it
                 if isinstance(cfg.get("normalName"), str) and cfg.get("normalName"):
                     continue
                 own = cfg.get("itemId") or name
@@ -3543,11 +3800,13 @@ def audit_itemids(obj, js_refs=None, controls_path=None) -> dict:
                                "path": p + ["configs", "normalName"]})
         # 修法 B：改 `itemId`（#1 保持原名，动 #2 起；须同步改 JS 里的引用）
         # `taken` = 全文件所有 `itemId` ∪ 所有非空 `normalName` ∪ 本组已建议值
+        # 错槽位不生成带前缀的新名，由 ⑪ 直接写应使用的 itemId。
         taken = set(taken_all)
         fix_id = []
-        for i, (n, t, cfg, p, anc) in enumerate(items):
-            if i == 0:
+        for i, it in enumerate(items):
+            if i == 0 or state_of.get(id(it)) == "bad":
                 continue
+            n, t, cfg, p, anc = it
             own = cfg.get("itemId")
             if not (isinstance(own, str) and own):
                 continue        # 只有 normalName 的节点没有 itemId 可改
@@ -3578,6 +3837,7 @@ def audit_itemids(obj, js_refs=None, controls_path=None) -> dict:
         "warns": [fmt(g) for g in groups if g["level"] == "warn"],
         "n_benign": sum(1 for g in groups if g["level"] == "benign"),
         "nn_ty": sorted(nn_ty),
+        "reserved_notes": reserved_notes,
     }
 
 
@@ -3668,6 +3928,10 @@ def cmd_itemids(args) -> int:
     _ctl_bad = bool(_i_ctl) and _registry_configs(_i_ctl) is None
     rep = audit_itemids(obj, controls_path=ctl)
     groups = rep["groups"]
+
+    def _emit_reserved(stream):
+        for line in rep.get("reserved_notes") or []:
+            print("[note] " + line, file=stream)
     counts = {lv: sum(1 for g in groups if g["level"] == lv) for lv in ("error", "warn", "benign")}
     names = {registry_key(x[2]) for x in rep["nodes"]}
 
@@ -3697,7 +3961,8 @@ def cmd_itemids(args) -> int:
             if not itemid_hits(obj, args.name):     # 该名字没有任何节点以它为 itemId ⇒ 它是注册键
                 print(f"（{args.name!r} 是**注册键**（normalName||itemId），不是 itemId —— "
                       f"组内 itemId: {sorted({h[2].get('itemId') for h in hits if h[2].get('itemId')})}）")
-            print(format_itemid_candidates(args.name, hits, "文件全域", all_names=names))
+            print(format_itemid_candidates(args.name, hits, "文件全域", all_names=names,
+                                          controls_path=ctl))
         return 0
 
     if args.suggest:
@@ -3707,6 +3972,7 @@ def cmd_itemids(args) -> int:
             print("[warn] 跳过 %r 的 #%d %s —— 该类型不接受 `normalName`"
                   "（改用 `--fix itemId` 可改 itemId）" % (s["group"], s["index"], s["type"]),
                   file=sys.stderr)
+        _emit_reserved(sys.stderr)
         if not ops:
             print("[]")
             print("（无需改名：没有 error/warn 组，或选定的修法对本文件不适用）")
@@ -3715,7 +3981,8 @@ def cmd_itemids(args) -> int:
         return 0
 
     if args.json:
-        print(json.dumps({k: v for k, v in rep.items() if k != "nodes"},
+        _emit_reserved(sys.stderr)
+        print(json.dumps({k: v for k, v in rep.items() if k not in ("nodes", "reserved_notes")},
                          ensure_ascii=False, indent=2))
         return 0
 
@@ -3726,6 +3993,7 @@ def cmd_itemids(args) -> int:
     if _ctl_bad:
         print(f"[warn] 读注册表失败：{_i_ctl}（按**未找到**处理；已回退内置兜底）")
     print(controls_source_line(None if _ctl_bad else ctl))
+    _emit_reserved(sys.stdout)
 
     cols = [(n, cfg) for n, t, cfg, *_ in rep["nodes"] if t in _IID_COL_TYPES]
     if cols:
@@ -3768,6 +4036,17 @@ def cmd_itemids(args) -> int:
 
 
 def cmd_patch(args) -> int:
+    """结构级编辑入口。槽位判断与 `itemids` 共用 `_SLOT_CTL`，命令结束即恢复。"""
+    global _SLOT_CTL
+    prev = _SLOT_CTL
+    _SLOT_CTL = discover_controls(args.file) if getattr(args, "file", None) else None
+    try:
+        return _cmd_patch_locked(args)
+    finally:
+        _SLOT_CTL = prev
+
+
+def _cmd_patch_locked(args) -> int:
     """结构级编辑：解析 → 改对象 → 用设计器算法整份重建 → 校验。
 
     这是「遵循设计器规则、不犯格式错」的正路：
@@ -4119,7 +4398,7 @@ def cmd_schema(args) -> int:
             cfgs["closeAction"] = "destroy"
         sk["configs"] = cfgs
         sk["expanded"] = False
-        sk["children"] = []
+        sk["children"] = _slot_skeleton_children(args.type)
         sk["type"] = args.type
         if "click" in shown:
             # 真实控件节点的键集合只有两种：无事件时**没有** events 键（见 SKILL 1.2）
@@ -4190,7 +4469,10 @@ def cmd_schema(args) -> int:
             print("\n> 该控件 events 为 0 个 —— 骨架里**不带** events 键（与真实文件形态一致）。")
         elif "click" not in shown:
             print(f"\n> 该控件没有 click 事件；可挂的是：{' / '.join(shown)} —— 需要时自己加 events 键。")
-        print(f"> 提示：configs 只放上表列出的键（共 {len(cfg)} 个）；注册键（normalName||itemId）必须唯一。")
+        if args.type in ("grid", "tree"):
+            print(f"> 提示：configs 只放上表列出的键（共 {len(cfg)} 个）；槽位不可改。")
+        else:
+            print(f"> 提示：configs 只放上表列出的键（共 {len(cfg)} 个）；注册键（normalName||itemId）必须唯一。")
 
     if obs is not None:
         _print_observed(obs)
@@ -8521,6 +8803,8 @@ def build_parser() -> argparse.ArgumentParser:
     c.add_argument("--no-itemid", action="store_true", help="跳过注册键重名分级检查")
     c.add_argument("--no-cfgtype", action="store_true",
                    help="跳过 ⑩ configs 值类型校验（本项默认即最严档：FAIL、进 rc）")
+    c.add_argument("--strict", action="store_true",
+                   help="⑪ 错槽位改为 FAIL 并进 rc（默认只警告，不进 rc）")
     c.add_argument("--controls", metavar="CONTROLS",
                    help="设计器控件注册表路径（wb/system/controls.json）；**给了才**校 configs 键 "
                         "与 configs 内联 [js]（缺省不校、也不自动找）")

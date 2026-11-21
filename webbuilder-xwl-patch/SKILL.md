@@ -2,7 +2,7 @@
 name: webbuilder-xwl-patch
 slug: skill-webbuilder-xwl-patch
 displayName: webbuilder-xwl-patch
-version: 1.8.6
+version: 1.9.0
 license: MIT
 metadata:
   category: development-tools
@@ -133,6 +133,8 @@ WebBuilder 的页面与查询定义都写在 `.xwl` 里。它**看起来像 JSON
 `references/controls.md` §4.2 典型骨架；查单个控件用 `xwl.py schema --help`。
 
 注册键取 `normalName`（优先），否则取 `itemId`。**必须唯一**；重名且被事件 JS 引用会**静默取不到值**（`error`），未被引用为 `benign`。处置顺序：**先读父子关系判断真实目标 → 把候选交给用户选**，⛔ 不要"删一个"或"挑一个"；精确表达式与分类表见 `references/faq.md` 附录，框架机制（`ComponentManager`／`unregister`）见 `references/measured-data-addressing.md` 的 `7.5`。
+
+grid 内嵌 tbar、columns、store 与列上的 editor 是槽位，重名不是缺陷，禁止改 itemId。细节见 references/controls.md。
 
 ### 1.3 页面顶层骨架（7 把钥匙，键序固定）
 
@@ -377,7 +379,7 @@ python "$SKILL_ROOT/scripts/xwl.py" edit <file.xwl> --old-file old.txt --new-fil
 
 ### 第 5 步 · 提交前扫一遍（`diffguard`。**只在 git 仓库里有意义**）
 
-第 4 步的九项**只能证明"文件自身格式没坏"**，证不了"没人把多行悄悄压平" —— 压平后文件是**自洽**的。
+第 4 步的十项**只能证明"文件自身格式没坏"**，证不了"没人把多行悄悄压平" —— 压平后文件是**自洽**的。
 提交前补这一刀：
 
 ```bash
@@ -403,7 +405,7 @@ python "$SKILL_ROOT/scripts/xwl.py" diffguard <改过的文件或目录> --stric
 | `patch` | **结构级编辑（默认方式）**：只给值 / 子树，按设计器算法重建整份文件 |
 | `edit` | 文本级安全替换（**例外**手段，改一小段文本且不希望整份重排时用） |
 | `expand` | 单行源 → 设计器同款多行 |
-| `check` | 九项校验：格式五项 + 事件 JS 语法 + **注册键**重名分级 + **`configs` 值类型** + 加载链完整性（只提示）；**给了 `--controls` 时另校 `configs` 键（⑨）与内联 `[js]`** |
+| `check` | 十项校验：格式五项 + 事件 JS 语法 + **注册键**重名分级 + **`configs` 值类型** + 加载链完整性（只提示）＋ **错槽位（⑪，默认只警告）**；**给了 `--controls` 时另校 `configs` 键（⑨）与内联 `[js]`** |
 | `diffguard` | **相对 git 基线**检测「多行内容被压平」 |
 | `itemids` | 注册键重名报告 + 建议改名（只读） |
 | `paths` | 列出 `sql` / `totalSql` / `serverScript` / `url` 四类字段的位置 |
