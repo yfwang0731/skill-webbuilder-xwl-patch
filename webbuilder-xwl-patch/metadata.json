@@ -3,12 +3,12 @@
   "name_en": "webbuilder-xwl-patch",
   "displayName": "webbuilder-xwl-patch",
   "author": "yfwang0731",
-  "version": "1.9.0",
+  "version": "1.9.1",
   "schema_version": "1.0",
   "description": "WebBuilder（wb）平台 .xwl 定义文件的处理与安全编辑：结构级 patch（只给值 / 子树，工具按设计器自己的算法重建整份文件）+ 格式校验 + 相对 git 基线的压平检测。",
   "core_capabilities": [
     "结构级 patch 编辑（不碰文本层，格式错误在构造上不会发生）",
-    "check 九项校验（8 项判定：BOM / 换行一致 / 续行空白 / 加载器等价解析 / 末行结构 / 事件 JS 语法 / 注册键重名分级 / `configs` 值类型 ＋ 1 项只提示：加载链完整性）；另：给了 `--controls` 时另校 `configs` 键合法性（⑨，`[warn]`、不进 rc）与 `configs` 内联 `[js]` 语法（`[FAIL]`、进 rc），缺省不校也不自动找；`--controls` 指向的注册表取不到 ⇒ rc=2（属调用方配置错、不算文件缺陷；此时 ①–⑧⑩ 与逐文件结论照常产出，只跳过 ⑨ 与 `configs` 内联 `[js]`）",
+    "check 十项校验（8 项判定：BOM / 换行一致 / 续行空白 / 加载器等价解析 / 末行结构 / 事件 JS 语法 / 注册键重名分级 / `configs` 值类型 ＋ 2 项默认只提示：⑧ 加载链完整性 / ⑪ 错槽位；⑪ 在 `--strict` 时改为 `[FAIL]` 并进 rc，⑧ 始终只提示、不进 rc）；另：给了 `--controls` 时另校 `configs` 键合法性（⑨，`[warn]`、不进 rc）与 `configs` 内联 `[js]` 语法（`[FAIL]`、进 rc），缺省不校也不自动找；`--controls` 指向的注册表取不到 ⇒ rc=2（属调用方配置错、不算文件缺陷；此时 ①–⑧⑩⑪ 与逐文件结论照常产出，只跳过 ⑨ 与 `configs` 内联 `[js]`）",
     "schema 的机器可读与语料实测（`--json` / `--observed`）：`--json` 出机器可读形态（单个对象 / `--list` 出数组）；`--observed [ROOT]` 统计该控件类型在语料里实测用过的 `configs` 键 ＋ 频次，并与注册表给差集",
     "patch 的按键序插入 `insertKey`：把对象键插到指定位置（before/after/index 三选一），补 `set` 只能新建末端的缺口；新建键自授权、以 `[note]` 列出可见",
     "从零新建页面与 SQL 载体（内置设计器真实键序骨架）",
@@ -161,6 +161,11 @@
     "references/workflow-notes.md": "evidence"
   },
   "update_history": [
+    {
+      "version": "1.9.1",
+      "date": "2026-11-21",
+      "summary": "check 现役口径与计数守卫（patch）：无新子命令或参数，check 判定与退出码不变。现役说明统一为十项 = 8 项判定 ＋ 2 项默认提示（⑧ 加载链完整性、⑪ 错槽位；⑪ 在 --strict 下升级为 FAIL 并进 rc）。metadata、CLI 模块说明与 check help、test-prompts 的四个目标期望同步到该口径；--controls 的 ⑨ 仍是可选附加面，不计入十项，注册表读取失败仍照常执行 ①–⑧⑩⑪。既有自称数字臂扩展到 metadata.core_capabilities、xwl 模块说明与 check help、test-prompts.expected，并对原四文档逐切片识别已登记句式错数、正确句旁混错数、缺失、读取失败、空结构、零命中及目标 expected 空/无声明。判据只覆盖 1–10 的有限句式，历史记录段精确豁免，不声称覆盖所有自然语言或工程。"
+    },
     {
       "version": "1.9.0",
       "date": "2026-11-21",

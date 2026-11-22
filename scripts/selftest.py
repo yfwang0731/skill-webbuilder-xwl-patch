@@ -75,6 +75,7 @@
 from __future__ import annotations
 
 import argparse
+import ast
 import collections
 import contextlib
 import hashlib
@@ -132,9 +133,30 @@ def _cap(fn):
 
 def _cap_fns():
     return tuple(sorted(_CAP_FN_NAMES))
-_spec = importlib.util.spec_from_file_location("xwl", os.path.join(SKILL_ROOT, "scripts", "xwl.py"))
-xwl = importlib.util.module_from_spec(_spec)
-_spec.loader.exec_module(xwl)  # type: ignore[union-attr]
+_XWL_IMPORT_ERROR = None
+try:
+    _spec = importlib.util.spec_from_file_location(
+        "xwl", os.path.join(SKILL_ROOT, "scripts", "xwl.py"))
+    if _spec is None or _spec.loader is None:
+        raise ImportError("无法为 xwl.py 建立模块加载器")
+    xwl = importlib.util.module_from_spec(_spec)
+    _spec.loader.exec_module(xwl)  # type: ignore[union-attr]
+    _xwl_required = ("build_parser", "find_node", "cmd_hint", "discover_controls")
+    _xwl_missing = [name for name in _xwl_required if not hasattr(xwl, name)]
+    if _xwl_missing:
+        raise ImportError("xwl.py 缺少必需入口：%s" % "、".join(_xwl_missing))
+except Exception as _exc:
+    _XWL_IMPORT_ERROR = "%s: %s" % (type(_exc).__name__, _exc)
+    xwl = None
+
+
+def _xwl_find_node():
+    if xwl is None:
+        return ""
+    try:
+        return xwl.find_node() or ""
+    except Exception:  # noqa: BLE001
+        return ""
 
 CRLF = "\r\n"
 
@@ -3013,6 +3035,19 @@ def _check_docs(tmp, node, failures, write) -> None:
           "_nm": "", "_nogit_arms": [], "_on_disk": set(), "_on_disk_ok": False,
           "_probe": "", "_r": "", "_rel": "", "_rm_txt": "", "_sk_txt": "", "_txt": {},
           "i": 0, "l": "", "ls": [], "nm": ""}
+    _count_issues, _n_hit, _n_slices = _count_guard_cli(SKILL_ROOT)
+    failures.extend(_count_issues)
+    if not _count_issues:
+        _chk_n = len(_count_guard_expected(SKILL_ROOT))
+        print("[ok]  自称数字（check 判定项数）：代码 %d 项 ↔ %d 个声明切片 %d 处已登记句式，"
+              "逐处覆盖无遗漏（%d 条句式；历史记录段精确豁免）"
+              % (_chk_n, _n_slices, _n_hit, len(_COUNT_FORMS)))
+    _S["_count_guard_done"] = True
+    if _XWL_IMPORT_ERROR is not None:
+        failures.append(
+            "XWL-STARTUP：xwl.py 无法导入或解析（%s）—— 数字臂已完成结构检查；"
+            "其余 docs 守卫未执行，docs 结果记失败" % _XWL_IMPORT_ERROR)
+        return
     _docs_xfile_consistency(_S)
     _docs_numbers_and_tables(_S)
     _docs_layers_and_distribution(_S)
@@ -3264,9 +3299,12 @@ def _docs_xfile_consistency(_S) -> None:
                 doc_fail.append("%s:%d 行尾有多余空白" % (nm, i))
         if _fence % 2:
             doc_fail.append("%s 代码块未闭合（``` 出现 %d 次）" % (nm, _fence))
-        with open(os.path.join(root, nm.replace("/", os.sep)), "rb") as _fh:
-            if not _fh.read().endswith(b"\n"):
-                doc_fail.append("%s 末尾没有换行" % nm)
+        try:
+            with open(os.path.join(root, nm.replace("/", os.sep)), "rb") as _fh:
+                if not _fh.read().endswith(b"\n"):
+                    doc_fail.append("%s 末尾没有换行" % nm)
+        except (OSError, UnicodeError):
+            continue
 
     # 17i 文档自称的数字必须与实际一致 —— 外移/增删内容后最容易过期的一类。
     #     只按**具体句式**精确核对，不用「N 条」这类粗匹配（那会把反模式条数套到清单上）。
@@ -3279,8 +3317,12 @@ def _docs_xfile_consistency(_S) -> None:
         "ck": len(re.findall(r"- \[ \]", _txt.get("references/checklist.md", ""))),
         "ap": len(re.findall(r"^### ", _txt.get("references/anti-patterns.md", ""), re.M)),
     }
-    with open(os.path.join(root, "test-prompts.json"), "r", encoding="utf-8") as _fh:
-        _real["tp"] = len(_json.loads(_fh.read()))
+    try:
+        with open(os.path.join(root, "test-prompts.json"), "r", encoding="utf-8") as _fh:
+            _real["tp"] = len(_json.loads(_fh.read()))
+    except (OSError, UnicodeError, ValueError) as _exc:
+        _real["tp"] = 0
+        doc_fail.append("test-prompts.json 读不了或不是合法 JSON：%s" % _exc)
     _sk_txt = _txt.get("SKILL.md", "")
     _rm_txt = _txt.get("README.md", "")
     _claims = []
@@ -3427,6 +3469,259 @@ def _doc_guard_hist_span_residue(root: str) -> list:
     return problems
 
 
+_COUNT_CN = {
+    1: "一", 2: "二", 3: "三", 4: "四", 5: "五",
+    6: "六", 7: "七", 8: "八", 9: "九", 10: "十",
+}
+# 起因（不这么做会漏什么）：check 的数字口径只在四份文档内核对时，
+# metadata、CLI 说明与 help、test-prompts 会各自漂移且没有同一判据可发现。
+_COUNT_FORMS = (
+    (r"`check` 共 \*\*%s项\*\*", "SKILL 的 check 总述"),
+    (r"不计入上面%s项", "SKILL 的 --controls 不计入"),
+    (r"第 \d+ 步的%s项", "SKILL 的步骤 check 项"),
+    (r"%s项校验", "工具与说明里的 check 项校验"),
+    (r"%s项分别查什么", "faq 的 check 项分别查什么"),
+    (r"不计入这%s项", "faq 的 controls 不计入 check 项"),
+    (r"也不计入%s项", "faq 的 controls 也不计入 check 项"),
+    (r"上面那张%s项表", "faq 的 check 项表"),
+    (r"%s项里哪几项", "faq 的 check 项里哪几项真跑了"),
+    (r"默认%s项", "examples 的默认 check 项"),
+    (r"%s项全绿", "examples 的 check 项全绿"),
+)
+_COUNT_DOC_FILES = ("SKILL.md", "README.md", "references/faq.md", "examples/README.md")
+_COUNT_PROMPT_TARGETS = (1, 12, 18, 21)
+_COUNT_DIAG = "COUNT-DOC-GUARD"
+
+
+def _count_guard_line(text: str, pos: int) -> int:
+    return text[:pos].count("\n") + 1
+
+
+def _count_guard_issue(slice_id: str, message: str) -> str:
+    return "%s [%s] %s" % (_COUNT_DIAG, slice_id, message)
+
+
+def _count_guard_read(root: str, rel: str):
+    path = os.path.join(root, rel.replace("/", os.sep))
+    if not os.path.exists(path):
+        return None, "文件不存在"
+    if not os.path.isfile(path):
+        return None, "不是普通文件（读取失败）"
+    try:
+        with open(path, encoding="utf-8", newline="") as fh:
+            return fh.read(), None
+    except (OSError, UnicodeError) as exc:
+        return None, "读取失败（%s）" % exc
+
+
+def _count_guard_slices(root: str):
+    """按固定顺序返回数字声明扫描切片与结构错误，不读取任何历史记录字段。"""
+    slices = []
+    issues = []
+
+    for rel in _COUNT_DOC_FILES:
+        text, err = _count_guard_read(root, rel)
+        if err:
+            issues.append(_count_guard_issue(rel, err))
+        elif not text.strip():
+            issues.append(_count_guard_issue(rel, "切片为空"))
+        else:
+            slices.append((rel, text))
+
+    rel = "metadata.json"
+    text, err = _count_guard_read(root, rel)
+    if err:
+        issues.append(_count_guard_issue("metadata.core_capabilities", err))
+    else:
+        try:
+            meta = json.loads(text)
+        except ValueError as exc:
+            issues.append(_count_guard_issue("metadata.core_capabilities", "JSON 解析失败（%s）" % exc))
+        else:
+            caps = meta.get("core_capabilities") if isinstance(meta, dict) else None
+            if not isinstance(caps, list) or not caps:
+                issues.append(_count_guard_issue(
+                    "metadata.core_capabilities", "结构为空或不是非空数组"))
+            elif not all(isinstance(item, str) for item in caps):
+                issues.append(_count_guard_issue(
+                    "metadata.core_capabilities", "数组元素必须全为字符串"))
+            elif not any(item.strip() for item in caps):
+                issues.append(_count_guard_issue(
+                    "metadata.core_capabilities", "切片为空"))
+            else:
+                slices.append(("metadata.core_capabilities", "\n".join(caps)))
+
+    rel = "scripts/xwl.py"
+    text, err = _count_guard_read(root, rel)
+    if err:
+        issues.append(_count_guard_issue("xwl.py:module-doc", err))
+        issues.append(_count_guard_issue("xwl.py:check-help", err))
+    else:
+        try:
+            tree = ast.parse(text)
+        except SyntaxError as exc:
+            msg = "Python 解析失败（%s）" % exc
+            issues.append(_count_guard_issue("xwl.py:module-doc", msg))
+            issues.append(_count_guard_issue("xwl.py:check-help", msg))
+        else:
+            module_doc = ast.get_docstring(tree, clean=False) or ""
+            if module_doc.strip():
+                slices.append(("xwl.py:module-doc", module_doc))
+            else:
+                issues.append(_count_guard_issue("xwl.py:module-doc", "模块说明为空"))
+            check_calls = []
+            for node in ast.walk(tree):
+                if not (
+                    isinstance(node, ast.Call)
+                    and isinstance(node.func, ast.Attribute)
+                    and node.func.attr == "add_parser"
+                    and node.args
+                ):
+                    continue
+                first = node.args[0]
+                if isinstance(first, ast.Constant) and first.value == "check":
+                    check_calls.append(node)
+            if not check_calls:
+                issues.append(_count_guard_issue(
+                    "xwl.py:check-help", "找不到 add_parser(\"check\", …)"))
+            else:
+                node = min(check_calls, key=lambda item: getattr(item, "lineno", 0))
+                check_help = ast.get_source_segment(text, node) or ""
+                if check_help.strip():
+                    slices.append(("xwl.py:check-help", check_help))
+                else:
+                    issues.append(_count_guard_issue(
+                        "xwl.py:check-help", "check help 切片为空"))
+
+    rel = "test-prompts.json"
+    text, err = _count_guard_read(root, rel)
+    if err:
+        issues.append(_count_guard_issue("test-prompts.expected", err))
+        for target in _COUNT_PROMPT_TARGETS:
+            issues.append(_count_guard_issue(
+                "test-prompts.expected#%d" % target, err))
+    else:
+        try:
+            prompts = json.loads(text)
+        except ValueError as exc:
+            issues.append(_count_guard_issue(
+                "test-prompts.expected", "JSON 解析失败（%s）" % exc))
+            for target in _COUNT_PROMPT_TARGETS:
+                issues.append(_count_guard_issue(
+                    "test-prompts.expected#%d" % target, "JSON 解析失败"))
+        else:
+            if not isinstance(prompts, list) or not prompts:
+                issues.append(_count_guard_issue(
+                    "test-prompts.expected", "结构为空或不是非空数组"))
+            else:
+                by_id = {}
+                expected_values = []
+                for item in prompts:
+                    if not isinstance(item, dict):
+                        continue
+                    if isinstance(item.get("id"), int):
+                        by_id[item["id"]] = item
+                    expected = item.get("expected")
+                    if isinstance(expected, str) and expected.strip():
+                        expected_values.append(expected)
+                if expected_values:
+                    slices.append(("test-prompts.expected", "\n".join(expected_values)))
+                else:
+                    issues.append(_count_guard_issue(
+                        "test-prompts.expected", "expected 集合为空"))
+                for target in _COUNT_PROMPT_TARGETS:
+                    item = by_id.get(target)
+                    expected = item.get("expected") if isinstance(item, dict) else None
+                    slice_id = "test-prompts.expected#%d" % target
+                    if not isinstance(expected, str) or not expected.strip():
+                        issues.append(_count_guard_issue(slice_id, "expected 为空或缺失"))
+                    else:
+                        slices.append((slice_id, expected))
+    return slices, issues
+
+
+def _count_guard_scan(root: str, expected: int):
+    """只读扫描已登记句式；错数只在登记形态内识别，不把任意 N 项当总数。"""
+    slices, issues = _count_guard_slices(root)
+    expected_cn = _COUNT_CN.get(expected, str(expected))
+    others = tuple((num, cn) for num, cn in _COUNT_CN.items() if num != expected)
+    hits = 0
+    for slice_id, text in slices:
+        spans = []
+        for form, _label in _COUNT_FORMS:
+            pattern = form % expected_cn
+            for match in re.finditer(pattern, text):
+                spans.append((match.start(), match.end()))
+                hits += 1
+        if not spans:
+            issues.append(_count_guard_issue(
+                slice_id, "已登记句式零命中（期望「%s项」）" % expected_cn))
+
+        wrong = []
+        seen = set()
+        for _num, cn in others:
+            for form, label in _COUNT_FORMS:
+                pattern = form % cn
+                for match in re.finditer(pattern, text):
+                    key = (match.start(), match.end(), label)
+                    if key in seen:
+                        continue
+                    seen.add(key)
+                    wrong.append(
+                        "%s:%d「%s」"
+                        % (
+                            slice_id,
+                            _count_guard_line(text, match.start()),
+                            text[max(0, match.start() - 16):match.end() + 8].replace("\n", " "),
+                        )
+                    )
+        if wrong:
+            issues.append(_count_guard_issue(
+                slice_id, "登记句式内出现错数：%s" % "；".join(sorted(wrong)[:8])))
+
+        uncovered = []
+        for match in re.finditer(expected_cn + "项", text):
+            if not any(start <= match.start() < end for start, end in spans):
+                uncovered.append(
+                    "%s:%d「%s」"
+                    % (
+                        slice_id,
+                        _count_guard_line(text, match.start()),
+                        text[max(0, match.start() - 16):match.end() + 8].replace("\n", " "),
+                    )
+                )
+        if uncovered:
+            issues.append(_count_guard_issue(
+                slice_id, "出现未登记句式：%s" % "；".join(uncovered[:8])))
+    return issues, hits, len(slices)
+
+
+def _count_guard_expected(root: str):
+    text, err = _count_guard_read(root, "scripts/xwl.py")
+    if err:
+        return ()
+    match = re.search(r"checks = \{([0-9,\s]+)\}", text)
+    if not match:
+        return ()
+    return tuple(
+        value for value in match.group(1).replace(" ", "").split(",") if value
+    )
+
+
+def _count_guard_cli(root: str):
+    expected = _count_guard_expected(root)
+    if expected:
+        return _count_guard_scan(root, len(expected))
+    slices, issues = _count_guard_slices(root)
+    if not any("[xwl.py:module-doc]" in issue for issue in issues):
+        issues.append(_count_guard_issue(
+            "xwl.py:module-doc", "取不到 checks = {…}，无法确定 check 判定项数"))
+    if not any("[xwl.py:check-help]" in issue for issue in issues):
+        issues.append(_count_guard_issue(
+            "xwl.py:check-help", "取不到 checks = {…}，无法确定 check 判定项数"))
+    return issues, 0, len(slices)
+
+
 @_cap
 def _docs_numbers_and_tables(_S) -> None:
     """`_check_docs` 的第 2 段（机械切分，判据文本逐字未改）。
@@ -3456,66 +3751,17 @@ def _docs_numbers_and_tables(_S) -> None:
     ls = _S.get("ls", [])
     nm = _S.get("nm", "")
     root = _S["root"]
-    if not _chk_m:
-        doc_fail.append("自称数字不符：取不到 `checks = {…}` ⇒ 无法核对「N 项」这类说法")
-    else:
-        _chk_n = len([_x for _x in _chk_m.group(1).replace(" ", "").split(",") if _x])
-        _CN = {1: "一", 2: "二", 3: "三", 4: "四", 5: "五", 6: "六", 7: "七", 8: "八",
-               9: "九", 10: "十"}
-        _num = _CN.get(_chk_n, str(_chk_n))
-        # ⚠️ 形态表：`%s` 处填**由代码算出的中文数字**。改动文档句式时**必须同步登记这里**。
-        _CHK_FORMS = (
-            (r"`check` 共 \*\*%s项\*\*", "SKILL 的 check 总述"),
-            (r"不计入上面%s项", "SKILL 的 --controls 不计入"),
-            (r"第 \d+ 步的%s项", "SKILL 的「第 N 步的九项」"),
-            (r"%s项校验", "工具表里的「九项校验」"),
-            (r"%s项分别查什么", "faq 的「九项分别查什么」"),
-            (r"不计入这%s项", "faq 的「不计入这九项」"),
-            (r"也不计入%s项", "faq 的「也不计入九项」"),
-            (r"上面那张%s项表", "faq 的「上面那张九项表」"),
-            (r"%s项里哪几项", "faq 的「九项里哪几项真跑了」"),
-            (r"默认%s项", "examples 的「默认九项」"),
-            (r"%s项全绿", "examples 的「九项全绿」"),
-        )
-        _chk_files = ("SKILL.md", "README.md", "references/faq.md", "examples/README.md")
-        _spans, _n_hit = [], 0
-        for _form, _lab in _CHK_FORMS:
-            _pat = _form % _num
-            _n_this = 0
-            for _rel in _chk_files:
-                _fp = os.path.join(root, _rel.replace("/", os.sep))
-                if not os.path.isfile(_fp):
-                    continue
-                _body = io.open(_fp, encoding="utf-8").read()
-                for _m2 in re.finditer(_pat, _body):
-                    _n_this += 1
-                    _spans.append((_rel, _m2.start(), _m2.end()))
-                    _n_hit += 1
-            if _n_this == 0:
-                doc_fail.append("自称数字不符：文档里找不到「%s」这种**已登记句式**"
-                                "（%s，期望 %s 项）—— 要么补回该句，要么在 `_CHK_FORMS` 里改登记"
-                                % (_lab, _lab, _num))
-        # 逐处覆盖：每个「<期望数字>项」的出现都必须落在某条已登记形态里
-        _uncov = []
-        for _rel in _chk_files:
-            _fp = os.path.join(root, _rel.replace("/", os.sep))
-            if not os.path.isfile(_fp):
-                continue
-            _body = io.open(_fp, encoding="utf-8").read()
-            for _m3 in re.finditer(_num + "项", _body):
-                if not any(_s[0] == _rel and _s[1] <= _m3.start() < _s[2] for _s in _spans):
-                    _line3 = _body[:_m3.start()].count("\n") + 1
-                    _uncov.append("%s:%d「%s」" % (_rel, _line3,
-                                                   _body[max(0, _m3.start() - 18):_m3.end() + 8]
-                                                   .replace("\n", " ")))
-        if _uncov:
-            doc_fail.append("自称数字不符：这些「%s项」说法**没有登记句式**（⛔ 别整个文件粗匹配，"
-                            "要么把句子登记进 `_CHK_FORMS`、要么改掉该句）：%s"
-                            % (_num, "；".join(_uncov[:6])))
-        if _n_hit and not _uncov:
-            print("[ok]  自称数字（check 判定项数）：代码 %d 项 ↔ 文档 %d 处「%s项」，"
-                  "逐句式登记 %d 条形态、逐处覆盖无遗漏"
-                  % (_chk_n, _n_hit, _num, len(_CHK_FORMS)))
+    if not _S.get("_count_guard_done"):
+        if not _chk_m:
+            doc_fail.append("自称数字不符：取不到 `checks = {…}` ⇒ 无法核对「N 项」这类说法")
+        else:
+            _chk_n = len([_x for _x in _chk_m.group(1).replace(" ", "").split(",") if _x])
+            _count_issues, _n_hit, _n_slices = _count_guard_scan(root, _chk_n)
+            doc_fail.extend(_count_issues)
+            if not _count_issues:
+                print("[ok]  自称数字（check 判定项数）：代码 %d 项 ↔ %d 个声明切片 %d 处已登记句式，"
+                      "逐处覆盖无遗漏（%d 条句式；历史记录段精确豁免）"
+                      % (_chk_n, _n_slices, _n_hit, len(_COUNT_FORMS)))
 
     # 注意：上面那几条针对 **README** 的计数断言（`faq.md # N 条` 等）现在是**惰性**的 ——
     # README 的目录树已不再写各文件的条数（两处维护必然漂移），计数只留在各文件自己 + SKILL。
@@ -5204,7 +5450,14 @@ def main(argv: list[str] | None = None) -> int:
             sys.stderr.write("[usage] %s\n" % _msg)
         return 2
 
-    xwl.ensure_utf8_stdio()     # 输出全是中文；Windows 控制台默认非 UTF-8 会直接 UnicodeEncodeError
+    if xwl is not None:
+        xwl.ensure_utf8_stdio()  # 输出全是中文；Windows 控制台默认非 UTF-8 会直接 UnicodeEncodeError
+    else:
+        for _stream in (sys.stdout, sys.stderr):
+            try:
+                _stream.reconfigure(encoding="utf-8", errors="replace")
+            except (AttributeError, ValueError):
+                pass
     try:
         sys.stdout.reconfigure(line_buffering=True)     # 并行时每行一次原子写，不与其他子进程交错
     except Exception:           # noqa: BLE001
@@ -5285,7 +5538,7 @@ def main(argv: list[str] | None = None) -> int:
                 failures = [_blk_prob] + list(failures)
             # 人工单跑、未给 `--result` ⇒ 只跑并打印、不落 JSON；rc 据本次结果。
             # node 并进这一行（行数不变，只加字段）：单块快照也要能自证跑在哪台机器上。
-            _node_here = xwl.find_node()
+            _node_here = _xwl_find_node()
             print("[note] 未给 `--result` ⇒ 只跑并打印、不落 JSON；要落 JSON 才加 `--result <路径>`"
                   "（node: %s）" % (_node_here or "(未找到)"))
             if failures:
@@ -5305,12 +5558,12 @@ def main(argv: list[str] | None = None) -> int:
                 "state": _only_record.get("state"),
                 "reason": _only_record.get("reason"),
                 "subchecks": _only_record.get("subchecks") or [],
-                "node": xwl.find_node() or "",
+                "node": _xwl_find_node(),
                 "failures": failures,
             }, fh, ensure_ascii=False)
         return 0
 
-    node = xwl.find_node()
+    node = _xwl_find_node()
     print(f"node: {node or '(未找到，跳过事件 JS 校验)'}", flush=True)
 
     blocks = _blocks()

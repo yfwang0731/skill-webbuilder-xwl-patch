@@ -5,7 +5,7 @@
 设计目标：把「安全编辑 + 格式校验」从"凭记忆手工做"固化成可复跑的命令。
 
 子命令（15 个）：
-  check   <file...>                              九项校验：格式五项 + 事件 JS 语法 + 注册键重名分级 + configs 值类型 + 加载链完整性（只提示）
+  check   <file...>                              十项校验：8 项判定 + 2 项默认只提示（⑧ 加载链完整性 / ⑪ 错槽位；⑪ --strict 升级）
   new     <out.xwl> [--kind page|sql]            **从零生成** xwl（内置设计器骨架）
   patch   <file> --ops ops.json                  结构级编辑（改对象 → 按设计器规则重建）
   edit    <file> --old-file O --new-file N       文本级安全替换（锚点按目标换行归一、断言出现次数、拍平多行时警示）
@@ -4988,7 +4988,7 @@ def cmd_folders(args) -> int:
 # diffguard（相对 git 基线，检测「多行内容被压平」这种静默语义损坏）
 # --------------------------------------------------------------------------- #
 # 为什么需要它：SKILL.md 2.3 承认——把「反斜杠 + 换行」直接删掉（"合并行"）之后，
-# 文件**依然是合法 JSON**、`check` 九项全绿、`node --check` 也可能返回 0，
+# 文件**依然是合法 JSON**、`check` 十项全绿、`node --check` 也可能返回 0，
 # 唯一的发现手段是人工 `git diff`。这是本工具唯一"没有自动化防线"的损坏类型。
 #
 # 判据为什么不能只看"续行符变少"：
@@ -8795,8 +8795,8 @@ def build_parser() -> argparse.ArgumentParser:
     sub = p.add_subparsers(dest="cmd", required=True)
 
     c = sub.add_parser("check",
-                       help="九项校验：格式五项 + 事件 JS 语法 + 注册键重名分级 + configs 值类型"
-                            " + 加载链完整性（只提示）")
+                       help="十项校验：8 项判定 + 2 项默认只提示（⑧ 加载链 / ⑪ 错槽位；"
+                            "⑪ --strict 升级）；--controls 另校 ⑨")
     c.add_argument("files", nargs="+", help="一个或多个 .xwl 文件")
     c.add_argument("--node", help="node 可执行文件路径")
     c.add_argument("--no-js", action="store_true", help="跳过事件 JS 语法校验")
