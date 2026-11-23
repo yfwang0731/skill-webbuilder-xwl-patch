@@ -55,8 +55,8 @@ Wb.request({
 
 要点：
 
-- **参数怎么给**：`params: {...}` 或 `out: app.<容器>` —— 完整规则（收哪些控件、两个 API 覆盖方向相反）
-  见 [`sql-fragments.md`](sql-fragments.md) 第五节。
+- **参数怎么给**：`params: {...}` 或 `out: app.<容器>` —— 完整规则（收哪些控件、
+  `params` 覆盖 `out`）见 [`sql-fragments.md`](sql-fragments.md) 第五节。
 - **别用 `Wb.request` 代替 store**：列表/分页/排序要用 `store.load(...)`（框架会带上 `page`/`start`/`limit` 并处理返回）。
 - 默认**失败自动弹错**；不想弹就 `showError: false`，自己处理 `failure`。
 - `callback` 会先于 `success`/`failure` 被调用，签名是 **`(form, action, value, success)`**（比 `success` 多一个布尔），**返回 `false` 可跳过**后续处理（用于统一拦截）。
@@ -156,7 +156,7 @@ Wb.requestAg({
 | url | **不用写**，框架固定改成 `m?xwl=common/save-all`（`wb-debug.js` 里写死） |
 | 保留键 | `bean` / `method` —— 必须给，且与业务参数平铺在同一层 |
 | 业务参数 | 其余键原样变成请求参数；**后台按同名取**（`app.get('x')` 同源）。参数名必须与后台一致，否则取到空 |
-| `out` | 同样支持，合并规则与 `Wb.request` 一致（`out` 覆盖 `params`） |
+| `out` | 同样支持，合并规则与 `Wb.request` 一致（显式 `params` 覆盖 `out`） |
 | 表格批量增删改 | 用 `data`（`Wb.encode(...)` 的 JSON 字符串）+ 配套键 `datatable` / `className` / `insertSql` / `updateSql` / `deleteSql`（实测 Top 组合） |
 | 同一 bean 多方法 | 只改 `method` 即可，`bean` 复用 |
 

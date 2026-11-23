@@ -51,6 +51,7 @@ npx skills remove webbuilder-xwl-patch -g -y
 ## 四、命令在哪个目录里跑（最容易踩的一条）
 
 `xwl.py` 是**独立脚本**，与业务工程没有位置关系 ⇒ **入口一律写全路径**：先设 `SKILL_ROOT` 指装好的那份 skill 目录，再引用它。
+可执行形式是 `xwl.py check <业务文件>`；只给文件路径而缺少子命令会被 argparse 拒绝。
 
 ```bash
 # 先设变量（PowerShell：$env:SKILL_ROOT="…"）；<业务工程>/<模块> 换成你的实际路径
@@ -102,7 +103,13 @@ python "$SKILL_ROOT/scripts/xwl.py" check "<业务工程>/wb/modules/<模块>/�
 - **入口在文件末尾**：最后以 `if __name__ == "__main__":` 收尾 —— 见到它，说明主函数与入口都在这一份里，没有外挂入口文件；
 - **子命令全靠 argparse**：运行 `python "$SKILL_ROOT/scripts/xwl.py" --help`，能列出全部 **15 个**子命令
   （`check` `edit` `patch` `params` `paths` `new` `folders` `itemids` `sqlrefs` `diffguard` `schema` `dump` `expand` `sql` `events`）即说明命令表完整；
-- **能编译**：`python -m py_compile "$SKILL_ROOT/scripts/xwl.py"` 无报错（rc=0）即说明语法层完整、可被解释器加载；
+- **能编译**：用内存编译检查，不生成 `__pycache__`：
+
+  ```bash
+  python -c "from pathlib import Path;p=Path(r'<SKILL_ROOT>/scripts/xwl.py');compile(p.read_bytes(),str(p),'exec')"
+  ```
+
+  无报错（rc=0）即说明语法层完整、可被解释器加载；检查前后安装目录成员集合与源文件字节应不变。
 - **能跑通一次冒烟**：按 §六 生成一页 + `check`，得到 `ALL OK` 即说明运行面完整。
 
 > 这几条都是**当场可复算**的，不依赖任何随版本漂移的体量数字。本 skill **不提供** `--version` 子命令，

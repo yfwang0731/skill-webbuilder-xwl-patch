@@ -678,6 +678,8 @@ def _check_events_and_expand(tmp, failures) -> None:
     #   起因：本函数实测 387 行、`_FN_CAP` 上限 400，余量只剩 13 行；本批要往本函数里加三段
     #   **命令级**断言（越界落点／备份同文件／目录前置错误）⇒ 先把尾段整段下沉，腾出预算。
     #   ⚠️ 判据文本**逐字未改**，只换了宿主；⛔ 不调 `_FN_CAP`、⛔ 不从 `_CAP_FNS` 删名字。
+    failures.extend(_check_1_9_2_contract_cases(tmp))
+    failures.extend(_check_round3_contract_cases())
     _check_subcommands_tail(tmp, failures)
 
 def _folders_f12_cases(tmp):
@@ -793,8 +795,8 @@ def _folders_f12_cases(tmp):
     _rc, _out = _run_folders(p)
     if _rc != 1:
         fail.append("F12：空子目录＋悬空应 rc=1（rc=0 即假绿），实得 %s\n%s" % (_rc, _out))
-    if "目录 2 个" not in _out or "leaf/" not in _out:
-        fail.append("F12：无 .xwl 的子目录未被枚举（目录数/路径不对）：%s" % _out)
+    if "目录 3 个" not in _out or "leaf/" not in _out:
+        fail.append("F12：无 .xwl 的子目录或其直接父索引未被枚举（目录数/路径不对）：%s" % _out)
     if "index 悬空项 2 个" not in _out:
         fail.append("F12：子目录里的 2 个悬空项未计入结论：%s" % _out)
     if "index 与实际文件一致" in _out:
@@ -842,6 +844,438 @@ def _folders_f12_cases(tmp):
         return fail
     print("[ok]  F12 `folders` 分层校验：读不动/结构损坏/确认悬空/良性未登记/无索引/空子目录枚举/register 前置 全部按码值分开")
     return []
+
+def _check_1_9_2_contract_cases(tmp):
+    """1.9.2 文档/CLI/示例的总契约定向判据（不新增自检块）。"""
+    fail = []
+    root = SKILL_ROOT
+
+    def _read(rel):
+        with open(os.path.join(root, rel), encoding="utf-8") as fh:
+            return fh.read()
+
+    skill = _read("SKILL.md")
+    readme = _read("README.md")
+    faq = _read("references/faq.md")
+    checklist = _read("references/checklist.md")
+    distribution = _read("references/distribution.md")
+    walkthrough = _read("references/walkthrough.md")
+    sql_fragments = _read("references/sql-fragments.md")
+    js_api = _read("references/js-api.md")
+    addressing = _read("references/measured-data-addressing.md")
+    examples_readme = _read("examples/README.md")
+    source = _read("scripts/xwl.py")
+    current_docs = "\n".join((skill, readme, faq, checklist, distribution,
+                              walkthrough, sql_fragments, js_api,
+                              addressing, examples_readme, source))
+    for old in (
+        "优先级最高)",
+        "两个 API 方向相反",
+        "唯一的发现手段是人工",
+        "@dataprovider1",
+        "绝大多数子命令支持 `--dry-run`",
+        "`check --controls` 的路径“必须绝对”",
+    ):
+        if old in current_docs:
+            fail.append("1.9.2 旧口径仍存在：%r" % old)
+
+    required = {
+        "C01 运行契约": (skill + faq, "文件级 BOM、缺失、不可读"),
+        "C03 解析分层": (skill + faq, "可安全整份重建"),
+        "C04 写入阶段": (skill + faq, "目标已写入但写后检查失败"),
+        "C05 传参优先级": (sql_fragments + js_api,
+                           "params > out > store 静态 params"),
+        "C06 strict 归属": (faq, "不核取数链路"),
+        "C07 sqlrefs strict": (skill + faq, "sqlrefs 没有 --strict"),
+        "C08 backup 纪律": (skill + checklist, "真跑 `patch` 带 `--backup`"),
+        "C09 expect 契约": (faq + checklist, "核对期望次数"),
+        "C10 错层条件": (skill, "同名目标已存在"),
+        "C12 命令矩阵": (walkthrough + examples_readme, "events --outdir"),
+        "C22 new 成功语义": (walkthrough, "成功看 `rc=0`"),
+        "C24 页面交付": (walkthrough, "设计器打开"),
+        "C25 导航登记": (skill + walkthrough, "需要设计器导航树展示或打开编辑"),
+        "C28 strict 题17": (current_docs, "不改变逐请求的已证明/确缺/未核对归属"),
+        "C30 diffguard 边界": (skill + checklist + source, "精确、最长行、相似度三档"),
+        "C31 安装示例": (distribution, "xwl.py check <"),
+        "C32 controls 相对路径": (faq, "相对路径按当前工作目录"),
+        "C34 requestAg 固定 URL": (sql_fragments + js_api,
+                                    "m?xwl=common/save-all"),
+    }
+    for label, (body, needle) in required.items():
+        if needle not in body:
+            fail.append("%s 缺少现行口径：%r" % (label, needle))
+
+    for rel, needles in {
+        "references/faq.md": (
+            "check --controls",
+            "人工布局交互",
+        ),
+        "references/checklist.md": (
+            "真跑 `patch` 带 `--backup`",
+            "精确、最长行、相似度三档",
+        ),
+    }.items():
+        body = _read(rel)
+        for needle in needles:
+            if needle not in body:
+                fail.append("%s 缺少 %r" % (rel, needle))
+
+    try:
+        prompts = json.loads(_read("test-prompts.json"))
+        blob = json.dumps(prompts, ensure_ascii=False)
+        if "不改变逐请求的已证明/确缺/未核对归属" not in blob:
+            fail.append("C28 test-prompts 题 17 未同步 strict 结论")
+    except Exception as exc:  # noqa: BLE001
+        fail.append("test-prompts.json 不可解析：%s" % exc)
+
+    try:
+        metadata = json.loads(_read("metadata.json"))
+        if metadata.get("version") != "1.9.2":
+            fail.append("metadata.version 不是 1.9.2")
+        if not metadata.get("update_history") or metadata["update_history"][0].get("version") != "1.9.2":
+            fail.append("metadata.update_history 首项不是 1.9.2")
+        file_ops = metadata.get("security_checks", {}).get("file_ops", "")
+        for needle in ("显式输入", "命令推导资源", "选择性扫描", "声明外部写入目标"):
+            if needle not in file_ops:
+                fail.append("C13 metadata.file_ops 缺少 %r" % needle)
+    except Exception as exc:  # noqa: BLE001
+        fail.append("metadata.json 不可解析：%s" % exc)
+    if "version: 1.9.2" not in skill:
+        fail.append("SKILL.md 版本不是 1.9.2")
+    changelog = _read("CHANGELOG.md")
+    if "## [1.9.2]" not in changelog:
+        fail.append("CHANGELOG 缺少 1.9.2 段")
+
+    # C01/C02/C06/C07：真实 CLI 的退出码/strict 边界。
+    work = os.path.join(tmp, "v192_contract")
+    os.makedirs(work, exist_ok=True)
+    valid = os.path.join(work, "valid.xwl")
+    with open(valid, "w", encoding="utf-8", newline="") as fh:
+        fh.write(xwl.dumps_designer(xwl.skeleton_page("t"), 1, CRLF))
+    bom = os.path.join(work, "bom.xwl")
+    with open(bom, "wb") as fh:
+        fh.write(b"\xef\xbb\xbf" + open(valid, "rb").read())
+    missing = os.path.join(work, "missing.xwl")
+    ops = os.path.join(work, "ops.json")
+    old = os.path.join(work, "old.txt")
+    new = os.path.join(work, "new.txt")
+    with open(ops, "w", encoding="utf-8") as fh:
+        fh.write('[{"op":"set","path":["title"],"value":"x"}]')
+    with open(old, "w", encoding="utf-8") as fh:
+        fh.write('"title": "t"')
+    with open(new, "w", encoding="utf-8") as fh:
+        fh.write('"title": "u"')
+    for argv, expected, label in (
+        (["check", bom, "--no-js"], 1, "check BOM"),
+        (["check", missing, "--no-js"], 1, "check 缺失"),
+        (["patch", bom, "--ops", ops, "--no-js"], 2, "patch BOM"),
+        (["edit", bom, "--old-file", old, "--new-file", new, "--no-js"], 2, "edit BOM"),
+        (["expand", bom, "--no-js"], 2, "expand BOM"),
+        (["check", valid, "--module-root", work, "--no-js"], 2,
+         "check --module-root argparse"),
+        (["sqlrefs", valid, "--strict"], 2, "sqlrefs --strict argparse"),
+    ):
+        rc, out, err = _run_cli(argv)
+        if rc != expected:
+            fail.append("C01/C06/C07 %s 应 rc=%d，实得 %r：%s"
+                        % (label, expected, rc, (out + err)[-500:]))
+
+    bad_controls = os.path.join(work, "bad-controls.json")
+    with open(bad_controls, "w", encoding="utf-8", newline="") as fh:
+        fh.write("{ bad")
+    slot_bad = os.path.join(work, "slot_bad.xwl")
+    slot_obj = xwl.skeleton_page("slot")
+    slot_obj["children"].append({
+        "type": "grid", "configs": {"itemId": "slotGrid"},
+        "expanded": False, "children": [
+            {"type": "toolbar", "configs": {"itemId": "wrongTbar"},
+             "expanded": False, "children": []},
+            {"type": "array", "configs": {"itemId": "wrongColumns"},
+             "expanded": False, "children": []},
+        ],
+    })
+    with open(slot_bad, "w", encoding="utf-8", newline="") as fh:
+        fh.write(xwl.dumps_designer(slot_obj, 1, CRLF))
+    for strict, needle in ((False, "[warn] ⑪"), (True, "[FAIL] ⑪")):
+        argv = ["check", slot_bad, "--controls", bad_controls, "--no-itemid", "--no-js"]
+        if strict:
+            argv.append("--strict")
+        rc, out, err = _run_cli(argv)
+        text = out + err
+        if rc != 2 or needle not in text:
+            fail.append("C02 坏 controls 且%s时⑪仍须执行，rc=%r needle=%r"
+                        % (" strict" if strict else "默认", rc, needle))
+
+    # C20：paths 输出必须来自实际命中，且推荐路径真能接 patch --dry-run。
+    sql_page = os.path.join(work, "queryDemo.xwl")
+    rc, out, err = _run_cli(["new", sql_page, "--kind", "sql",
+                             "--title", "示例查询", "--no-js"])
+    if rc != 0 or "WB_MISC" not in out or "必须替换" not in out:
+        fail.append("C22 new --kind sql 应 rc=0、先校验后提示且明确占位 SQL 必须替换")
+    rc, out, err = _run_cli(["paths", sql_page])
+    if rc != 0 or "@dataprovider1" in out or '["@dataprovider", "configs", "sql"]' not in out:
+        fail.append("C20 paths 必须只给真实命中路径并可接 patch：%s" % (out + err))
+    path_ops = os.path.join(work, "path_ops.json")
+    with open(path_ops, "w", encoding="utf-8") as fh:
+        fh.write('[{"op":"set","path":["@dataprovider","configs","sql"],'
+                 '"value":"select 1"}]')
+    rc, out, err = _run_cli(["patch", sql_page, "--ops", path_ops,
+                             "--dry-run", "--no-js"])
+    if rc != 0:
+        fail.append("C20 paths 推荐路径接 patch --dry-run 应 rc=0：%s" % (out + err))
+
+    # C23：README 引用的唯一按钮样例必须真实挂到 grid→toolbar→button。
+    button_page = os.path.join(work, "readme-button.xwl")
+    _run_cli(["new", button_page, "--kind", "page", "--title", "README", "--no-js"])
+    before = open(button_page, "rb").read()
+    rc, out, err = _run_cli(["patch", button_page,
+                             "--ops", os.path.join(root, "examples", "ops-add-button.json"),
+                             "--dry-run", "--no-js"])
+    if rc != 0 or open(button_page, "rb").read() != before:
+        fail.append("C23 README 按钮样例 dry-run 应 rc=0 且不改源")
+    rc, out, err = _run_cli(["patch", button_page,
+                             "--ops", os.path.join(root, "examples", "ops-add-button.json"),
+                             "--backup", "--no-js"])
+    if rc != 0 or not os.path.exists(button_page + ".bak"):
+        fail.append("C23 README 按钮样例真跑必须 rc=0 且带 backup")
+    elif open(button_page + ".bak", "rb").read() != before:
+        fail.append("C23 README 按钮样例 .bak 必须等于操作前源字节")
+    rc, out, err = _run_cli(["check", button_page, "--no-js"])
+    if rc != 0:
+        fail.append("C23 README 按钮样例 check 应 rc=0：%s" % (out + err))
+    try:
+        _t, _b, page_obj = xwl.load_xwl(button_page)
+        controls = list(xwl._iter_controls(page_obj))
+        grids = [x for x in controls if x[1] in ("grid", "tgrid")]
+        if len(grids) != 1:
+            fail.append("C23 按钮样例应只有一个 grid")
+        else:
+            grid = grids[0][0]
+            tbars = [x for x in grid.get("children", [])
+                     if isinstance(x, dict) and x.get("type") == "toolbar"
+                     and (x.get("configs") or {}).get("itemId") == "tbar"]
+            buttons = ([x for x in tbars[0].get("children", [])
+                        if isinstance(x, dict) and x.get("type") == "button"]
+                       if tbars else [])
+            if not tbars or not buttons:
+                fail.append("C23 按钮必须是 grid→toolbar(tbar)→button，不得挂 module.children")
+    except Exception as exc:  # noqa: BLE001
+        fail.append("C23 按钮样例解析失败：%s" % exc)
+
+    # C36：querybar 自包含本地 store，并把中性字段口径锁住。
+    for old in ("ORDER_FILE", "ORDER_NO", "CUSTOMER", "QTY", "CREATED_ON",
+                "queryOrder", "orderQuery", "orderNo", "stateStore"):
+        if old in walkthrough:
+            fail.append("C36 walkthrough 旧字段/旧名仍存在：%r" % old)
+    for needle in ("DEMO_TABLE", "COL_1", "COL_2", "COL_3", "COL_4",
+                   "demoKey", "queryDemo", "demoQuery", "示例查询"):
+        if needle not in walkthrough:
+            fail.append("C36 walkthrough 缺少中性字段/名称 %r" % needle)
+    try:
+        qb = json.loads(_read("examples/ops-add-querybar.json"))
+        qb_blob = json.dumps(qb, ensure_ascii=False)
+        if "stateStore" in qb_blob:
+            fail.append("C36 querybar 仍引用外部 stateStore")
+        if '"type": "store"' not in qb_blob and "'type': 'store'" not in qb_blob:
+            fail.append("C36 querybar combo 内缺少本地 store")
+    except Exception as exc:  # noqa: BLE001
+        fail.append("C36 querybar 样例 JSON 不可解析：%s" % exc)
+
+    # C36 端到端：直接执行 walkthrough 中的两段 ops，并核对列与 combo/store 结构。
+    try:
+        blocks = re.findall(r"```json\n(.*?)\n```", walkthrough, re.S)
+        sql_ops_blob = next(block for block in blocks if '"@module"' in block)
+        page_ops_blob = next(block for block in blocks if '"demoGrid"' in block)
+        module_root = os.path.join(work, "walkthrough", "wb", "modules")
+        sql_live = os.path.join(module_root, "demo", "xxxSql", "queryDemo.xwl")
+        page_live = os.path.join(module_root, "demo", "demoQuery.xwl")
+        os.makedirs(os.path.dirname(sql_live), exist_ok=True)
+        rc, out, err = _run_cli(["new", sql_live, "--kind", "sql",
+                                 "--title", "示例查询", "--no-js"])
+        if rc != 0:
+            fail.append("C36 walkthrough new SQL 失败：%s" % (out + err))
+        sql_ops = os.path.join(work, "walkthrough", "ops-sql.json")
+        with open(sql_ops, "w", encoding="utf-8") as fh:
+            fh.write(sql_ops_blob)
+        rc, out, err = _run_cli(["patch", sql_live, "--ops", sql_ops,
+                                 "--backup", "--no-js"])
+        if rc != 0:
+            fail.append("C36 walkthrough SQL patch --backup 失败：%s" % (out + err))
+        rc, out, err = _run_cli(["sqlrefs", sql_live])
+        if rc != 0:
+            fail.append("C36 walkthrough sqlrefs 失败：%s" % (out + err))
+
+        rc, out, err = _run_cli(["new", page_live, "--kind", "page",
+                                 "--title", "示例查询", "--no-js"])
+        if rc != 0:
+            fail.append("C36 walkthrough new page 失败：%s" % (out + err))
+        page_ops = os.path.join(work, "walkthrough", "ops-page.json")
+        with open(page_ops, "w", encoding="utf-8") as fh:
+            fh.write(page_ops_blob.replace("<模块>", "demo"))
+        rc, out, err = _run_cli(["patch", page_live, "--ops", page_ops,
+                                 "--backup", "--no-js"])
+        if rc != 0:
+            fail.append("C36 walkthrough page patch --backup 失败：%s" % (out + err))
+        rc, out, err = _run_cli(["params", page_live, "--module-root", module_root,
+                                 "--strict"])
+        if rc != 0:
+            fail.append("C36 walkthrough params --strict 失败：%s" % (out + err))
+        rc, out, err = _run_cli(["check", page_live, "--no-js"])
+        if rc != 0:
+            fail.append("C36 walkthrough page check 失败：%s" % (out + err))
+
+        _text, _bom, page_obj = xwl.load_xwl(page_live)
+        controls = list(xwl._iter_controls(page_obj))
+        grids = [item for item in controls if item[1] == "grid"]
+        if len(grids) != 1:
+            fail.append("C36 walkthrough 应恰有一个 grid")
+        else:
+            grid = grids[0][0]
+            arrays = [child for child in grid.get("children", [])
+                      if isinstance(child, dict) and child.get("type") == "array"
+                      and (child.get("configs") or {}).get("itemId") == "columns"]
+            columns = (arrays[0].get("children") if arrays else []) or []
+            if len(columns) != 4:
+                fail.append("C36 walkthrough columns 必须恰有 4 列，实得 %d" % len(columns))
+        combos = [item[0] for item in controls
+                  if item[1] == "combo"
+                  and (item[2].get("itemId") == "demoState")]
+        local_stores = (combos[0].get("children") if combos else []) or []
+        if not combos or not any(
+                isinstance(node, dict) and node.get("type") == "store"
+                and (node.get("configs") or {}).get("itemId") == "store"
+                for node in local_stores):
+            fail.append("C36 walkthrough combo 必须内嵌本地 store")
+    except Exception as exc:  # noqa: BLE001
+        fail.append("C36 walkthrough 端到端夹具失败：%s" % exc)
+
+    # 安装副本用内存 compile 自证，前后成员集合与源文件字节不变。
+    # 分发面可能以无 `.git` 的 zip 解包布局出现，因此这里从实际分发目录复制，
+    # 不从 Git 索引取清单；该断言验证的是分发内容本身，不应依赖宿主的仓库形态。
+    install = os.path.join(tmp, "v192_install")
+    try:
+        shutil.copytree(
+            root,
+            install,
+            ignore=shutil.ignore_patterns(".git", "__pycache__", "*.pyc"),
+        )
+    except OSError as exc:
+        fail.append("安装副本创建失败：%s" % exc)
+
+    def _snapshot(base):
+        rows = {}
+        for dirpath, dirnames, filenames in os.walk(base):
+            dirnames.sort()
+            for filename in sorted(filenames):
+                path = os.path.join(dirpath, filename)
+                rel = os.path.relpath(path, base).replace(os.sep, "/")
+                rows[rel] = hashlib.sha256(open(path, "rb").read()).hexdigest()
+        return rows
+
+    if os.path.isdir(install):
+        before_tree = _snapshot(install)
+        try:
+            for dirpath, _dirnames, filenames in os.walk(install):
+                for filename in filenames:
+                    if not filename.endswith(".py"):
+                        continue
+                    path = os.path.join(dirpath, filename)
+                    compile(open(path, "rb").read(), path, "exec")
+            after_tree = _snapshot(install)
+            if before_tree != after_tree:
+                fail.append("安装副本内存编译改变了成员或字节")
+            if any("__pycache__" in rel for rel in after_tree):
+                fail.append("安装副本内存编译生成了 __pycache__")
+        except Exception as exc:  # noqa: BLE001
+            fail.append("安装副本内存编译失败：%s" % exc)
+
+    if fail:
+        return fail
+    print("[ok]  1.9.2 总契约：C01-C36 文档现行口径、退出码/strict、paths、"
+          "README 工具栏结构/备份、walkthrough 中性字段与 querybar 自包含")
+    return []
+
+
+def _check_round3_contract_cases():
+    """Round 3：六组旧口径必须消失，新口径逐文件落地。"""
+    fail = []
+
+    def _read(rel):
+        with open(os.path.join(SKILL_ROOT, rel), encoding="utf-8") as stream:
+            return stream.read()
+
+    texts = {
+        rel: _read(rel)
+        for rel in (
+            "SKILL.md",
+            "README.md",
+            "scripts/xwl.py",
+            "references/faq.md",
+            "references/checklist.md",
+            "test-prompts.json",
+        )
+    }
+    all_text = "\n".join(texts.values())
+    old_probe = all_text.replace("①–⑧⑩⑪", "").replace("①②③④⑤⑥⑦⑧⑩⑪", "")
+    for old in (
+        "`expand` / `patch` / `edit` 的三个共同规则",
+        "三命令共用",
+        "`patch` / `edit` / `expand` **三命令共用**",
+        "①–⑧⑩",
+        "①②③④⑤⑥⑦⑧⑩",
+        "④ 通过 ⇒ 框架能加载它",
+        "只要能按加载器规则解析成功，就说明**框架能加载它**",
+        "**`patch` 的失败默认不写盘**",
+        "`git checkout -- <file>`",
+        "git checkout -- 回退",
+        "要求 `itemId` 唯一（重名时工具**拒绝执行**、不替你猜，改用 `paths` 给出的原路径）",
+        "且这一步在输出里写明",
+        "各命令都会在输出里写明选了哪个换行",
+    ):
+        if old in old_probe:
+            fail.append("round3 旧口径仍存在：%r" % old)
+
+    positive = {
+        "C16": (
+            texts["SKILL.md"] + texts["references/faq.md"] + texts["scripts/xwl.py"],
+            (
+                "`edit` 不提供 `--eol`",
+                "`patch/expand` 执行整文件 EOL",
+            ),
+        ),
+        "C02": (
+            texts["references/faq.md"] + texts["scripts/xwl.py"],
+            ("①–⑧⑩⑪",),
+        ),
+        "C03": (
+            texts["SKILL.md"] + texts["references/checklist.md"]
+            + texts["test-prompts.json"] + texts["scripts/xwl.py"],
+            ("④ 只说明解析阶段接受该文本",),
+        ),
+        "C04": (
+            texts["SKILL.md"],
+            ("不得从命令失败或 `rc` 推断文件未动",),
+        ),
+        "C08": (
+            texts["SKILL.md"] + texts["scripts/xwl.py"],
+            ("确实存在的操作前副本",),
+        ),
+        "C11": (
+            texts["README.md"] + texts["test-prompts.json"],
+            ("保留槽位", "普通非槽位"),
+        ),
+    }
+    for label, (body, needles) in positive.items():
+        for needle in needles:
+            if needle not in body:
+                fail.append("%s 缺少新口径：%r" % (label, needle))
+
+    if fail:
+        return fail
+    print("[ok]  round3 C02/C03/C04/C08/C11/C16：旧句负例消失，"
+          "解析分层、四写入阶段、操作前副本、槽位边界和 edit EOL 分工均有正向断言")
+    return []
+
 
 @_cap
 def _check_subcommands_tail(tmp, failures) -> None:

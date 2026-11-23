@@ -85,11 +85,12 @@ def eol_styles(text: str) -> set:
 
 
 def pick_eol_for_auto(text: str) -> str:
-    """`--eol auto` 的两层规则（`patch` / `expand` / `edit` 三命令共用），返回风格名。
+    """`--eol auto` 的两层规则（`patch/expand` 执行整文件 EOL 时共用），返回风格名。
 
     ① 源**只有一种**风格 → **沿用它**（含纯 CR）；
     ② 源 **≥2 种** → **只在 CRLF/LF 里取多数**；等量（含两者皆 0）取 **CRLF**；**CR 不参与投票**；
-    ③ 源**一个换行符都没有** → 回退 **LF**（无从"沿用"，且这一步在输出里写明）。
+    ③ 源**一个换行符都没有** → 回退 **LF**（无从"沿用"；patch/expand 在输出里写明，edit 不打印整文件换行选择）。
+    `edit` 不提供 `--eol`：它只为锚点和替换片段选择内部归一风格，未命中区域保持原字节。
     """
     styles = eol_styles(text)
     if not styles:
@@ -297,7 +298,8 @@ def _strip_trailing_commas(t: str) -> str:
     起因（为什么要对齐尾随逗号）：加载器是 org.json，它**接受** `{"a":1,}` 这种尾随逗号；
     而 Python 的 `json.loads` 会报 `Illegal trailing comma` ⇒ 若直接拿后者下结论，
     **框架明明能加载**的文件会被 ④ 判 FAIL。「工具比框架还严」会破坏 ④ 的保真承诺
-    （④ 通过 ⇒ 框架能加载它；反向不成立 —— 框架比 ④ 更宽），故在解析前先把这类逗号归一掉。
+    （④ 只说明解析阶段接受该文本；`patch/expand` 另需可安全整份重建，页面可用性另看结构检查和设计器验收），
+    故在解析前先把这类逗号归一掉。
 
     字符串感知（安全边界）：逐字符扫描，用**未转义**的 `"` 翻转「在字符串内」标志、用 `\\`
     跟踪转义态，**只在字符串外**删逗号 ⇒ `{"s":"a,}"}` 里字符串内的 `,}` 原样保留、取值不变。
@@ -1632,7 +1634,7 @@ def cmd_check(args) -> int:
     #   属**调用方配置错**，⛔ 不是被检文件的内容缺陷 ⇒ 走 `rc=2` 的**用法错**契约（与 `patch --ops`
     #   读不动、`edit --old-file` 指向不存在同一种"参数给错即 rc=2"，⛔ 不新造标记）。
     #   ⚠️ 为什么必须进 rc：原行为只 `[warn]`、不进 rc ⇒ 路径写错时「校验过」**恒真**（假绿）。
-    #   ⚠️ **为什么不再早退**（本轮修）：早退会把 `①②③④⑤⑥⑦⑧⑩` 的**逐文件结论整段吞掉**
+    #   ⚠️ **为什么不再早退**（本轮修）：早退会把 `①②③④⑤⑥⑦⑧⑩⑪` 的**逐文件结论整段吞掉**
     #      （实测带 2 个文件时输出从 10 行缩到 3 行、连 `=== check:` 段都没有）—— 用户拿不到
     #      任何"文件本身好不好"的信息，而注册表只影响 ⑨ 与 ⑥-ext 两项。故改为：**只跳过那两项**，
     #      其余照跑；全部跑完后打一行 `[note]` 说明 + `=== 结果: FAIL` + `rc=2`。
@@ -1958,12 +1960,12 @@ def cmd_check(args) -> int:
         print(f"  [FAIL] ⑩ configs 值类型：{cfg_nodes_all} 个节点 / {cfg_hits_all} 处"
               f"（涉及 {cfg_files_all} 个文件） —— 明细见上方各文件段")
     # `--controls` 取不到的**运行级说明**（`[note]`、但**进 rc=2**：属调用方用法错）。
-    #   打在**全部文件跑完之后** —— 上面 ①②③④⑤⑥⑦⑧⑩ 的逐文件结论已经完整产出，
+    #   打在**全部文件跑完之后** —— 上面 ①②③④⑤⑥⑦⑧⑩⑪ 的逐文件结论已经完整产出，
     #   这句只解释"为什么没有 ⑨ / ⑥-ext"以及"为什么 rc=2"。
     if _ctl_bad:
         print("  [note] --controls 取不到控件注册表: %s"
               "（这属**调用方配置错**：路径不存在 / 不可读 / 不是可解析的 JSON；"
-              "⛔ 不是被检文件的内容缺陷。①②③④⑤⑥⑦⑧⑩ 已照常判定，⑨ 与 configs 内联 [js] 未校）"
+              "⛔ 不是被检文件的内容缺陷。①②③④⑤⑥⑦⑧⑩⑪ 已照常判定，⑨ 与 configs 内联 [js] 未校）"
               % _controls)
         failed = True
         print("=== 结果:", "FAIL")
@@ -2535,8 +2537,8 @@ def cmd_edit(args) -> int:
     # 锚点按**目标文件的实际换行**归一化 —— 否则 LF 文件上跨行锚点永远匹配不到
     # （写死 CRLF 时，跨行锚点在 LF 文件上必然失配，而失败信息是误导性的
     #   「锚点出现次数: 0」，会让人以为锚点写错）
-    # 换行判据与 `patch`/`expand` 同源（`pick_eol_for_auto`）：单风格沿用（含纯 CR）、
-    # 混用只在 CRLF/LF 取多数、CR 不投票、无换行回退 LF。
+    # 只复用 `pick_eol_for_auto` 为锚点和替换片段选择归一风格；不重建整文件，
+    # 未命中区域保持原字节。`edit` 不提供 `--eol`。
     styles = eol_styles(text)
     eol = _EOL_CHAR[pick_eol_for_auto(text)]
     if len(styles) > 1:
@@ -2658,8 +2660,8 @@ def _same_file(a: str, b: str) -> bool:
 def cmd_expand(args) -> int:
     """把（通常是单行的）xwl 规范成设计器同款多行形态。
 
-    算法与 WebBuilder 的 `IDE.updateModule` 完全一致（见文件上方 dumps_designer 注释），
-    所以输出与设计器保存结果**逐字节一致**（换行符按 --eol 决定）。
+    默认忠实模式的布局算法与 WebBuilder 的 `IDE.updateModule` 一致（换行符按 --eol 决定）。
+    `--safe` 或非 1 缩进属于排版实验，不承诺设计器布局。
     """
     try:
         # 写盘读入口：只有**宽容面**读得动 ⇒ `wide=True` ⇒ 拒写（`expand` 同样是整份重建，
@@ -2674,10 +2676,10 @@ def cmd_expand(args) -> int:
         print("[FAIL] 目标文件带 BOM；本工具不处理，请先确认它本来就不该有 BOM")
         return 2
 
-    # EOL：auto = **两层规则**（① 源只有一种风格 → 沿用它（含纯 CR）；② 源 ≥2 种 →
+    # patch/expand 的整文件 EOL：auto = **两层规则**（① 源只有一种风格 → 沿用它（含纯 CR）；② 源 ≥2 种 →
     # 只在 CRLF/LF 取多数、等量取 CRLF、**CR 不投票**；③ 无换行 → 回退 LF）。
-    # 这条规则由 patch / expand / edit **三命令共用**（`pick_eol_for_auto`）。
-    # ⇒ 无换行源回退 LF、这一步**不静默**（各命令都会在输出里写明选了哪个换行）。
+    # 这条整文件规则只属于 patch/expand。`edit` 不提供 --eol，只归一锚点/替换片段的内部风格。
+    # ⇒ 无换行源回退 LF、这一步**不静默**（patch/expand 在输出里写明选了哪个换行；edit 常规不打印）。
     styles = eol_styles(text)
     if args.eol == "auto":
         eol = _EOL_CHAR[pick_eol_for_auto(text)]
@@ -2737,8 +2739,12 @@ def cmd_expand(args) -> int:
 
     rc = _post_check(dest, args, obj)     # 传已解析对象：省一次读盘（用于那条 ⑩ 预告 warn）
     if rc == 0:
-        print("> 排版与设计器 `IDE.updateModule` 一致（org.json toString(1) 布局）。")
-        print("> 若原文件已被设计器保存过，正常情况下本命令应产出**逐字节相同**的内容。")
+        if out == text:
+            print("[ok]   候选与源文本逐字节相同（本次未发生重排）。")
+        else:
+            print("[note] 候选与源文本不同：本次发生了重排或格式变化。")
+        if not args.safe and args.indent == 1:
+            print("> 当前为忠实模式：排版与设计器 `IDE.updateModule` 一致（org.json toString(1) 布局）。")
     return rc
 
 
@@ -2989,15 +2995,11 @@ def js_refs_of(obj, filtered: bool = True) -> set:
       `itemId`，保留表那层"可能只是方法"的歧义就不存在了（`store` / `add` / `items` / `id`
       都是真实存在的 itemId，滤掉会漏判）。
     """
-    blob = "\n".join(code for _n, code in collect_events(obj))
-    if not blob:
-        return set()
-    clean = strip_js_comments(blob)
-    names = (set(_APP_REF_BARE.findall(clean)) | set(_APP_REF_GET.findall(clean))
-             | set(_APP_REF_BRACKET.findall(clean)))
-    if not filtered:
-        return names
-    return {x for x in names if x not in _APP_REF_RESERVED}
+    per_event = [
+        _extract_app_refs(code, filtered=filtered)
+        for _name, code in collect_events(obj)
+    ]
+    return set().union(*per_event) if per_event else set()
 
 
 def _anc_str(anc) -> str:
@@ -3288,7 +3290,7 @@ def apply_ops(obj, ops, created=None, warned=None, allow_new_key=False, inserted
     """按 ops 就地修改对象。
 
     path 是「键 / 数组下标」列表；**以 `@` 开头的段按 `configs.itemId` 寻址**
-    （例：`["@dataprovider1", "configs", "sql"]`），所以不用关心嵌套层级。
+    （例：`["@dataprovider", "configs", "sql"]`），所以不用关心嵌套层级。
 
     op 形态：
       {"op":"set",    "path":[...], "value":...}
@@ -3773,10 +3775,12 @@ def audit_itemids(obj, js_refs=None, controls_path=None) -> dict:
 
         if referenced:
             level = "error"
+            access = ("app.%s" % name if _IID_JS_IDENT_RE.match(name)
+                      else "app.get(%r) / app[%r]" % (name, name))
             reason = (head + "，且该注册键**已被事件 JS 引用**。框架注册键是 `normalName || itemId`、"
                       "是**普通赋值**（后注册的覆盖先注册的），且**任一重复项销毁时会把整个名字删掉**"
-                      "（`unregister` 里 `delete`），所以 `app.%s` 随时可能不是你要的那个" % name)
-            short = "注册键重名且被事件 JS 引用 —— `app.%s` 取值不确定" % name
+                      "（`unregister` 里 `delete`），所以 `%s` 随时可能不是你要的那个" % access)
+            short = "注册键重名且被事件 JS 引用 —— `%s` 取值不确定" % access
         else:
             level = "benign"
             reason = head + "，但未被事件 JS 引用 —— 实践中无害（老代码可暂留，新代码宜区分）"
@@ -4200,7 +4204,8 @@ def _cmd_patch_locked(args) -> int:
     else:
         # 真跑到写盘却没让工具备份 ⇒ 只提醒一句（**只加输出，不改 rc、不改用法**）。
         # 完成态「已直接写盘」在 write_text 成功之后才报；这里只说将要写。
-        print("[warn] 未使用 --backup：本次将直接写盘，出错请用 git checkout -- 回退（建议先 --dry-run 看 diff）；回退请优先用操作前副本（`git checkout --` 会丢未提交编辑）")
+        print("[warn] 未使用 --backup：本次将直接写盘（建议先 --dry-run 看 diff）；"
+              "恢复请使用确实存在的操作前副本或本批 before 快照")
     try:
         write_text(args.file, out)
     except XwlWriteError as exc:
@@ -4575,9 +4580,8 @@ def cmd_paths(args) -> int:
             print("             · 或路径里串联 `@` 段缩小范围：[\"@父级itemId\", \"@%s\"]" % iid)
         else:
             print(f"   推荐   : {at}")
-    print("\n用法示例（ops.json）—— @写法不受嵌套层级变动影响：")
-    print('  [{"op":"set","path":["@dataprovider1","configs","sql"],"value":"select 1 from dual"}]')
-    print('  [{"op":"set","path":["@module","configs","serverScript"],"value":"var data = app.get();\\n..."}]')
+    print("\n把上方与目标对应的实际路径（或点名的原路径）复制到 op.path，")
+    print("按需填写 value；完整 ops 语法见 `xwl.py patch --help`。")
     if dup_any:
         print("注意：上面标 ⚠ 的条目 itemId 不唯一 —— 用 `@名字#N` 点名第 N 个候选，")
         print("      或直接看 `xwl.py itemids <file>` 的候选清单与建议改名（工具不猜顺序）。")
@@ -4862,7 +4866,7 @@ def cmd_folders(args) -> int:
 
     `folder.json` 形如 `{"hidden":false,"index":[…],"title":"…","iconCls":"…"}`；
     **`index` 里带 `.xwl` 后缀的是文件，不带后缀的才是子目录**。
-    新建一个 xwl 之后不登记进所在目录的 `index`，**不登记就看不到** —— 设计器导航树里没有它。
+    新建一个 xwl 后，只有需要设计器导航树展示或打开编辑时才登记进直接父 `folder.json`。
 
     `--register` **只认文件路径**（给目录会被拒绝：一个目录里可能有好几个文件，工具不知道登记哪个）；
     所在目录还没有 `folder.json` 时**不会替你创建**（会报错退出 2）。
@@ -4896,14 +4900,20 @@ def cmd_folders(args) -> int:
             print(f"[FAIL] --register 要指到具体文件上：给一个目录，工具不知道该登记哪一个。")
             print(f"       正确写法：xwl.py folders {hint} --register")
             return 2
-        jobs = []
+        jobs_by_dir: dict[str, set[str]] = {}
         base = target
         recursive = True
-        for d, _subs, files in os.walk(target):
+        for d, subs, files in os.walk(target):
             xs = [x for x in files if x.endswith(".xwl")]
-            # 应检索引面：有 folder.json **或** 有 .xwl 即纳入（⛔ 不再 `if xs:` 整目录跳过）
-            if _FOLDER_NAME in files or xs:
-                jobs.append((d, xs))
+            # 直接父索引要同时覆盖文件项与直接子目录项；目录目标的上层目录只检查
+            # “本目录是否登记在父索引”，不继续枚举父目录的其他子树。
+            names = set(xs) | set(subs)
+            if _FOLDER_NAME in files or xs or subs:
+                jobs_by_dir.setdefault(d, set()).update(names)
+        _parent = os.path.dirname(target)
+        if _parent and _parent != target:
+            jobs_by_dir.setdefault(_parent, set()).add(os.path.basename(target))
+        jobs = [(d, sorted(names)) for d, names in sorted(jobs_by_dir.items())]
         if not jobs:
             print(f"[FAIL] {target} 下没有可检查的目录"
                   f"（既无 {_FOLDER_NAME} 也无 .xwl 文件）")
@@ -4912,7 +4922,7 @@ def cmd_folders(args) -> int:
         print(f"[FAIL] 路径不存在：{target}")
         return 2
 
-    n_dir = n_fj = n_unreg = n_dangling = n_bad = n_unread = 0
+    n_dir = n_fj = n_unreg = n_dangling = n_bad = n_unread = n_missing_idx = 0
     level = 0                  # 最高严重度：读不动 2 ＞ 结构损坏／确认悬空 1 ＞ 0
     detail: list = []
     registered_at = None
@@ -4922,11 +4932,10 @@ def cmd_folders(args) -> int:
         rel = safe_relpath(d, base) if recursive else os.path.basename(d)
         state, data, jp, why = _read_folder_json(d)
         if state == _FJ_ABSENT:
+            n_missing_idx += 1
             if names:
-                n_unreg += len(names)
-                detail.append(("缺 folder.json", rel, "%d 个 xwl 未登记" % len(names)))
-            else:
-                detail.append(("缺 folder.json", rel, "无 .xwl、无索引（只读未执行）"))
+                detail.append(("直接父索引不存在（未核对）", rel,
+                               "需要核对 %s" % ", ".join(names)))
             continue
         if state == _FJ_UNREADABLE:
             n_unread += 1
@@ -4974,6 +4983,11 @@ def cmd_folders(args) -> int:
     if n_fj == 0 and n_unread == 0 and n_bad == 0:
         # 只读、且整个应检面里没有任何文件夹索引可读 ⇒ 明确"未执行"，⛔ 不得宣称一致
         print(f"[note] 未发现 {_FOLDER_NAME}，本次未执行索引检查")
+    if n_missing_idx:
+        print(f"[note] 直接父 folder.json 不存在，本次未执行父索引检查：{n_missing_idx} 个目录")
+        if n_fj == 0:
+            print("[note] 该目标目录还没有 folder.json；请先在设计器里建这个目录，"
+                  "或补上 folder.json 后再登记。")
     if n_unreg and not recursive:
         if _has_fj:
             print(f"\n登记：xwl.py folders {safe_relpath(target)} --register {os.path.basename(target)}")
@@ -4987,9 +5001,9 @@ def cmd_folders(args) -> int:
 # --------------------------------------------------------------------------- #
 # diffguard（相对 git 基线，检测「多行内容被压平」这种静默语义损坏）
 # --------------------------------------------------------------------------- #
-# 为什么需要它：SKILL.md 2.3 承认——把「反斜杠 + 换行」直接删掉（"合并行"）之后，
-# 文件**依然是合法 JSON**、`check` 十项全绿、`node --check` 也可能返回 0，
-# 唯一的发现手段是人工 `git diff`。这是本工具唯一"没有自动化防线"的损坏类型。
+# 为什么需要它：把「反斜杠 + 换行」直接删掉（"合并行"）之后，文件**依然是合法 JSON**、
+# `check` 十项全绿、`node --check` 也可能返回 0。本命令用精确、最长行、相似度三档
+# 在提交前提示新发生的压平；三档仍受阈值、覆盖度和预算限制，不能替代完整人工复核。
 #
 # 判据为什么不能只看"续行符变少"：
 #   · 合法地删掉一段多行 JS / 删一个控件，续行符**也会**净减少 —— 只看数量必然误报；
@@ -5719,8 +5733,8 @@ def cmd_diffguard(args) -> int:
                       f"{wd_text.splitlines()[line_no - 1][:70]!r}")
             print("         这类改动**格式校验查不出**（压平后仍是合法 JSON）："
                   "`check` 会全绿、`node --check` 也可能返回 0，但字符串里的换行已经没了。")
-            print(f"         复核：`git diff -w {safe_relpath(path)}`；确认是误改就 "
-                  f"`git checkout -- {safe_relpath(path)}`")
+            print(f"         复核：`git diff -w {safe_relpath(path)}`；确认误改后，"
+                  "从确实存在的操作前副本或本批 before 快照恢复")
             print("  -> FAIL" if args.strict else "  -> OK（仅告警；加 `--strict` 可让它阻塞）")
         else:
             n_clean += 1
@@ -6315,13 +6329,35 @@ def obj_keys(inner: str) -> list[str]:
     return keys
 
 
+def _extract_app_refs(expr: str, filtered: bool = True) -> list:
+    """按可执行代码区提取 `app` 控件引用，保留出现顺序。
+
+    字符串与模板字面量在匹配前按同长度空格掩码；因此普通字符串里的
+    `app.X` 不产生引用，而 `app.get('X')` / `app['X']` 的调用起点仍可识别。
+    """
+    clean = strip_js_comments(expr)
+    masked = _js_mask_strings(clean)
+    names: list[str] = []
+    for regex in (_APP_REF_BARE, _APP_REF_GET, _APP_REF_BRACKET):
+        for match in regex.finditer(clean):
+            if masked[match.start()] == " ":
+                continue
+            name = match.group(1)
+            if regex is _APP_REF_BARE and name == "get":
+                continue
+            names.append(name)
+    if filtered:
+        names = [name for name in names if name not in _APP_REF_RESERVED]
+    return names
+
+
 def _app_refs_in(expr: str) -> list:
-    """从一段 JS 表达式里取所有 `app.<名>` / `app['名']` 引用（**与 `js_refs_of` 同源**）。
+    """从一段 JS 表达式里取所有真实 `app` 容器引用（**与 `js_refs_of` 同源**）。
 
     `params` 侧不再自带正则副本 —— 复用 `js_refs_of` 用的同一批符号，保证
     「`params` 认定被引用的容器」与「`itemids` 认定被引用」对 `app['名']` 的判断一致。
     """
-    return _APP_REF_BARE.findall(expr) + _APP_REF_BRACKET.findall(expr)
+    return _extract_app_refs(expr, filtered=False)
 
 
 def find_transfers(js: str, field_set) -> list[tuple]:
@@ -6412,8 +6448,12 @@ def _js_call_kind(js: str, obj_start: int) -> tuple[str | None, str | None]:
         index -= 1
     chain = js[index + 1:end]
     parts = chain.split(".")
-    if len(parts) >= 3 and parts[-3] == "app":
-        return ("store.load", parts[-2])
+    if (len(parts) >= 4 and parts[-4] == "app" and parts[-2] == "store"
+            and parts[-1] in ("load", "reload")):
+        return ("grid." + parts[-1], parts[-3])
+    if (len(parts) >= 3 and parts[-3] == "app"
+            and parts[-1] in ("load", "reload")):
+        return (parts[-1], parts[-2])
     if len(parts) >= 2 and parts[-2] == "Wb" and parts[-1] in ("request", "upload", "open"):
         return ("Wb." + parts[-1], None)
     return (None, None)
@@ -7865,6 +7905,12 @@ def cmd_params(args) -> int:
     _registry_reset()
     field_set = field_types(getattr(args, "controls", None))
     if getattr(args, "list_fields", False):
+        _lf_ctl = getattr(args, "controls", None)
+        if _lf_ctl:
+            _lf_state = _registry_state(_lf_ctl)
+            if _lf_state["state"] != "ok":
+                print("[warn] 读注册表失败：%s（按**未找到**处理；已回退内置兜底）"
+                      % _lf_ctl, file=sys.stderr)
         print(f"取值控件类型（{len(field_set)} 种）:")
         for t in field_set:
             print(f"  {t}")
@@ -8002,7 +8048,7 @@ def cmd_params(args) -> int:
         url, iid = cfg.get("url"), cfg.get("itemId")
         line = f"  itemId={iid!r} autoLoad={cfg.get('autoLoad')!r}"
         if isinstance(cfg.get("params"), (dict, list)) and cfg.get("params"):
-            line += f"  自身params配置={cfg['params']!r}(优先级最高)"
+            line += f"  自身params配置={cfg['params']!r}(store.load 合并链默认层，params > out 覆盖它)"
         if isinstance(url, str) and "m?xwl=" in url:
             tgt = url.split("m?xwl=")[-1].split("&")[0].strip()   # `#36`：去首尾空白（空目标视为无引用）
             if not tgt:
@@ -8146,6 +8192,7 @@ def cmd_params(args) -> int:
     requests_by_identity: dict[tuple, _Request] = {}
     ambiguous_store_names: set[str] = set()
     ambiguous_store_configs: list[dict] = []
+    unresolved_store_cfg_ids: set[int] = set()
     unattrib: set[str] = set()
 
     def _request(identity, label, location, carrier, kind, store_node=None):
@@ -8175,8 +8222,56 @@ def cmd_params(args) -> int:
                 request.notes.append("autoLoad 未配置或为 false：不证明请求已发生，也不证明永不加载")
 
     def _store_request(owner, location, pos, call_kind, carrier, has_url):
-        """把 `app.<store>.load` 关联到唯一 store 节点；注册名歧义时记未核对。"""
+        """把已取证的 store 调用关联到唯一 store 节点；歧义时记未核对。
+
+        支持 `app.<store>.load/reload` 与 `app.<grid>.store.load/reload`。
+        后者只认 grid 注册键唯一、直接子节点恰有一个 `type=store,itemId=store`
+        的静态槽位形态；别名、动态链、多 store 与非槽位均不猜。
+        """
         if owner is None:
+            return (None, None)
+        if call_kind in ("grid.load", "grid.reload"):
+            grids = [
+                (node, cfg)
+                for node, typ, cfg, *_rest in _iter_controls(obj)
+                if typ in _IID_GRID_TYPES and registry_key(cfg) == owner
+            ]
+            def _mark_grid_stores_unresolved(grid_nodes):
+                for grid_node, _grid_cfg in grid_nodes:
+                    children = grid_node.get("children")
+                    if not isinstance(children, list):
+                        continue
+                    for _node, node_type, cfg, *_rest in _iter_controls(children):
+                        if node_type in ("store", "tstore"):
+                            unresolved_store_cfg_ids.add(id(cfg))
+
+            if len(grids) != 1:
+                ambiguous_store_names.add(owner)
+                _mark_grid_stores_unresolved(grids)
+                return (None, None)
+            grid_node, _grid_cfg = grids[0]
+            children = grid_node.get("children")
+            direct_stores = [
+                child for child in (children if isinstance(children, list) else [])
+                if isinstance(child, dict) and child.get("type") == "store"
+            ]
+            if (len(direct_stores) != 1
+                    or (direct_stores[0].get("configs") or {}).get("itemId") != "store"):
+                ambiguous_store_names.add(owner)
+                _mark_grid_stores_unresolved(grids)
+                return (None, None)
+            store_cfg = direct_stores[0].get("configs")
+            match = next((item for item in stores if item[0] is store_cfg), None)
+            if match is None:
+                return (None, None)
+            cfg, label, identity = match
+            req_carrier = carrier if (carrier is not None or has_url) else _store_url(cfg)
+            request = _request((location, pos, call_kind, identity),
+                               label + " · grid→store 显式调用 #" + str(pos),
+                               location, req_carrier, "显式调用", cfg)
+            request.calls.append(pos)
+            return (request, cfg)
+        if call_kind not in ("load", "reload"):
             return (None, None)
         matches = [(label, identity, cfg)
                    for cfg, label, identity in stores if registry_key(cfg) == owner]
@@ -8263,7 +8358,7 @@ def cmd_params(args) -> int:
             _names |= set(keys)
             print(head + f"显式参数名 {keys}")
         _store_node = None
-        if call_kind == "store.load":
+        if call_kind in ("load", "reload", "grid.load", "grid.reload"):
             _request_obj, _store_node = _store_request(
                 owner, where, pos, call_kind, _req_key, has_url)
             if _request_obj is not None and pos not in _request_obj.calls:
@@ -8286,7 +8381,7 @@ def cmd_params(args) -> int:
             _request_obj.notes.append("动态 params 的键无法静态核对")
             _add_unknown(_request_obj, set(), where, pos,
                          "动态 params 的键无法静态核对")
-        elif _req_key is None:
+        elif _req_key is None and _request_obj.carrier is None:
             _request_obj.incomplete = True
             if _names:
                 _add_unknown(_request_obj, set(), where, pos,
@@ -8371,7 +8466,8 @@ def cmd_params(args) -> int:
                                   and id(request.store_node) in explicit_store_nodes)}
     requests[:] = [request for request in requests
                    if not (request.kind == "条件性 store 配置契约"
-                           and id(request.store_node) in explicit_store_nodes)]
+                           and (id(request.store_node) in explicit_store_nodes
+                                or id(request.store_node) in unresolved_store_cfg_ids))]
     print("\n=== 请求身份（%d 个）===" % len(requests))
     _ambiguous_requests: set = set()
     for request in requests:
@@ -8643,7 +8739,7 @@ def cmd_params(args) -> int:
     if getattr(args, "strict", False):
         if miss or dangling36:
             return 1
-        if unknown:
+        if unknown or unattached:
             return 2
         if _incomplete_before_clear or any(request.incomplete for request in requests):
             return 2
@@ -8760,12 +8856,11 @@ def cmd_events(args) -> int:
             fname = f"event_{i}_{tag}.js" if tag else f"event_{i}.js"
             fp = os.path.join(args.outdir, fname)
             _ensure_within(args.outdir, fp, _out_real)   # 落点**独立**校验（⛔ 不靠"名字已清洗"）
-            # 覆盖**不可逆** ⇒ 必须在 `write_text` **之前**判（写完再判毫无意义）。
-            #   序号来自事件顺序：删掉一个事件再导出，就会整体错位覆盖上一批的同名文件。
-            #   ⚠️ 这行**不缩进**：导出清单里"两空格打头"的行被当作路径行，`← 原事件键` 必须紧跟其后。
-            if os.path.exists(fp):
-                print("[note] 已存在、已覆盖：%s" % fname)
+            # 只有写入成功后才能宣称覆盖；失败由统一写盘出口返回 rc=2。
+            had_existing = os.path.exists(fp)
             write_text(fp, code.replace(CRLF, "\n"))
+            if had_existing:
+                print("[note] 已存在、已覆盖：%s" % fname)
             written.append((fp, name))
         print(f"已导出 {len(written)} 个事件 JS -> {args.outdir}")
         for fp, name in written:
@@ -8815,7 +8910,9 @@ def build_parser() -> argparse.ArgumentParser:
     e.add_argument("--old-file", required=True, help="锚点文本文件（要替换掉的那段）")
     e.add_argument("--new-file", required=True, help="替换文本文件（替换成的内容）")
     e.add_argument("--expect", type=int, default=1, help="期望锚点出现次数（默认 1）")
-    e.add_argument("--dry-run", action="store_true", help="不写盘，只报变更后长度")
+    e.add_argument("--dry-run", action="store_true",
+                   help="不写盘；仍执行锚点断言、锚点/替换文件读取、候选解析、拍平提示"
+                        "和事件 JS 写前门禁")
     e.add_argument("--backup", action="store_true", help="写 <target>.bak")
     e.add_argument("--node", help="node 可执行文件路径（缺省从 NODE_BIN 与 PATH 找）")
     e.add_argument("--no-js", action="store_true", help="跳过写盘后的事件 JS 语法校验")
@@ -8976,7 +9073,9 @@ def build_parser() -> argparse.ArgumentParser:
     x.add_argument("--safe", action="store_true",
                    help="安全模式：不动值里的「字面反斜杠 + n」。与默认模式**语义等价**，"
                         "差异只在字节形态 —— 产出与设计器不一致，别用于要提交的文件")
-    x.add_argument("--dry-run", action="store_true", help="不写盘，只跑完校验")
+    x.add_argument("--dry-run", action="store_true",
+                   help="不写盘，只执行解析、重建和语义等价比对；"
+                        "不执行写后复检（含事件 JS）")
     x.add_argument("--backup", action="store_true", help="原地覆盖时写 <file>.bak")
     x.add_argument("--node", help="node 可执行文件路径（缺省从 NODE_BIN 与 PATH 找）")
     x.add_argument("--no-js", action="store_true", help="跳过写盘后的事件 JS 语法校验")

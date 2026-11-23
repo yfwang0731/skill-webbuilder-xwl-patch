@@ -3,7 +3,7 @@
 本文件是**手把手走一遍**：把 SKILL.md 第三章的「处理流程」落到一个具体例子上。
 读它比读规则快 —— 但**规则以 SKILL.md 为准**，这里只演示顺序、命令与预期输出。
 
-**目标**：造一个「出库单查询」页面 —— 它带自己的 SQL 载体、一个查询工具栏、一个表格，
+**目标**：造一个「示例查询」页面 —— 它带自己的 SQL 载体、一个查询工具栏和一个四列表格，
 并且工具栏上的按钮挂了点击事件。
 
 > 下文的 `<模块>` 是占位符，指你自己的业务模块目录（形如 `wb/modules/<模块>/`）。
@@ -51,7 +51,7 @@ python "$SKILL_ROOT/scripts/xwl.py" --help        # 能列出子命令就说明�
 ## 第 1 步 · 造 SQL 载体
 
 ```bash
-python "$SKILL_ROOT/scripts/xwl.py" new wb/modules/<模块>/xxxSql/queryOrder.xwl --kind sql --title "出库单查询"
+python "$SKILL_ROOT/scripts/xwl.py" new wb/modules/<模块>/xxxSql/queryDemo.xwl --kind sql --title "示例查询"
 ```
 
 产出两层，各管一件事（见 [`sql-fragments.md`](sql-fragments.md)）：
@@ -61,8 +61,8 @@ module(serverScript)  → 取参数、拼条件
   └ dataprovider(sql) → 拿拼好的 SQL 去执行
 ```
 
-**预期**：命令正常结束，末行为 `=== 结果: ALL OK`。
-它还会顺手把「新建之后必做」三条提示打出来（`folder.json` 登记 / `sqlrefs`|`params` / `WB_MENU` 挂菜单）。
+**预期**：命令成功看 `rc=0`。工具先完成骨架构造、语义等价比对、写盘和自动校验，再打印
+后续核对提示。SQL 载体的种子 SQL 使用占位表 `WB_MISC`，必须替换成真实业务 SQL。
 
 > 新生成的骨架里，`module` 的 `itemId` 就叫 `module`、`dataprovider` 的 `itemId` 就叫 `dataprovider`
 > —— 记住这两个名字，下一步的 `@寻址` 要用。**别自己猜**，跑 `paths` 看一眼最准。
@@ -76,7 +76,7 @@ module(serverScript)  → 取参数、拼条件
 先看一眼可编辑字段的位置与推荐写法：
 
 ```bash
-python "$SKILL_ROOT/scripts/xwl.py" paths wb/modules/<模块>/xxxSql/queryOrder.xwl
+python "$SKILL_ROOT/scripts/xwl.py" paths wb/modules/<模块>/xxxSql/queryDemo.xwl
 ```
 
 输出会给出两套路径（`@` 写法不受嵌套层数影响，优先用）：
@@ -93,9 +93,9 @@ sql  (dataprovider, itemId='dataprovider', …)
 ```json
 [
   {"op": "set", "path": ["@module", "configs", "serverScript"],
-   "value": "var whereSql = '';\nvar orderNo = app.get('orderNo');\nif (orderNo) { whereSql = ' and ORDER_NO = {?orderNo?}'; }\nrequest.setAttribute('whereSql', whereSql);"},
+   "value": "var whereSql = '';\nvar demoKey = app.get('demoKey');\nif (demoKey) { whereSql = ' and COL_1 = {?demoKey?}'; }\nrequest.setAttribute('whereSql', whereSql);"},
   {"op": "set", "path": ["@dataprovider", "configs", "sql"],
-   "value": "select ORDER_NO, CUSTOMER, QTY, CREATED_ON from ORDER_FILE where 1=1\n{#whereSql#}"}
+   "value": "select COL_1, COL_2, COL_3, COL_4 from DEMO_TABLE where 1=1\n{#whereSql#}"}
 ]
 ```
 
@@ -105,8 +105,8 @@ sql  (dataprovider, itemId='dataprovider', …)
 先看 diff，再真改：
 
 ```bash
-python "$SKILL_ROOT/scripts/xwl.py" patch wb/modules/<模块>/xxxSql/queryOrder.xwl --ops ops-sql.json --dry-run
-python "$SKILL_ROOT/scripts/xwl.py" patch wb/modules/<模块>/xxxSql/queryOrder.xwl --ops ops-sql.json --backup
+python "$SKILL_ROOT/scripts/xwl.py" patch wb/modules/<模块>/xxxSql/queryDemo.xwl --ops ops-sql.json --dry-run
+python "$SKILL_ROOT/scripts/xwl.py" patch wb/modules/<模块>/xxxSql/queryDemo.xwl --ops ops-sql.json --backup
 ```
 
 ⏭️ 下一步：确认 SQL 引用自洽。
@@ -116,7 +116,7 @@ python "$SKILL_ROOT/scripts/xwl.py" patch wb/modules/<模块>/xxxSql/queryOrder.
 ## 第 3 步 · 校验 SQL 载体
 
 ```bash
-python "$SKILL_ROOT/scripts/xwl.py" sqlrefs wb/modules/<模块>/xxxSql/queryOrder.xwl
+python "$SKILL_ROOT/scripts/xwl.py" sqlrefs wb/modules/<模块>/xxxSql/queryDemo.xwl
 ```
 
 它核对 `{#名字#}` 与 `serverScript` 里 `setAttribute` 的名字对不对得上。
@@ -131,7 +131,7 @@ python "$SKILL_ROOT/scripts/xwl.py" sqlrefs wb/modules/<模块>/xxxSql/queryOrde
 ## 第 4 步 · 造页面
 
 ```bash
-python "$SKILL_ROOT/scripts/xwl.py" new wb/modules/<模块>/orderQuery.xwl --kind page --title "出库单查询"
+python "$SKILL_ROOT/scripts/xwl.py" new wb/modules/<模块>/demoQuery.xwl --kind page --title "示例查询"
 ```
 
 产出：顶层 7 把钥匙 + 一个空 `module` 节点。**键序已经是对的**，你不用管（这也是不用"拿别的文件当种子"的原因）。
@@ -149,16 +149,25 @@ python "$SKILL_ROOT/scripts/xwl.py" new wb/modules/<模块>/orderQuery.xwl --kin
 [
   {"op": "set", "path": ["children", 0, "children"], "value": [
     {"configs": {"itemId": "viewport"}, "expanded": false, "children": [
-      {"configs": {"itemId": "grid1"}, "expanded": false, "type": "grid", "children": [
-        {"configs": {"itemId": "gridStore", "url": "m?xwl=<模块>/xxxSql/queryOrder"}, "expanded": false, "children": [], "type": "store"},
-        {"configs": {"itemId": "tbar"}, "expanded": false, "type": "toolbar", "children": [
-          {"configs": {"itemId": "orderNo", "fieldLabel": "订单号"}, "expanded": false, "children": [], "type": "text"},
+      {"configs": {"itemId": "demoGrid"}, "expanded": false, "children": [
+        {"configs": {"itemId": "store", "url": "m?xwl=<模块>/xxxSql/queryDemo"}, "expanded": false, "children": [], "type": "store"},
+        {"configs": {"itemId": "tbar"}, "expanded": false, "children": [
+          {"configs": {"itemId": "demoKey", "fieldLabel": "示例条件"}, "expanded": false, "children": [], "type": "text"},
+          {"configs": {"itemId": "demoState", "fieldLabel": "示例状态", "displayField": "text", "valueField": "value", "queryMode": "local"}, "expanded": false, "children": [
+            {"configs": {"itemId": "store", "fields": "[{name:'value'},{name:'text'}]", "data": "[{value:'A',text:'选项 A'},{value:'B',text:'选项 B'}]"}, "expanded": false, "children": [], "type": "store"}
+          ], "type": "combo"},
           {"configs": {"itemId": "queryBtn", "text": "查询"}, "expanded": false, "children": [], "type": "button",
-           "events": {"click": "app.gridStore.load({ out: app.tbar });"}},
+           "events": {"click": "app.demoGrid.store.load({ out: app.tbar });"}},
           {"configs": {"itemId": "exportBtn", "text": "导出"}, "expanded": false, "children": [], "type": "button",
-           "events": {"click": "var s = app.grid1.getSelection();\nif (!s.length) { Wb.info('请先选中一行'); return; }\nWb.info('准备导出 ' + s[0].data.ORDER_NO);"}}
-        ]}
-      ]}
+           "events": {"click": "var s = app.demoGrid.getSelection();\nif (!s.length) { Wb.info('请先选中一行'); return; }\nWb.info('准备导出 ' + s[0].data.COL_1);"}}
+        ], "type": "toolbar"},
+        {"configs": {"itemId": "columns"}, "expanded": false, "children": [
+          {"configs": {"itemId": "COL_1", "dataIndex": "COL_1", "text": "列 1"}, "expanded": false, "children": [], "type": "column"},
+          {"configs": {"itemId": "COL_2", "dataIndex": "COL_2", "text": "列 2"}, "expanded": false, "children": [], "type": "column"},
+          {"configs": {"itemId": "COL_3", "dataIndex": "COL_3", "text": "列 3"}, "expanded": false, "children": [], "type": "column"},
+          {"configs": {"itemId": "COL_4", "dataIndex": "COL_4", "text": "列 4"}, "expanded": false, "children": [], "type": "column"}
+        ], "type": "array"}
+      ], "type": "grid"}
     ], "type": "viewport"}]
   },
   {"op": "set", "path": ["roles"], "value": {"default": 1}}
@@ -166,8 +175,8 @@ python "$SKILL_ROOT/scripts/xwl.py" new wb/modules/<模块>/orderQuery.xwl --kin
 ```
 
 ```bash
-python "$SKILL_ROOT/scripts/xwl.py" patch wb/modules/<模块>/orderQuery.xwl --ops ops-page.json --dry-run
-python "$SKILL_ROOT/scripts/xwl.py" patch wb/modules/<模块>/orderQuery.xwl --ops ops-page.json --backup
+python "$SKILL_ROOT/scripts/xwl.py" patch wb/modules/<模块>/demoQuery.xwl --ops ops-page.json --dry-run
+python "$SKILL_ROOT/scripts/xwl.py" patch wb/modules/<模块>/demoQuery.xwl --ops ops-page.json --backup
 ```
 
 > `path` 的 `["children", 0, "children"]` 就是「顶层 `children[0]`（`module` 节点）的 children」。
@@ -186,7 +195,7 @@ python "$SKILL_ROOT/scripts/xwl.py" patch wb/modules/<模块>/orderQuery.xwl --o
 ## 第 6 步 · 核对「页面 → store → SQL」的传参
 
 ```bash
-python "$SKILL_ROOT/scripts/xwl.py" params wb/modules/<模块>/orderQuery.xwl --module-root wb/modules
+python "$SKILL_ROOT/scripts/xwl.py" params wb/modules/<模块>/demoQuery.xwl --module-root wb/modules
 ```
 
 它列出 store、展开两条通路（`out` / `params`）传参点，并与 SQL 侧交叉核对。
@@ -199,10 +208,14 @@ python "$SKILL_ROOT/scripts/xwl.py" params wb/modules/<模块>/orderQuery.xwl --
 ## 第 7 步 · 格式与命名校验
 
 ```bash
-python "$SKILL_ROOT/scripts/xwl.py" check wb/modules/<模块>/orderQuery.xwl wb/modules/<模块>/xxxSql/queryOrder.xwl
+python "$SKILL_ROOT/scripts/xwl.py" check wb/modules/<模块>/demoQuery.xwl wb/modules/<模块>/xxxSql/queryDemo.xwl
 ```
 
 **预期**：每个文件 `-> OK`，末行 `=== 结果: ALL OK`。有 `[FAIL]` 就按第五章 FAQ 排查。
+
+页面交付还要再过三道门：`check --controls <工程>/wb/system/controls.json`、在设计器里实际打开、
+人工核对布局与交互。`check` 只证明文件级格式，不能替代后三道；缺注册表或未做设计器验收时，
+页面交付状态记“未完成”。
 
 > 大文件上先跑 `check --no-js` 会跳过最重的 JS 校验；
 > 耗时构成与原因见 [`faq.md`](faq.md)「`check` 慢，或者本机根本没装 `node`？」，
@@ -215,18 +228,18 @@ python "$SKILL_ROOT/scripts/xwl.py" check wb/modules/<模块>/orderQuery.xwl wb/
 先看有没有登记（**默认只读**）：
 
 ```bash
-python "$SKILL_ROOT/scripts/xwl.py" folders wb/modules/<模块>
+python "$SKILL_ROOT/scripts/xwl.py" folders wb/modules/<模块>/demoQuery.xwl
 ```
 
 **前提**：该目录必须**已经被设计器管理** —— 也就是目录里已经有一个 `folder.json`。
 没有的话 `--register` 会明确报错并退出 2，它**不会**替你创建一个
 （那是设计器的职责）。新目录请先在设计器里建，或从同类目录复制一份 `folder.json` 再改 `title`。
 
-看到「未登记」就登记 —— **`--register` 要指到文件上**：
+只有需要设计器导航树展示或打开编辑的目标才登记 —— **`--register` 要指到文件上**：
 
 ```bash
-python "$SKILL_ROOT/scripts/xwl.py" folders wb/modules/<模块>/orderQuery.xwl --register --dry-run
-python "$SKILL_ROOT/scripts/xwl.py" folders wb/modules/<模块>/orderQuery.xwl --register
+python "$SKILL_ROOT/scripts/xwl.py" folders wb/modules/<模块>/demoQuery.xwl --register --dry-run
+python "$SKILL_ROOT/scripts/xwl.py" folders wb/modules/<模块>/demoQuery.xwl --register
 ```
 
 **预期**：`--dry-run` 打印 before/after 且写明 `未写入`；真跑打印 `已写入` 并留下 `folder.json.bak`；
@@ -243,8 +256,9 @@ python "$SKILL_ROOT/scripts/xwl.py" folders wb/modules/<模块>/orderQuery.xwl -
 
 过一遍 SKILL.md 第六章的清单。最常被跳过、也最要命的两条：
 
-- [ ] **在设计器里打开一次**。`check` 只证明"格式能加载"，**不证明"页面能用"**；
+- [ ] **在设计器里打开一次**。`check` 只证明“解析阶段接受该文本”，不是“可安全整份重建”，也不证明页面可用；
       新文件又没有 `git diff` 可比 —— 所以这一步没有替代品。
+- [ ] `check --controls` 通过，并完成人工布局与交互核对。
 - [ ] 知道**要让用户能打开，还得在数据库 `WB_MENU` 挂菜单**（权限在 `WB_ROLE` / `WB_RESOURCE`）——
       这超出本 skill 范围。别以为文件建好就能打开。
 
@@ -256,10 +270,10 @@ python "$SKILL_ROOT/scripts/xwl.py" folders wb/modules/<模块>/orderQuery.xwl -
 |---|---|
 | `patch` 报「语义等价比对失败」 | 它**没有写盘**，原文件完好。检查 ops 里是不是给了不合适的值（比如把对象写进了字符串字段） |
 | 写盘后 `check` FAIL | 用同目录的 `<file>.bak` 覆盖回去再排查 —— 所以**真改时一定带 `--backup`** |
-| 顺序搞错、想整体撤销 | 靠 git：`git checkout -- <file>`。格式校验救不了语义改错，git 可以 |
+| 顺序搞错、需要恢复 | 使用确实存在的操作前副本；真跑 `patch` 带 `--backup`，核对目标与 `.bak` 的字节 |
 | `@itemId` 报重名 | 工具**不猜顺序**，会列候选清单。照清单选，或用 `@名字#N` 点名（见 SKILL.md §3.1） |
 | 不知道某控件该挂在哪 | `xwl.py schema <type> --controls wb/system/controls.json`；骨架见 `references/controls.md` §4.2 |
-| 不确定命令会不会写盘 | 先加 `--dry-run`。绝大多数子命令都支持 |
+| 不确定命令会不会写盘 | `--dry-run` 仅适用于 `new/patch/edit/expand/folders`；`events --outdir` 会写导出文件，`folders --register` 自带 `.bak`，`expand --backup` 只在原地覆盖时生效 |
 
 ---
 
@@ -268,8 +282,9 @@ python "$SKILL_ROOT/scripts/xwl.py" folders wb/modules/<模块>/orderQuery.xwl -
 ```
 确认环境与 --kind
   → new --kind sql   → paths → patch 填 serverScript/sql → sqlrefs
-  → new --kind page  → patch 搭控件树 → params → check → folders --register
-  → 设计器打开一次（+ 记得 WB_MENU 挂菜单）
+  → new --kind page  → patch 搭控件树 → params → check → check --controls
+  → 需要导航可见时才 folders --register → 设计器打开并人工核对布局交互
+  → 要让用户从菜单打开时，再处理 WB_MENU
 ```
 
 每一步都守同一条习惯：**先 `--dry-run` 看 diff，确认后再真跑并带 `--backup`**。

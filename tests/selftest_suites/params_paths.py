@@ -178,6 +178,8 @@ def _check_params_paths(tmp, node, failures, write) -> None:
     failures.extend(_request_identity_parser_cases())
     # ITEM-1230 序2：直属 beforeload 的键集合计算（本块）
     failures.extend(_beforeload_parser_cases())
+    # 1.9.2：--list-fields 显式坏注册表降级、grid→store 静态关联、JS 真假引用共享提取器
+    failures.extend(_check_1_9_2_param_cases(tmp))
 
 
 def _request_identity_parser_cases():
@@ -677,5 +679,165 @@ def _av03_params_cases(tmp):
         return fail
     print("[ok]  AV-03(params) 注册表一次加载：正常/坏注册表均解析 1 次、坏注册表 rc 保持 0"
           " 且可见「不可用＋已回退内置兜底」、--list-fields 共用同一事实源")
+    return []
+
+
+def _check_1_9_2_param_cases(tmp):
+    """1.9.2 C14/C26/C27/C34 的定向可失败判据。"""
+    fail = []
+    root = os.path.join(tmp, "v192_params")
+    os.makedirs(root, exist_ok=True)
+
+    def _run_both(**kw):
+        out = io.StringIO()
+        err = io.StringIO()
+        with contextlib.redirect_stdout(out), contextlib.redirect_stderr(err):
+            rc = xwl.cmd_params(type("NS", (), kw)())
+        return rc, out.getvalue(), err.getvalue()
+
+    ctrl = os.path.join(root, "controls.json")
+    with open(ctrl, "w", encoding="utf-8", newline="") as fh:
+        fh.write("{ not json")
+    before_loads = xwl._REG_LOADS
+    rc, out, err = _run_both(file=None, module_root=None, controls=ctrl,
+                             list_fields=True, upstream=False, strict=False)
+    if rc != 0 or xwl._REG_LOADS - before_loads != 1:
+        fail.append("C14 --list-fields 坏 --controls 应 rc=0 且单次读取，实得 rc=%r n=%d"
+                    % (rc, xwl._REG_LOADS - before_loads))
+    if "[warn] 读注册表失败：" not in err or "已回退内置兜底" not in err:
+        fail.append("C14 --list-fields 坏 --controls 必须在 stderr 可见降级说明，"
+                    "stdout=%r stderr=%r" % (out, err))
+    missing = os.path.join(root, "missing-controls.json")
+    before_loads = xwl._REG_LOADS
+    rc, out, err = _run_both(file=None, module_root=None, controls=missing,
+                             list_fields=True, upstream=False, strict=False)
+    if rc != 0 or xwl._REG_LOADS - before_loads != 0:
+        fail.append("C14 --list-fields 缺失 --controls 应 rc=0 且不重复读，实得 rc=%r n=%d"
+                    % (rc, xwl._REG_LOADS - before_loads))
+    if "[warn] 读注册表失败：" not in err:
+        fail.append("C14 --list-fields 缺失 --controls 必须在 stderr 可见降级说明")
+    rc, out, err = _run_both(file=None, module_root=None, controls=None,
+                             list_fields=True, upstream=False, strict=False)
+    if rc != 0 or "读注册表失败" in out or "读注册表失败" in err:
+        fail.append("C14 --list-fields 未指定 controls 不应报失败降级")
+
+    # C27：三处入口共用同一提取器，字符串/模板字面量与注释不是引用。
+    ref_cases = {
+        "普通单引号字符串": ("var s='app.tbar';", []),
+        "普通双引号字符串": ('var s="app.tbar";', []),
+        "纯模板文字": ("var s=`app.tbar`;", []),
+        "点号": ("app.tbar;", ["tbar"]),
+        "get": ("app.get('tbar');", ["tbar"]),
+        "方括号单引号": ("app['tbar'];", ["tbar"]),
+        "方括号双引号": ('app["tbar"];', ["tbar"]),
+    }
+    for label, (expr, expected) in ref_cases.items():
+        got = xwl._app_refs_in(expr)
+        if got != expected:
+            fail.append("C27 %s 的 app 引用应为 %r，实得 %r" %
+                        (label, expected, got))
+
+    def _dump(path, obj):
+        os.makedirs(os.path.dirname(path), exist_ok=True)
+        with open(path, "w", encoding="utf-8", newline="") as fh:
+            fh.write(xwl.dumps_designer(obj, 1, CRLF))
+
+    module_root = os.path.join(root, "modules")
+    carrier = os.path.join(module_root, "demo", "carrier.xwl")
+    _dump(carrier, {"children": [
+        {"type": "dataprovider", "configs": {
+            "itemId": "dp", "sql": "select * from t where kw={?kw?}"},
+         "expanded": False, "children": []}
+    ]})
+
+    def _grid_store(grid_item="g1", stores=None, event=None, direct=True):
+        store = {"type": "store", "configs": {
+            "itemId": "store", "url": "m?xwl=demo/carrier"},
+                 "expanded": False, "children": []}
+        stores = [store] if stores is None else stores
+        if direct:
+            grid_children = stores + [
+                {"type": "toolbar", "configs": {"itemId": "tbar"},
+                 "expanded": False, "children": [
+                     {"type": "text", "configs": {"itemId": "kw"},
+                      "expanded": False, "children": []}
+                 ]}
+            ]
+        else:
+            grid_children = [{
+                "type": "panel", "configs": {"itemId": "holder"},
+                "expanded": False, "children": stores,
+            }]
+        return {
+            "hidden": False,
+            "children": [
+                {"type": "viewport", "configs": {"itemId": "viewport"},
+                 "expanded": False, "children": [
+                     {"type": "grid", "configs": {"itemId": grid_item},
+                      "expanded": False, "children": grid_children},
+                     {"type": "button", "configs": {"itemId": "query"},
+                      "expanded": False, "children": [], "events": {"click": event}},
+                 ]},
+            ],
+            "roles": {},
+            "title": "t",
+            "iconCls": "",
+            "inframe": False,
+            "pageLink": "",
+        }
+
+    page = os.path.join(module_root, "demo", "page.xwl")
+    _dump(page, _grid_store(
+        event="app.g1.store.load({ out: app.tbar });"))
+    rc, out = _run(xwl.cmd_params, file=page, module_root=module_root, controls=None,
+                   list_fields=False, upstream=False, strict=True)
+    if rc != 0 or "请求:" not in out or "供给键 ['kw']" not in out:
+        fail.append("C26 唯一 grid→直接 store 槽位 strict 应关联请求并供给 kw，rc=%r\n%s"
+                    % (rc, out))
+
+    two_grids = _grid_store(event="app.g1.store.load({ out: app.tbar });")
+    two_grids["children"][0]["children"].append({
+        "type": "grid", "configs": {"itemId": "g1"},
+        "expanded": False,
+        "children": [{
+            "type": "store", "configs": {
+                "itemId": "store", "url": "m?xwl=demo/carrier"},
+            "expanded": False, "children": []
+        }],
+    })
+    page = os.path.join(module_root, "demo", "page_ambiguous_grid.xwl")
+    _dump(page, two_grids)
+    rc, out = _run(xwl.cmd_params, file=page, module_root=module_root, controls=None,
+                   list_fields=False, upstream=False, strict=True)
+    if rc != 2 or "未核对" not in out:
+        fail.append("C26 grid 注册键歧义必须 strict rc=2 且未核对，实得 rc=%r\n%s"
+                    % (rc, out))
+
+    multiple = [_grid_store()["children"][0]["children"][0],
+                {"type": "store", "configs": {
+                    "itemId": "store2", "url": "m?xwl=demo/carrier"},
+                 "expanded": False, "children": []}]
+    page = os.path.join(module_root, "demo", "page_multi_store.xwl")
+    _dump(page, _grid_store(
+        stores=multiple, event="app.g1.store.load({ out: app.tbar });"))
+    rc, out = _run(xwl.cmd_params, file=page, module_root=module_root, controls=None,
+                   list_fields=False, upstream=False, strict=True)
+    if rc != 2 or "未核对" not in out:
+        fail.append("C26 grid 多 store 必须 strict rc=2 且未核对，实得 rc=%r\n%s"
+                    % (rc, out))
+
+    page = os.path.join(module_root, "demo", "page_nonslot.xwl")
+    _dump(page, _grid_store(
+        direct=False, event="app.g1.store.load({ out: app.tbar });"))
+    rc, out = _run(xwl.cmd_params, file=page, module_root=module_root, controls=None,
+                   list_fields=False, upstream=False, strict=True)
+    if rc != 2 or "未核对" not in out:
+        fail.append("C26 store 非 grid 直接槽位必须 strict rc=2 且未核对，实得 rc=%r\n%s"
+                    % (rc, out))
+
+    if fail:
+        return fail
+    print("[ok]  C14/C26/C27/C34：list-fields 降级可见且单次读取、"
+          "grid→store 唯一正例与歧义/多 store/非槽位负例、JS 真假引用共享提取器")
     return []
 

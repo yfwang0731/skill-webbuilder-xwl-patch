@@ -34,9 +34,26 @@
   {"op": "append",
    "path": ["@tbar", "children"],
    "value": {
-     "configs": {"itemId": "state", "fieldLabel": "状态", "store": "stateStore"},
+     "configs": {
+       "itemId": "state",
+       "fieldLabel": "状态",
+       "displayField": "text",
+       "valueField": "value",
+       "queryMode": "local"
+     },
      "expanded": false,
-     "children": [],
+     "children": [
+       {
+         "configs": {
+           "itemId": "store",
+           "fields": "[{name:'value'},{name:'text'}]",
+           "data": "[{value:'active',text:'启用'},{value:'inactive',text:'停用'}]"
+         },
+         "expanded": false,
+         "children": [],
+         "type": "store"
+       }
+     ],
      "type": "combo"
    }},
   {"op": "append",

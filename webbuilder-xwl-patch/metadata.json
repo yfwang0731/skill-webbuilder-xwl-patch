@@ -3,17 +3,17 @@
   "name_en": "webbuilder-xwl-patch",
   "displayName": "webbuilder-xwl-patch",
   "author": "yfwang0731",
-  "version": "1.9.1",
+  "version": "1.9.2",
   "schema_version": "1.0",
   "description": "WebBuilder（wb）平台 .xwl 定义文件的处理与安全编辑：结构级 patch（只给值 / 子树，工具按设计器自己的算法重建整份文件）+ 格式校验 + 相对 git 基线的压平检测。",
   "core_capabilities": [
     "结构级 patch 编辑（不碰文本层，格式错误在构造上不会发生）",
-    "check 十项校验（8 项判定：BOM / 换行一致 / 续行空白 / 加载器等价解析 / 末行结构 / 事件 JS 语法 / 注册键重名分级 / `configs` 值类型 ＋ 2 项默认只提示：⑧ 加载链完整性 / ⑪ 错槽位；⑪ 在 `--strict` 时改为 `[FAIL]` 并进 rc，⑧ 始终只提示、不进 rc）；另：给了 `--controls` 时另校 `configs` 键合法性（⑨，`[warn]`、不进 rc）与 `configs` 内联 `[js]` 语法（`[FAIL]`、进 rc），缺省不校也不自动找；`--controls` 指向的注册表取不到 ⇒ rc=2（属调用方配置错、不算文件缺陷；此时 ①–⑧⑩⑪ 与逐文件结论照常产出，只跳过 ⑨ 与 `configs` 内联 `[js]`）",
+    "check 十项校验（8 项判定：BOM / 换行一致 / 续行空白 / 加载器等价解析 / 末行结构 / 事件 JS 语法 / 注册键重名分级 / `configs` 值类型 ＋ 2 项默认只提示：⑧ 加载链完整性 / ⑪ 错槽位；⑪ 在 `--strict` 时改为 `[FAIL]` 并进 rc，⑧ 始终只提示、不进 rc）；文件级 BOM、缺失、不可读为 rc=1；`patch/edit/expand` 的 BOM 或读取失败为 rc=2。给了 `--controls` 时另校 `configs` 键合法性（⑨，`[warn]`、不进 rc）与 `configs` 内联 `[js]` 语法（`[FAIL]`、进 rc）；坏注册表总码为 2，①–⑧⑩⑪ 与逐文件结论照常产出，只跳过 ⑨ 与内联 `[js]`",
     "schema 的机器可读与语料实测（`--json` / `--observed`）：`--json` 出机器可读形态（单个对象 / `--list` 出数组）；`--observed [ROOT]` 统计该控件类型在语料里实测用过的 `configs` 键 ＋ 频次，并与注册表给差集",
     "patch 的按键序插入 `insertKey`：把对象键插到指定位置（before/after/index 三选一），补 `set` 只能新建末端的缺口；新建键自授权、以 `[note]` 列出可见",
     "从零新建页面与 SQL 载体（内置设计器真实键序骨架）",
-    "注册键重名分级报告（候选清单 + 建议改名）",
-    "SQL 片段自洽核对与页面传参链路核对（sqlrefs / params）",
+    "注册键重名分级报告（候选清单 + 建议改名；改名建议适用于非保留重名组，保留槽位用准确路径或 @名字#N）",
+    "SQL 片段自洽核对与页面传参链路核对（sqlrefs / params）；支持已取证的 `app.<grid>.store.load/reload` 直连唯一直接 store 槽位，歧义保持未核对",
     "diffguard：相对 git 基线检测「多行内容被压平」",
     "patch 的 ops 契约：`set` 新建键**默认被拒绝**（rc=2）、两条出路（op 上 `\"create\": true` 逐条放行 / 全局 `--allow-new-key` 放行）；非 `set` 带 `create` 报 rc=2 + 越界 / 缺失键统一可读 [FAIL]（rc=2）",
     "params --upstream：核对「谁在调用本页」—— 单根全扫上游调用方与传入键，末尾独立分组输出（默认关、零成本；只认字面量键，动态 url 只计数）",
@@ -81,21 +81,21 @@
     }
   },
   "error_handling": {
-    "strategy": "统一 [ok]/[FAIL]/[warn]/[note] 分级；退出码 0/1/2；写盘失败与编码失败一律转可读 [FAIL] + rc=2，不冒 Python traceback",
+    "strategy": "统一 [ok]/[FAIL]/[warn]/[note] 分级；退出码按命令阶段解释。check 的文件级 BOM、缺失、不可读为 1；patch/edit/expand 的 BOM 或读取失败为 2；写盘失败给可读 [FAIL] + rc=2，不冒 Python traceback",
     "degradation": [
       "找不到 node → 事件 JS 语法校验降级为提示，不阻塞",
       "不是 git 仓库 / 文件不在基线里 → diffguard 以 [note] 跳过",
       "非 UTF-8 文本 → 明确报错并说明修法，不猜编码",
-      "注册表取不到 → check 返 rc=2（属调用方配置错；①–⑧⑩ 与逐文件结论照常产出，只跳过 ⑨ 与 configs 内联 [js]）；其余命令（itemids / params 等）回退内置兜底、打 [warn] 读注册表失败、rc 不变"
+      "注册表取不到 → check 返 rc=2（属调用方配置错；①–⑧⑩⑪ 与逐文件结论照常产出，只跳过 ⑨ 与 configs 内联 [js]）；itemids / params 回退内置兜底并打 [warn]；params --list-fields 对显式坏或缺失 controls 在 stderr 打同一降级说明、stdout 清单与 rc=0 保持"
     ]
   },
   "retry": {
     "max_attempts": 1,
-    "note": "纯本地离线工具，无网络调用与外部服务依赖，故不设重试；失败即给出可读原因与回退指引（--backup 的 .bak / git checkout --）"
+    "note": "纯本地离线工具，无网络调用与外部服务依赖，故不设重试；失败即给出可读原因与回退指引（使用确实存在的操作前副本）"
   },
   "security_checks": {
     "network": "无任何网络请求（diffguard 仅调用本地 git cat-file / rev-parse）",
-    "file_ops": "只读写用户显式指定的 .xwl 与 folder.json，不擅自遍历未指定的树、不批量删除",
+    "file_ops": "操作面由显式输入、命令推导资源、选择性扫描和声明外部写入目标共同决定：读取显式 xwl、ops、anchors、controls、var、依赖 SQL、git 对象与模块根；按选项写目标、.bak、folder.json --register、events --outdir；正常内部临时写会清理，不批量删除",
     "secrets": "不读取、不打印任何凭据"
   },
   "applicable_scenarios": [
@@ -109,7 +109,7 @@
     "仅 WebBuilder（wb）平台的 .xwl；其他低代码平台页面定义、.vue、普通 .json 不适用",
     "不含后端 Java、模块打包、target/ 部署副本同步、数据库菜单注册（WB_MENU）",
     "操作系统：Windows 与 POSIX（含 macOS）均支持；路径分隔符与换行按各平台惯例处理，跨平台时注意检出 / 存储形态差异",
-    "diffguard 需要 git 仓库；压平同时改内容且增量不足时不报，仍需 git diff 复核",
+    "diffguard 需要 git 仓库；精确、最长行、相似度三档仍受阈值、覆盖度和预算限制，不能替代完整人工复核",
     "配套 Java 后台方法的实现支持不在此范围（按路线图预留位，属 2.0.0）",
     "`check` 的 ⑩「configs 值类型」在当前真实语料上**召回为 0**（实测 configs 的值全为字符串）—— 它的价值是防生成脚本漏 str() / 手改件引入，不是「已有一批坏文件待查」",
     "主 grid 的 autoLoad 提示**无从知道页面是窗口 / 弹窗**（这类页由父页 load，`autoLoad` 在那里可能合法）⇒ 对它们是**误报面**；`store` 不在主 grid 直接子节点时**判不出**，会打「主 grid 未识别（store 不在主 grid 的直接子节点），请人工确认」。两种情形都须结合源页语义与引入方式人工核对，工具不替你下结论",
@@ -161,6 +161,11 @@
     "references/workflow-notes.md": "evidence"
   },
   "update_history": [
+    {
+      "version": "1.9.2",
+      "date": "2026-11-23",
+      "summary": "现役口径冲突统一修复（patch）：收敛运行契约与退出码、传参优先级、操作纪律、新建与交付、元数据 I/O、folders 直接父索引、edit/expand 阶段、paths 示例、grid→store 静态关联、JS 真假引用、events 覆盖提示、diffguard 边界，并修复 README/walkthrough 可执行示例。params --list-fields 对显式坏或缺失 controls 在 stderr 可见降级；check 坏 controls 时 ⑪ 仍执行；events 仅写入成功后报覆盖；相似度档保留且有压平并改内容正例。"
+    },
     {
       "version": "1.9.1",
       "date": "2026-11-21",

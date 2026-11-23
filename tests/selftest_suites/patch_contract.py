@@ -471,6 +471,77 @@ def _check_patch_contract(tmp, node, failures, write) -> None:
     _ok("5-14", f14,
         "expand/patch 数字形态=3：字符串、SQL/JS、转义及前导文本不计数；位置互换方向差=0")
 
+    pc_fail.extend(_check_1_9_2_configs_path_cases(tmp))
     if pc_fail:
         failures.extend(pc_fail)
+
+
+def _check_1_9_2_configs_path_cases(tmp):
+    """C10：漏 `configs` 只在同名键已存在或显式放行新建时误写。"""
+    fail = []
+
+    def _write(name, obj):
+        path = os.path.join(tmp, name)
+        with open(path, "w", encoding="utf-8", newline="") as fh:
+            fh.write(xwl.dumps_designer(obj, 1, CRLF))
+        return path
+
+    def _ops(name, ops):
+        path = os.path.join(tmp, name)
+        with open(path, "w", encoding="utf-8", newline="") as fh:
+            json.dump(ops, fh, ensure_ascii=False)
+        return path
+
+    obj = {
+        "title": "t",
+        "children": [{
+            "type": "panel",
+            "configs": {"itemId": "p", "sql": "CHILD_UNCHANGED"},
+            "expanded": False,
+            "children": [],
+            "sql": "ROOT_OLD",
+        }],
+    }
+    page = _write("v192_configs_path.xwl", obj)
+    target = _ops("v192_configs_path_ops.json", [{
+        "op": "set", "path": ["children", 0, "sql"], "value": "ROOT_NEW",
+    }])
+    rc, out = _run(xwl.cmd_patch, file=page, ops=target, indent=1, eol="auto",
+                   dry_run=False, backup=True, node=None, no_js=True,
+                   allow_new_key=False)
+    if rc != 0:
+        fail.append("C10 同名错层写入应能执行以暴露风险，rc=%r\n%s" % (rc, out))
+    _t, _b, got = xwl.load_xwl(page)
+    node = got["children"][0]
+    if node.get("sql") != "ROOT_NEW" or node["configs"].get("sql") != "CHILD_UNCHANGED":
+        fail.append("C10 同名错层反例没有写到节点根或污染了 configs.sql")
+
+    missing_page = _write("v192_configs_missing.xwl", obj)
+    before = open(missing_page, "rb").read()
+    missing_ops = _ops("v192_configs_missing_ops.json", [{
+        "op": "set", "path": ["children", 0, "configs", "newKey"], "value": "v",
+    }])
+    rc, out = _run(xwl.cmd_patch, file=missing_page, ops=missing_ops, indent=1,
+                   eol="auto", dry_run=False, backup=False, node=None, no_js=True,
+                   allow_new_key=False)
+    if rc != 2 or open(missing_page, "rb").read() != before:
+        fail.append("C10 缺键且未显式放行必须 rc=2 且零写入，rc=%r\n%s"
+                    % (rc, out))
+
+    allowed_page = _write("v192_configs_allowed.xwl", obj)
+    allowed_ops = _ops("v192_configs_allowed_ops.json", [{
+        "op": "set", "path": ["children", 0, "newRoot"], "value": "v",
+    }])
+    rc, out = _run(xwl.cmd_patch, file=allowed_page, ops=allowed_ops, indent=1,
+                   eol="auto", dry_run=False, backup=False, node=None, no_js=True,
+                   allow_new_key=True)
+    if rc != 0 or "[warn] --allow-new-key 已放行 1 个新建键" not in out:
+        fail.append("C10 --allow-new-key 显式放行新建键应 rc=0 且可见警告，rc=%r\n%s"
+                    % (rc, out))
+
+    if fail:
+        return fail
+    print("[ok]  C10 漏 configs：同名目标已存在时误写可见反例、缺键默认拒绝、"
+          "显式 --allow-new-key 才放行")
+    return []
 

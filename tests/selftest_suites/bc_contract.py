@@ -575,12 +575,11 @@ def _check_bc_contract(tmp, node, failures, write) -> None:
             f13.append("%s 的缩进计数为 0（非原样排版样本应 > 0）" % who)
     _ok("patch / expand 对非原样源给出三类改写计数（缩进 / \\uXXXX 转义 / 数字形态）", f13)
 
-    # ---- 同源：params 侧与 itemids 侧对 app.<名> / app['名'] 的容器名认定逐名一致 ----
+    # ---- 同源：params 侧与 itemids 侧对 app.<名> / app['名'] / app.get('名') 的容器名认定逐名一致 ----
     # 注入判据：把 `_app_refs_in` 改回只 `_APP_REF_BARE`（丢掉 app['名']）⇒ 本条**必须转红**。
     # 样本含三种写法：app['p1'] + app.p2 + app.get('p3')（都写成 transfer 形态，
     # 否则 `find_transfers` 只在 `out:` / `params=` 之后扫表达式，扫不到）。
-    # 注：`app.get('名')` 在 params 侧本就是**请求级参数**（xwl.py 里走 serverScript 分支的 `_APP_REF_GET`），
-    #     故意不算容器名 —— 故比对只看两侧共用的符号类（app.<名> + app['名']），该对集合须逐名相等。
+    # 新口径：`app.get('名')` 与另外两种写法一样属于共享真实引用，两侧集合都须精确含三种写法。
     # ⚠️ 纯"两侧一致"会被**对称失明**骗过（两侧同步丢掉 app['名'] ⇒ 等式照样成立）⇒ 下面三条**前置**
     #    把"双侧都必须**真的**认到 app['名'](p1)"钉死（用字面 {"p1"} / "p1" 比对，不写成"非空即可"）。
     js15 = ("g.load({ out: app.p2, params: Wb.getValue(app['p1']) }); "
@@ -588,10 +587,7 @@ def _check_bc_contract(tmp, node, failures, write) -> None:
     tree15 = {"children": [{"type": "button", "configs": {}, "children": [],
                             "events": {"click": js15}}]}
     ids15 = xwl.js_refs_of(tree15, filtered=False)                 # itemids 侧（含 app.get 类）
-    get_only15 = (set(xwl._APP_REF_GET.findall(js15))
-                  - set(xwl._APP_REF_BARE.findall(js15))
-                  - set(xwl._APP_REF_BRACKET.findall(js15)))       # 仅 app.get 才认到的名
-    ids15_shared = ids15 - get_only15                             # 两侧共用符号类上的 itemids 侧
+    ids15_shared = ids15
     pm15 = {n for _k, conts, _kk, _raw in xwl.find_transfers(js15, xwl.field_types(None))
             for n in conts}
     f15 = []
@@ -604,11 +600,17 @@ def _check_bc_contract(tmp, node, failures, write) -> None:
         f15.append("params 侧未认 app['名'](p1) ⇒ 断言空转（实得容器名 %s）" % sorted(pm15))
     if "p1" not in ids15_shared:
         f15.append("itemids 侧未认 app['名'](p1) ⇒ 断言空转（实得容器名 %s）" % sorted(ids15_shared))
+    if ids15_shared != {"p1", "p2", "p3"}:
+        f15.append("itemids 侧未逐名认到 app.<名> / app['名'] / app.get('名')：实得 %s"
+                   % sorted(ids15_shared))
+    if pm15 != {"p1", "p2", "p3"}:
+        f15.append("params 侧未逐名认到 app.<名> / app['名'] / app.get('名')：实得 %s"
+                   % sorted(pm15))
     if ids15_shared != pm15:
-        f15.append("params 侧与 itemids 侧对 app['名'] / app.<名> 的容器名不逐名一致："
+        f15.append("params 侧与 itemids 侧对 app.<名> / app['名'] / app.get('名') 的容器名不逐名一致："
                    "itemids=%s params=%s（差集 %s）"
                    % (sorted(ids15_shared), sorted(pm15), sorted(ids15_shared ^ pm15)))
-    _ok("params 侧与 itemids 侧对 app['名'] / app.<名> 的容器名认定逐名一致", f15)
+    _ok("params 侧与 itemids 侧对 app.<名> / app['名'] / app.get('名') 的容器名均为 p1,p2,p3", f15)
 
     # 尾部两组（`app._X` 欠报 / params 按注册键找容器）已下沉为 `_check_bc_contract_tail`
     #   （本函数 406 行，要进 400 的上限）。判据文本逐字未改。

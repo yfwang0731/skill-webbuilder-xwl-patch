@@ -435,6 +435,76 @@ def _check_new_guards(tmp, node, failures, write) -> None:
     failures.extend(_repair_regression_cases(tmp))
     # 请求完成状态：目标未知即使需求集为空也不得打印请求级 ok，并进入 strict 码值
     failures.extend(_request_completion_cases(tmp))
+    # 1.9.2 C15：folders 检查目标/传入目录与其直接父索引的链接
+    failures.extend(_check_1_9_2_folders_parent(tmp))
+
+
+def _check_1_9_2_folders_parent(tmp):
+    """C15：直接父索引、缺索引 note、读不动/坏结构、祖先不继续上探。"""
+    fail = []
+    root = os.path.join(tmp, "v192_folders")
+    base = os.path.join(root, "managed")
+    child = os.path.join(base, "child")
+    grand = os.path.join(child, "grand")
+    os.makedirs(grand, exist_ok=True)
+    page = os.path.join(grand, "a.xwl")
+    with open(page, "w", encoding="utf-8", newline="") as fh:
+        fh.write(xwl.dumps_designer({"title": "t", "children": []}))
+
+    def _folder(d, index):
+        with open(os.path.join(d, "folder.json"), "w",
+                  encoding="utf-8", newline="") as fh:
+            fh.write(json.dumps({"hidden": False, "index": index,
+                                 "title": "t", "iconCls": ""},
+                                ensure_ascii=False))
+
+    def _run_folder_check(path):
+        return _run(xwl.cmd_folders, path=path, register=None, dry_run=False)
+
+    _folder(base, [])
+    _folder(child, ["grand"])
+    _folder(grand, ["a.xwl"])
+    rc, out = _run_folder_check(child)
+    if rc != 0 or "未登记" not in out or "child" not in out:
+        fail.append("C15 目标目录未登记于直接父索引应可见且 rc=0，rc=%r\n%s"
+                    % (rc, out))
+    _folder(base, ["child"])
+    rc, out = _run_folder_check(child)
+    if rc != 0 or "[未登记] managed/" in out and "child" in out:
+        fail.append("C15 补齐直接父索引后该未登记结论应消失，rc=%r\n%s"
+                    % (rc, out))
+
+    # 不沿祖先链：中间索引正常时，远端祖先 base 不应再影响目标 child。
+    _folder(base, [])
+    rc, out = _run_folder_check(grand)
+    if rc != 0 or "managed" in out and "未登记" in out:
+        fail.append("C15 检查 grand 时不得继续上探 base 的索引，rc=%r\n%s"
+                    % (rc, out))
+
+    os.remove(os.path.join(base, "folder.json"))
+    rc, out = _run_folder_check(child)
+    if rc != 0 or "[note] 直接父 folder.json 不存在，本次未执行父索引检查" not in out:
+        fail.append("C15 直接父索引不存在应固定 note 且 rc=0，rc=%r\n%s"
+                    % (rc, out))
+
+    os.makedirs(os.path.join(base, "folder.json"))
+    rc, out = _run_folder_check(child)
+    if rc != 2:
+        fail.append("C15 直接父索引读不动应 rc=2，实得 %r\n%s" % (rc, out))
+    os.rmdir(os.path.join(base, "folder.json"))
+
+    with open(os.path.join(base, "folder.json"), "w",
+              encoding="utf-8", newline="") as fh:
+        fh.write('{"hidden":false,"index":{},"title":"t"}')
+    rc, out = _run_folder_check(child)
+    if rc != 1:
+        fail.append("C15 直接父索引结构坏应 rc=1，实得 %r\n%s" % (rc, out))
+
+    if fail:
+        return fail
+    print("[ok]  C15 folders 直接父索引：未登记可见、补名消失、缺索引固定 note＋rc0、"
+          "读不动 2、结构坏 1，且不沿祖先链上探")
+    return []
 
 
 def _ri_carrier(module_root):

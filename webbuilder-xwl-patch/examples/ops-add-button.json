@@ -10,6 +10,14 @@
   {"op": "append",
    "path": ["@demoGrid", "children"],
    "value": {
+     "configs": {"itemId": "tbar", "dock": "top"},
+     "expanded": false,
+     "children": [],
+     "type": "toolbar"
+   }},
+  {"op": "append",
+   "path": ["@tbar", "children"],
+   "value": {
      "configs": {"itemId": "queryBtn", "text": "查询", "iconCls": "query_icon"},
      "expanded": false,
      "children": [],

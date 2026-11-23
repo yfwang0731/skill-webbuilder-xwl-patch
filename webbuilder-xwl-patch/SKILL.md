@@ -2,7 +2,7 @@
 name: webbuilder-xwl-patch
 slug: skill-webbuilder-xwl-patch
 displayName: webbuilder-xwl-patch
-version: 1.9.1
+version: 1.9.2
 license: MIT
 metadata:
   category: development-tools
@@ -46,7 +46,7 @@ WebBuilder 的页面与查询定义都写在 `.xwl` 里。它**看起来像 JSON
 | **操作系统** | Windows 与 POSIX（含 macOS）均支持；路径分隔符与换行按各平台惯例处理，跨平台时注意检出/存储形态差异 |
 | **环境** | Python 3.9+，**纯标准库零依赖**；`node` 可选，只用于事件 JS 语法校验，找不到时自动降级为提示 |
 | **规模** | 可修改范围只受可加载文件与本地资源约束。**工具没有任何文件大小上限**，但**未验证**过 1 MB 以上的文件、或单文件事件段极多的情形。规模样本、采集口径与复算入口只在 `references/measured-data-skeleton.md` §十维护 |
-| **能改的前提** | 目标文件能被加载器解析（即 `check` 的 ④ 通过）。已经是坏文件的，先用 `edit` 做文本级修复 |
+| **能改的前提** | 先确认解析阶段接受该文本（`check` ④）。`patch/expand` 还要求可安全整份重建；`edit` 可走文本级宽容输入。页面可用性另看 ⑧、设计器打开和交互验收 |
 
 > 上表「规模」是能力边界。样本规模、统计口径和复算方法只由
 > `references/measured-data*.md` 维护；换工程要按同一方法自行复采。
@@ -76,7 +76,7 @@ WebBuilder 的页面与查询定义都写在 `.xwl` 里。它**看起来像 JSON
 | 处理注册键重名 / `@itemId#N` 寻址 | [`references/faq.md`](references/faq.md)「附录：itemId 命名规范与重名处置」 |
 | 出问题了（按症状查） | 第五章 + [`references/faq.md`](references/faq.md) |
 | **动手前**扫一遍"别这么干" | [`references/anti-patterns.md`](references/anti-patterns.md) —— 23 条，标了哪些是**静默**的 |
-| **交活前**逐条过 | 第六章 + [`references/checklist.md`](references/checklist.md) —— 30 项 |
+| **交活前**逐条过 | 第六章 + [`references/checklist.md`](references/checklist.md) —— 31 项 |
 | 换控件 / 不知道用哪个 / 该挂哪里 | [`references/controls.md`](references/controls.md) |
 | 定布局：面板该多高、列宽与列网格、`region` 拉伸、工具条挂法 | [`references/layout.md`](references/layout.md) |
 | 值映射：`keyName` vs `renderer`、多选三路来源、值往返与存储格式 | [`references/value-mapping.md`](references/value-mapping.md) |
@@ -132,7 +132,10 @@ WebBuilder 的页面与查询定义都写在 `.xwl` 里。它**看起来像 JSON
 `itemId` 的**唯一性**（工具寻址用 `@itemId`）与「少写 `expanded` / `children` 会**与设计器产物不一致**」见
 `references/controls.md` §4.2 典型骨架；查单个控件用 `xwl.py schema --help`。
 
-注册键取 `normalName`（优先），否则取 `itemId`。**必须唯一**；重名且被事件 JS 引用会**静默取不到值**（`error`），未被引用为 `benign`。处置顺序：**先读父子关系判断真实目标 → 把候选交给用户选**，⛔ 不要"删一个"或"挑一个"；精确表达式与分类表见 `references/faq.md` 附录，框架机制（`ComponentManager`／`unregister`）见 `references/measured-data-addressing.md` 的 `7.5`。
+注册键取 `normalName`（优先），否则取 `itemId`。重名且被事件 JS 真实引用会**静默取不到值**（`error`），未被引用为 `benign`。保留槽位使用准确路径、父级范围或 `@名字#N` 消歧并保留原名；普通非槽位重名才进入限定范围、`#N`、准确路径或改名处置。精确表达式与分类表见 `references/faq.md` 附录，框架机制（`ComponentManager`／`unregister`）见 `references/measured-data-addressing.md` 的 `7.5`。
+
+真实引用按可执行代码区识别：`app.X`、`app.get('X')`、`app['X']`／`app["X"]`；
+普通字符串、纯模板文字和注释里的伪引用不计数。
 
 grid 内嵌 tbar、columns、store 与列上的 editor 是槽位，重名不是缺陷，禁止改 itemId。细节见 references/controls.md。
 
@@ -186,15 +189,16 @@ hidden, children, roles, title, iconCls, inframe, pageLink
 
 > 静默语义损坏的逐条后果、"绝不能压一行"与相对基线判据见 references/anti-patterns.md 第 4 条。
 
-### 2.4 换行与展开：`expand` / `patch` / `edit` 的三个共同规则
+### 2.4 换行与展开
 
 > **单行源可以转成多行，且能做到与设计器逐字节一致**（写回算法 = `IDE.updateModule` 四步，
-> 反编译复刻 + 回放校验）。三个共同规则：`--eol` 沿用·多数·**回退 LF**（三命令共用、不静默）；
-> `patch` **整份重建**（单行源改完一定是多行）；`edit` 按目标文件的实际换行**推断**、无换行时按 LF。
+> 反编译复刻 + 回放校验）。`patch/expand` 执行整文件 EOL，`--eol` 规则为沿用·多数·**回退 LF**。
+> `patch` **整份重建**（单行源改完一定是多行）。`edit` 不提供 `--eol`：锚点和替换片段按内部选择的
+> 风格归一，未命中区域保持原字节，常规不打印所选风格，混用才告警。
 > 详见 `references/faq.md` §四，写回算法与规模占比见
 > `references/measured-data-designer.md` §五。
 
-`auto` 怎么定：**只有一种**换行（全 CRLF / 全 LF / 全 CR）⇒ **沿用它**（含纯 CR）；**混用多种** ⇒ 只在
+`patch/expand` 的整文件 `auto` 怎么定：**只有一种**换行（全 CRLF / 全 LF / 全 CR）⇒ **沿用它**（含纯 CR）；**混用多种** ⇒ 只在
 **CRLF / LF** 取多数（等量取 CRLF）、**裸 CR 不参与投票**；**一个换行符都没有**（紧凑单行源正属此类，样本工程里确有这类文件）⇒ 无从"沿用"、**回退 LF**（计数与采集口径见 `references/measured-data-designer.md`，历史口径见 `CHANGELOG.md`）。
 
 ### 2.5 值里的「字面反斜杠 + n」为什么长得别扭
@@ -255,15 +259,20 @@ PowerShell 版把 `export SKILL_ROOT=…` 换成 `$env:SKILL_ROOT = "…";`，�
 - `--from-json <obj.json>` 可以喂一个自己拼的顶层对象，它会**按设计器键序重排并补齐缺失的页面钥匙**
   （补齐了哪些会明确回报），且不覆盖你给的 `title` / `roles`。
 
-**`new` 之后必做三件事** —— 只把文件写进磁盘是不够的：
+`new` 成功先看 `rc=0`。工具完成骨架构造、语义等价比对、写盘和自动校验后才打印后续提示；
+提示不是固定条数契约。SQL 载体的 `WB_MISC` 占位 SQL 必须替换。
+
+**`new` 之后必做** —— 只把文件写进磁盘是不够的：
+
+页面交付保留四项门槛：`check`、`check --controls`、设计器打开、人工布局交互。SQL 载体以存在性、引用链和 `sqlrefs` 为准。
 
 | # | 做什么 | 怎么验 |
 |---|---|---|
-| ① | **登记进所在目录的 `folder.json`** —— 否则设计器导航树里看不到它 | `xwl.py folders <file>`；未登记则 `--register` |
+| ① | 需要设计器导航树展示或打开编辑时才登记直接父 `folder.json` | `xwl.py folders <file>`；需要时 `--register` |
 | ② | SQL 载体验引用自洽 / 页面验传参链路 | `xwl.py sqlrefs` / `xwl.py params` |
-| ③ | **在设计器里打开一次**（真正的冒烟） | `check` 只证"格式能加载"，不证"页面能用" |
+| ③ | **在设计器里打开一次，并人工核对布局交互** | `check` 只证文件级静态项，不证页面可用 |
 
-> `folder.json` 的机制与前提（**不登记就看不到**、`--register` **只认文件路径**、缺 `folder.json` 时**不替你创建**）见 references/faq.md §四。
+> `folder.json` 的机制与前提（直接父索引检查、`--register` **只认文件路径**、缺 `folder.json` 时不创建）见 references/faq.md §四。
 > 想看一次**完整实操**（从零造页面 + SQL 载体，含 `folder.json` 登记与设计器冒烟）见 references/walkthrough.md。
 
 ### 第 1 步 · 定位文件
@@ -277,7 +286,8 @@ PowerShell 版把 `export SKILL_ROOT=…` 换成 `$env:SKILL_ROOT = "…";`，�
 ### 第 2 步 · 读懂加载机制
 
 `text` 在磁盘上是「反斜杠 + 真实换行」的多行字符串，加载时被还原为 `\n` 转义后按严格 JSON 解析。
-**据此得到一个关键推论**：只要能按加载器规则解析成功，就说明**框架能加载它** —— 这是**最强的校验手段**（见第 4 步 ④）。
+④ 只说明解析阶段接受该文本。`patch/expand` 另要求可安全整份重建，`edit` 走文本级宽容输入；
+页面可用性还要看 `check` ⑧、设计器打开和交互验收。
 
 ### 第 3 步 · 编辑（**默认 `patch`；`edit` 仅例外**）
 
@@ -323,7 +333,8 @@ PowerShell 版把 `export SKILL_ROOT=…` 换成 `$env:SKILL_ROOT = "…";`，�
    不受嵌套层数影响，比 `["children",0,"children",0,"configs","sql"]` 稳得多。
    必须手写下标时，先用 `dump` 确认那一层**确实有**那个元素。
    > `paths` 的「原路径」**已经带 `configs` 一层**（`["children",0,"configs","serverScript"]`），照抄即可。
-   > 手写时**别漏这一层** —— 漏了 `patch` **不会报错**，而是把字段写到节点根上（静默语义损坏，`check` 不拦）。
+   > 手写时**别漏这一层**。同名目标已存在，或显式通过 `create:true`／`--allow-new-key` 放行新建时，
+   > 漏层才可能静默写到节点根；缺键且未放行会按新建键门禁拒绝。
 2. 写 `ops.json`（`set` / `insertKey` / `insert` / `append` / `delete`）。
 3. **`--dry-run` 是硬闸门，不是建议** —— **没看过 diff 就不许真跑**。
    工具**不会**替你拦这一步（它没法知道你脑子里确认过没有），所以这条靠自律；
@@ -338,14 +349,21 @@ python "$SKILL_ROOT/scripts/xwl.py" patch <file.xwl> --ops ops.json --dry-run
 python "$SKILL_ROOT/scripts/xwl.py" patch <file.xwl> --ops ops.json --backup
 ```
 
-**报错怎么办** —— `patch` 的**失败**默认不写盘（⚠️ 正常成功当然写盘 —— ⛔ 别把默认执行模式说成 dry-run）；但"是否写入"与"本次是否检查完"是两件事，输出里必须分别说清 —— ①**正常成功**：已写入、`rc=0`（⑤）；②**已写入且内容失败**：④ 旧错保留（`rc=1`）；③**已写入且检查未完成**：⑥-a Node 缺失／`--no-js`（`rc=0`）；④**未写入**：①②③⑥-b⑦（`rc=1`／`2`）；「写后 ⑥ 失败」另报『已写入；写后校验失败』：
+**写入结果按四阶段判断**。不得从命令失败或 `rc` 推断文件未动。
+
+1. 写前拒绝：目标未写，通常也无新 `.bak`。
+2. 写盘失败：分别核对目标与 `.bak` 的现有字节。
+3. 目标已写入但写后检查失败：目标确实改变，命令可能返回 `1`。
+4. 写后检查未完成：例如 node 缺失或 `--no-js`，命令可能返回 `0`，但检查结论不完整。
+
+正常成功时目标已写入且 `rc=0`。任何恢复都使用确实存在的操作前副本。
 
 | 现象 | 原因 | 处理 |
 |---|---|---|
 | `找不到 …` / 下标越界 | `path` 写错，或那一层没这个元素 | 用 `paths` / `dump` 核对后改 `path`，**别猜** |
-| `… itemId == 'x' 有 N 个节点` | `@itemId` 重名，工具不替你猜 | 用 `paths` 给出的**原路径**（带下标），或先把该节点 `itemId` 改成唯一值 |
+| `… itemId == 'x' 有 N 个节点` | `@itemId` 重名，工具不替你猜 | 保留槽位用准确路径、父级范围或 `@名字#N`；普通非槽位重名才考虑限定范围或改名 |
 | 等价比对失败 → 中止 | `value` 里有内容重建后，**规范化文本**（含键序与值类型）与原对象不一致 | 检查 `value` 是否混入异常控制字符、数字是否写成 `1.0` 这类会变形的形态；文件**没被动过** |
-| 改完 `check` 不通过 | 极少数：`value` 内含异常字符 | 恢复：先用手里的操作前副本。`cp <file>.bak <file>` 仅在本次用了 `--backup` 时成立；`git checkout -- <file>` 会丢掉你尚未提交的其它编辑，只在确认工作区只有本次改动时用 |
+| 改完 `check` 不通过 | 极少数：`value` 内含异常字符 | 先核对该次 `patch` 实际处于哪个写入阶段，再使用确实存在的操作前副本或本批 before 快照恢复 |
 
 三点须知：
 
@@ -366,8 +384,8 @@ python "$SKILL_ROOT/scripts/xwl.py" patch <file.xwl> --ops ops.json --backup
 python "$SKILL_ROOT/scripts/xwl.py" edit <file.xwl> --old-file old.txt --new-file new.txt --expect 1 --dry-run
 ```
 
-> 「锚点出现次数」是**信息**不是障碍：工具会报出实际次数。出现多次时把锚点**扩到足够上下文**
-> 直到唯一，**不要**用 `--expect N` 去批量替换。
+CLI 的真实契约是**核对期望次数**：实际出现次数必须等于 `--expect`。普通业务操作默认用
+`--expect 1` 并把锚点上下文扩到唯一；明确知道多处相同的受控替换才使用对应的 `--expect N`。
 
 > **两条路都禁止**用普通编辑器 / 通用 Edit 工具直接改 xwl —— 它们会写成裸 LF，破坏格式。
 
@@ -389,6 +407,8 @@ python "$SKILL_ROOT/scripts/xwl.py" diffguard <改过的文件或目录> --stric
 ```
 
 - **判据、已知边界与退出码都在 `references/faq.md` §三** —— 这里不重复。
+- 判据使用**精确、最长行、相似度三档**；主判据是定义级精确拼接，最长行只是粗筛，
+  相似度档补充压平同时改内容的形态。三档仍受阈值、覆盖度和预算限制，完整人工复核仍可用于核对语义。
 - **没有 git 也没关系**：这一项以 `[note]` 跳过，前四步不受影响。
 - CI / pre-commit 里用 `--strict`：疑似优先 `rc=1`；仅检查未完成或全部跳过 `rc=2`；部分跳过只记 `[note]`。给它的路径**尽量只列改过的文件**，
   别每次都把整个 `wb/` 拖一遍（大工程上万个 xwl，没必要）。
@@ -424,10 +444,12 @@ python "$SKILL_ROOT/scripts/xwl.py" diffguard <改过的文件或目录> --stric
 | 退出码 | 含义 |
 |---|---|
 | `0` | 成功 |
-| `1` | **被检查对象或查询结果有问题**（`check` 有 `[FAIL]`；`paths` / `sqlrefs` / `sql` / `events` 没找到目标字段 —— 即无可抽取内容、**无适用检查内容**判 `1`；**`folders` 的索引 JSON／结构损坏、或 `index` 确认悬空判 `1`**） |
-| `2` | **用法或前置条件不满足**（缺必填参数、`edit` 锚点次数不符、`new` 拒绝覆盖、读不到目标文件；**`check` 的 `--controls` 取不到控件注册表** —— 此时 ①–⑧⑩ 已照常判定，只有 ⑨ 与 configs 内联 `[js]` 未校；**`patch`／`edit` 的写前门禁：node 调用失败（超时/崩溃）也判 `2`**；**`params --strict` 下「仅未核对」判 `2`**；**`diffguard --strict` 下「检查未完成」（相似度档预算触顶）判 `2`** —— 含义是"没查完"，不是"有问题"；**`folders` 的索引读不动（无法判断）判 `2`**；**`params`／`sqlrefs` 读依赖失败（SQL 载体／`var.json`／`--upstream` 反查扫描）：默认与 `--strict` 均判 `2`** —— 同为"没查完"；`--strict` 下若另有已确认缺参／悬空，汇总判 `1` 并同时列出读取失败） |
+| `1` | **被检查对象或查询结果有问题**（`check` 的文件级 BOM、缺失、不可读均为 `1`；`paths` / `sqlrefs` / `sql` / `events` 没找到目标字段或**无适用检查内容**判 `1`；`folders` 的索引 JSON／结构损坏、或 `index` 确认悬空判 `1`） |
+| `2` | **用法或前置条件不满足**（缺必填参数、`edit` 锚点次数不符、`new` 拒绝覆盖；`patch/edit/expand` 的 BOM 或读取失败为 `2`；**`check` 的坏 `--controls` 总码为 `2`**，此时 ①–⑧⑩⑪ 照常执行，仅跳过 ⑨ 与 configs 内联 `[js]`；`patch/edit` 写前 node 调用失败也判 `2`；`params --strict` 仅未核对判 `2`；`diffguard --strict` 检查未完成判 `2`；`folders` 索引读不动判 `2`；`params` / `sqlrefs` 依赖读取失败判 `2`） |
 
-两类**判定会随命令线宽严变化**的命令，各自三档（默认 / 收紧 / 放松）：`diffguard`（疑似压平默认只告警，
+各命令的 strict 边界分别计算：`check --strict` **仅升级 ⑪**；`params` 使用自己的默认/严格矩阵，
+且 `--strict` 不改变逐请求的已证明/确缺/未核对归属；sqlrefs 没有 --strict，
+内容失败优先 `rc=1`，仅依赖读取失败为 `rc=2`。`diffguard`（疑似压平默认只告警，
 `--strict` 下**疑似优先 rc=1**；**仅相似度档预算触顶等检查未完成**时 rc=2，默认档 rc=0 但末行标
 `=== 结果: 未完成`；全部跳过才 rc=2，部分跳过只记 `[note]`；非 git 仓库 / 新文件以 `[note]` 跳过；
 **完整且无未完成/跳过时末行带「完整通过」**）；`params`（缺来源默认只告警，`--strict` 判失败，
@@ -453,9 +475,9 @@ python "$SKILL_ROOT/scripts/xwl.py" diffguard <改过的文件或目录> --stric
 
 ## 六、改完的自检清单
 
-**30 项**清单（改已有文件 24 项 + 新建文件 6 项）在 `references/checklist.md` ——
+**31 项**清单（改已有文件 24 项 + 新建文件 7 项）在 `references/checklist.md` ——
 交活前逐条过一遍。按主题分了七组，**与 `references/anti-patterns.md` 的分组对齐**（七组 ↔ 反模式组的对照表在 `references/checklist.md` 开头）。
 
-> 其中最容易跳过、后果最重的三条：① 多行源**绝不能**压成一行（改完用 `diffguard` 扫一遍，
-> 这是唯一能自动发现它的手段）；② 真跑 `patch` 必须带 `--backup`；③ 新建文件必须在**设计器里打开过一次**
-> （`check` 只证"格式能加载"，不证"页面能用"）。
+> 其中最容易跳过、后果最重的三条：① 多行源**绝不能**压成一行（改完用 `diffguard` 精确、
+> 最长行、相似度三档提示新发生的压平）；② 真跑 `patch` 带 `--backup`；
+> ③ 新建页面必须在设计器里打开，并人工核对布局与交互。

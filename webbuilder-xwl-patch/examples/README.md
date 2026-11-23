@@ -49,7 +49,8 @@ SQL 载体的写法见第三节。
 
 第一节生成的 `$TMP_DIR/demo-page.xwl` 是空 `module` 节点。
 `examples/ops-add-button.json`（**留在仓内**，是样例数据）是**多 op 序列**：先往 `module.children`
-追加一个 `grid`（`itemId=demoGrid`），再往这个网格里追加一个 `button`（`itemId=queryBtn`）。
+追加一个 `grid`（`itemId=demoGrid`），再在 grid 下创建 toolbar，最后把 `button`（`itemId=queryBtn`）
+挂到 toolbar.children。
 
 bash（承接第一节已设的 `SKILL_ROOT` / `TMP_DIR`）：
 
@@ -115,7 +116,7 @@ python "$env:SKILL_ROOT/scripts/xwl.py" check "$env:TMP_DIR/xxxSql/queryDemo.xwl
 python "$env:SKILL_ROOT/scripts/xwl.py" sqlrefs "$env:TMP_DIR/xxxSql/queryDemo.xwl"
 ```
 
-> 注意：`new` 之后还要**登记进所在目录的 `folder.json`**（否则设计器导航树里看不到）：
+> 注意：只有需要设计器导航树展示或打开编辑的目标才登记进所在目录的 `folder.json`：
 > `python "$SKILL_ROOT/scripts/xwl.py" folders "$TMP_DIR/xxxSql/queryDemo.xwl" --register`。
 > 该目录必须已经被设计器管理（已有 `folder.json`）。
 
@@ -193,14 +194,14 @@ $ python "$SKILL_ROOT/scripts/xwl.py" diffguard page.xwl --strict
 | 文件 | 目标形态（跑完长什么样） | 示范什么决策 | ⛔ 反例 |
 |---|---|---|---|
 | `ops-add-grid.json` | `module.children` → `grid`(`grid1`) → `store` ＋ `array(columns)` ＋ `column`×3（1 个勾选列、2 个数据列 `code`/`name`） | 层级：`store`／`array`／`column` 各挂谁；列 `itemId` **默认＝字段名**；勾选列用 `configs.xtype:"checkcolumn"` | 列名无条件加 `_COL` 后缀 |
-| `ops-add-querybar.json` | `module.children` → `grid`(`grid1`) → `toolbar`(`tbar`) 在 **`grid.children` 里** → `text`＋`combo`＋`date`＋`button` | ⭐ **工具条是网格的 `children`**（不是网格的兄弟）；查询控件类型选择 | 把 `toolbar` 挂在容器下、与 `grid` 成兄弟 |
+| `ops-add-querybar.json` | `module.children` → `grid`(`grid1`) → `toolbar`(`tbar`) 在 **`grid.children` 里** → `text`＋自包含 `combo`＋`date`＋`button` | ⭐ **工具条是网格的 `children`**；combo 内嵌本地 `store`，用 `fields/data` 保存选项 | 把 `toolbar` 挂在容器下，或让 combo 引用未创建的 `stateStore` |
 | `ops-hide-param.json` | `module.children` → `grid` → `toolbar` → 一个 `text` ＋ `configs.hidden:"true"` | ⭐ **不可见参数用其语义类型的控件 ＋ `configs.hidden`**；⭐ **同名不同型**（顶层 `hidden` 是 bool、`configs` 级是字符串 `"true"`） | 造 `type:"hidden"` 控件 |
 | `ops-add-window.json` | `module.children` 直接子级 → **两个 `window`**：常驻档（`closeAction:"hide"`）＋ 重建档（`createInstance:"false"` ＋ `closeAction:"destroy"`，并设 `header:"false"`） | 弹层**两档**的区别与**成套**（重建档两键必须**齐**）；⚠️ 窗口**必须挂 `module` 直接子级**才拿得到 `app.<id>`；`layer` 的 `title:false` → `header:false` 的映射 | 档位张冠李戴（重建档只写一个键） |
 | `ops-required-check.json` | `module.children` → `grid` → `toolbar` → `text`(`keyword`) ＋ `button`，其 `events.click` 内含**判空＋提示** | ⭐ **必填校验写在 `click` 里**（内联判空）；`app.keyword` 引用**同文件已创建**的控件 | 加 `allowBlank`／`blankText`（查询工具条不是表单） |
 | `ops-renderer-body.json` | `grid` → `array(columns)` → `column`，其 `configs.renderer` ＝ **函数体形态** | ⭐ **`renderer` 取函数体**（`"return …;"`），**不是**函数表达式 | 写 `"function(v){…}"` |
 | `ops-extlink.json` | `panel` → `label`（`html` 里含**展示类**外链）＋ `button`（`click` 里做 `window.open` **跳转类**） | ⭐ **外链两分法**（展示 vs 跳转）；平台 `a` 控件**无 `target`** ⇒ 要"新窗口"只能写进 JS | 把**展示用**行内链接**提升成独立控件** |
 | `ops-set-store-url.json` | `grid` → `store`，其 `configs.url` ＝ `m?xwl=<模块>/xxxSql/queryDemo`（占位写法） | ⭐ **取数 url 的占位写法**；SQL 载体归 `new --kind sql`；服务端分页 `pageSize` **不填**；`totalSql` **分场景**（详见 `references/transcription-defaults.md`） | 写真实模块路径；`totalSql` 一律照抄 |
-| `ops-add-button.json` | `module.children` → `grid`(`demoGrid`) ＋ 挂其上的 `button`(`queryBtn`)，`click` 里引用 `app.demoGrid` 的选中行 | 事件 JS 的**单引号**与**手写 `\n`**；`app.<id>` 必须**同文件已创建** | 引用未创建的控件（自洽性破坏） |
+| `ops-add-button.json` | `module.children` → `grid`(`demoGrid`) → `toolbar`(`tbar`) → `button`(`queryBtn`)，`click` 里引用 `app.demoGrid` 的选中行 | 按钮真实挂在工具栏下；事件 JS 用**单引号**与**手写 `\n`**；`app.<id>` 必须**同文件已创建** | 把按钮直接挂到 `module.children` |
 
 ### 复现（每份都从空页跑到底）
 

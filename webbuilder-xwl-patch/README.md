@@ -37,24 +37,17 @@ npx skills add yfwang0731/skill-webbuilder-xwl-patch --skill webbuilder-xwl-patc
 续行符、转义、缩进、换行全部由序列化器产出。
 
 ```bash
-# 改标题 + 给工具栏加一个带多行 JS 的按钮：只写"要什么"，不写"怎么排版"
+# 从空页创建 grid → toolbar → button：只写“要什么”，不写“怎么排版”
 export SKILL_ROOT="$HOME/.agents/skills/webbuilder-xwl-patch"   # 换成你实际的安装目录
-python "$SKILL_ROOT/scripts/xwl.py" patch page.xwl --ops ops.json --dry-run   # 先看 diff
-python "$SKILL_ROOT/scripts/xwl.py" patch page.xwl --ops ops.json --backup    # 确认后落盘
+python "$SKILL_ROOT/scripts/xwl.py" new page.xwl --kind page
+python "$SKILL_ROOT/scripts/xwl.py" patch page.xwl --ops "$SKILL_ROOT/examples/ops-add-button.json" --dry-run
+python "$SKILL_ROOT/scripts/xwl.py" patch page.xwl --ops "$SKILL_ROOT/examples/ops-add-button.json" --backup
 ```
 
-```json
-[
-  {"op": "set", "path": ["title"], "value": "新标题"},
-  {"op": "set", "path": ["@dataprovider", "configs", "sql"], "value": "select 1 from dual\n{#sql#}"},
-  {"op": "append", "path": ["children", 0, "children"],
-   "value": {"configs": {"itemId": "newBtn", "text": "新按钮"},
-             "expanded": false, "children": [], "type": "button",
-             "events": {"click": "Wb.info('hi');"}}}
-]
-```
+该文件把按钮创建在 `grid.demoGrid → toolbar.tbar → button.queryBtn`，事件引用同一文件内的
+`app.demoGrid`，不依赖未创建的 SQL 节点。ops 文件内容就是可直接执行的完整样例。
 
-`path` 段以 `@` 开头时按控件 `configs.itemId` 寻址（`["@dataprovider","configs","sql"]`），**不用关心嵌套层级**；但要求 `itemId` 唯一（重名时工具**拒绝执行**、不替你猜，改用 `paths` 给出的原路径）。`xwl.py paths <file>` 会列出可改字段的两种写法（`op` 支持 `set` / `insertKey` / `insert` / `append` / `delete`）。
+`path` 段以 `@` 开头时按控件 `configs.itemId` 寻址（`["@dataprovider","configs","sql"]`），**不用关心嵌套层级**。保留槽位用准确路径、父级范围或 `@名字#N` 消歧并保留原名。普通非槽位重名才进入限定范围、`#N`、准确路径或改名处置。`xwl.py paths <file>` 会列出可改字段的两种写法（`op` 支持 `set` / `insertKey` / `insert` / `append` / `delete`）。
 
 ### 为什么这条路可靠
 
@@ -77,7 +70,7 @@ export SKILL_ROOT="$HOME/.agents/skills/webbuilder-xwl-patch"
 # 造新文件（内置设计器真实顶层键序，不需要种子文件）；<模块> 换成你的业务模块目录
 python "$SKILL_ROOT/scripts/xwl.py" new wb/modules/<模块>/myPage.xwl --kind page --title "我的页面"
 python "$SKILL_ROOT/scripts/xwl.py" new wb/modules/<模块>/xxxSql/queryXxx.xwl --kind sql --title "出库单查询"
-python "$SKILL_ROOT/scripts/xwl.py" folders wb/modules/<模块>/myPage.xwl --register   # 登记（否则设计器里看不到）
+python "$SKILL_ROOT/scripts/xwl.py" folders wb/modules/<模块>/myPage.xwl --register   # 仅需在设计器里可见/打开编辑时登记
 
 # 改已有文件：0 check 基线 → 1 paths 拿路径 → 2 --dry-run → 3 --backup → 4 check 复核 → 5 diffguard
 python "$SKILL_ROOT/scripts/xwl.py" check     page.xwl
@@ -88,7 +81,7 @@ python "$SKILL_ROOT/scripts/xwl.py" check     page.xwl
 python "$SKILL_ROOT/scripts/xwl.py" diffguard page.xwl                            # 有没有把多行内容悄悄压平？
 ```
 
-> `<模块>` 是业务模块路径占位（`wb/modules/<模块>/`），跑前换成实际值；PowerShell 把 `export SKILL_ROOT=...` 换成 `$env:SKILL_ROOT="...";`；`diffguard` 是**唯一有自动化防线**的静默损坏检测器（多行内容被压平、`check` 查不出），默认只告警，`--strict` 才阻塞。
+> `<模块>` 是业务模块路径占位（`wb/modules/<模块>/`），跑前换成实际值；PowerShell 把 `export SKILL_ROOT=...` 换成 `$env:SKILL_ROOT="...";`；`diffguard` 用精确、最长行、相似度三档检测多行内容被压平，默认只告警，`--strict` 才阻塞。
 
 一次完整的实操（新建页面 + 配套 SQL + 挂事件 + 校验 + 登记）见
 [`references/walkthrough.md`](references/walkthrough.md)；
@@ -105,7 +98,7 @@ python "$SKILL_ROOT/scripts/xwl.py" diffguard page.xwl                          
 | `folders <path> [--register]` | `folder.json`（设计器导航树索引）一致性检查（**只读**）；`--register` 才写（只接文件路径） |
 | `check <file...>` | 十项校验：格式五项 + 事件 JS `node --check` + **注册键重名分级** + **`configs` 值类型** + 加载链完整性（只提示）＋ **错槽位（⑪，默认只警告）**；任一 FAIL 返回非 0；**给了 `--controls` 时另校 `configs` 键与内联 `[js]`** |
 | `diffguard <path...>` | **相对 git 基线检测「多行内容被压平」**（`check` 查不出的那类静默损坏）；默认只告警，`--strict` 才阻塞 |
-| `itemids <file>` | **注册键重名报告（只读）**：分级 + 候选清单 + 建议改名；`--suggest` 出 ops 草稿 |
+| `itemids <file>` | **注册键重名报告（只读）**：分级 + 候选清单；改名建议适用于非保留重名组，保留槽位用准确路径或 `@名字#N`；`--suggest` 出 ops 草稿 |
 | `paths <file>` | 列出 `sql` / `totalSql` / `serverScript` / `url` 四类字段的位置（含 `@itemId` 写法） |
 | `params <page.xwl>` | 核对「参数控件 → store → SQL」传参链路（标出 `out` / `params` 两条通路） |
 | `sqlrefs <file>` | 校验 SQL 片段里 `{#名字#}` 与 `serverScript` 是否自洽 |

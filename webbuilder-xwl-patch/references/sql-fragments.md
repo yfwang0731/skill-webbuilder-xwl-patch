@@ -115,8 +115,9 @@ where t.ID = {?ID?}            -- ← 绑定参数
 
 ### 3.4 url 三类写法与解析口径
 
-`Wb.request` / `Wb.open` / `Wb.upload` / `Wb.requestAg` 的 `url` 都可以给**完整带查询串**的形式，
-但参数的规范位置是 `params`（或 `out`），不要手拼查询串。
+`Wb.request` / `Wb.open` / `Wb.upload` 的 `url` 可以给**完整带查询串**的形式，
+但参数的规范位置是 `params`（或 `out`），不要手拼查询串。`Wb.requestAg` 是固定后台业务入口，
+框架无条件把 `url` 写成 `m?xwl=common/save-all`，不要传自定义 SQL URL；它的参数只属于该入口。
 
 **解析口径**：工具认的是 **`url:` 这个键**（不论包在 `Wb.request` / `Wb.open` / `Wb.run` /
 `store.load` 里），且**只判本 wb 根** —— 跨 webapp / 跨工程的引用请在目标工程里跑；
@@ -165,6 +166,10 @@ app.grid1.store.load({ out: app.tbar });
 Wb.request({ url: 'm?xwl=<模块>/…/xxxSql/saveBiz', out: app.editWin, success: … });
 ```
 
+`params` 静态核对支持已取证的 `app.<grid注册键>.store.load/reload` 形态：grid 注册键必须唯一，
+其直接子节点必须恰有一个 `type=store`、`itemId=store` 的槽位，且没有未解析的显式绑定。
+注册键歧义、多个 store、非槽位、别名和动态链都记“未核对”，不任选一个。
+
 **收集规则**（= `Wb.getValue(容器)`，源码实测）：
 
 - 在容器上 `queryBy(query)` —— **递归整个子树**，不是只看直接子节点；
@@ -207,15 +212,16 @@ Wb.requestAg({ params: { bean: 'xxxController', method: 'del', BIZ_NO: … } });
 
 > `params: Wb.getValue(app.tbar)` 与 `out: app.tbar` **运行时等价**（样本工程只有 4 处这种写法）。
 
-### 5.3 两条通路同名时谁赢 —— **两个 API 方向相反**（最容易踩）
+### 5.3 两条通路同名时谁赢
 
 | 调用 | 源码顺序 | 谁赢 |
 |---|---|---|
 | `store.load({ out, params })` | `options.params = Wb.apply(Wb.getValue(options.out), options.params)` | **`params` 覆盖 `out`** |
-| 再叠加 store 自身配置 | `operation.params = Ext.apply({}, operation.params, me.params)` | **store 配置里的 `params` 最强** |
-| `Wb.request` / `requestAg` | `Ext.apply({}, options.params, Wb.getValue(options.out))` | **`out` 覆盖 `params`** |
+| 再叠加 store 自身配置 | `operation.params = Ext.apply({}, operation.params, me.params)` | **`params` 覆盖 `out`，再覆盖 store 静态 `params`** |
+| `Wb.request` / `requestAg` | `Ext.apply({}, options.params, Wb.getValue(options.out))` | **`params` 覆盖 `out`** |
 
-> 别在两个通路里给**同名参数**写不同值 —— 谁生效取决于走的是 `store.load` 还是 `Wb.request`。
+统一口径：`store.load` 调用为 **`params > out > store 静态 params`**；
+`Wb.request` / `requestAg` 为 **显式 `params > out`**。直属 `beforeload` 在这些合并之后另行计算有效键。
 
 ### 5.4 命名契约：**参数名 = 控件的 `itemId`**
 
@@ -288,7 +294,7 @@ python "$SKILL_ROOT/scripts/xwl.py" params  <page.xwl> [--controls …]   # 页�
 
 - **`params`** —— 自动做四件事：
   1. 列出页面里的 store 及其指向的 SQL 文件（解析 `m?xwl=`，补 `.xwl`，报文件是否存在），
-     并标出 store **自身配置的 `params`**（优先级最高那个）；
+     并标出 store **自身配置的 `params`**（作为 `store.load` 合并链的默认层）；
   2. 列出所有传参点并**标出通路**：`[out 推荐]` / `[params·等价out]` / `[params·显式键]`；
      `out` 会**展开容器内的取值控件 `itemId`**（哪些名字会被送出去）；
   3. 读 SQL 侧需要的名字（`{?名?}` + `app.get('名')`）做**交叉核对**：

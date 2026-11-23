@@ -14,6 +14,16 @@
 
 ---
 
+## [1.9.2] - 2026-11-23
+
+现役口径冲突统一修复（patch）：无新子命令或参数。
+
+- 运行契约按命令和阶段收敛：`check` 的文件级 BOM、缺失、不可读为 `rc=1`；`patch/edit/expand` 的 BOM 或读取失败为 `rc=2`；坏 `--controls` 总码为 2 且 ⑪ 照常执行。`check --strict`、`params --strict`、`sqlrefs` 的边界分别说明。
+- `params --list-fields` 对显式坏或缺失 `--controls` 在 stderr 给出降级说明，stdout 清单、单次读取与 `rc=0` 保持；`folders` 增加直接父索引检查，缺父索引默认只提示。
+- `params` 支持已取证的 `app.<grid>.store.load/reload` 静态关联；事件 JS 引用过滤字符串、模板文字与注释，非标识符重名理由改用 `app.get(...)`／方括号访问。
+- `events --outdir` 只在写入成功后宣称覆盖；`expand` 仅在忠实模式下承诺设计器布局，并报告候选与源文本是否逐字节相同。
+- README 与 walkthrough 改为可执行的中性示例：按钮真实位于 `grid → toolbar → button`，querybar 使用内联本地 store，表格补齐四列与匹配 column。
+
 ## [1.9.1] - 2026-11-21
 
 check 现役口径与计数守卫（patch）：**无新子命令或参数**，`check` 判定与退出码不变。

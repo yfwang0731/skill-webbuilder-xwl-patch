@@ -12,27 +12,27 @@
   {
     "id": 3,
     "prompt": "页面上的日期条件我改了 itemId，现在查询不生效了，SQL 也没报错，帮我看下哪里断了",
-    "expected": "指出「参数名 = 控件 itemId」这条命名契约，用 xwl.py params 做交叉核对（页面送的参数名 vs SQL 的 {?名?} / app.get('名')），说明名字对不上只会取到 null、条件静默失效；并覆盖 out / params 两条通路与同名参数覆盖方向相反的坑；顺带覆盖五条最易踩：① 别用 Wb.request 代替 store（列表 / 分页要用 store.load）② Wb.requestAg 不用写 url（框架固定改成 m?xwl=common/save-all），但 bean / method 必须给 ③ 上传类失败的错误对象不同（action.response.responseText → {msg}）④ 跨页面传参不在核对范围，params 报『未发现来源』是能力边界不是错误 ⑤ params 缺来源**默认只告警（rc=0）**，要让它阻塞须给逃生开关 `--strict`（rc=1）"
+    "expected": "指出「参数名 = 控件 itemId」这条命名契约，用 xwl.py params 做交叉核对（页面送的参数名 vs SQL 的 {?名?} / app.get('名')），说明名字对不上只会取到 null、条件静默失效；同名值统一为 store.load 的 params > out > store 静态 params，Wb.request/requestAg 的显式 params > out；顺带覆盖五条最易踩：① 别用 Wb.request 代替 store（列表 / 分页要用 store.load）② Wb.requestAg 固定请求 m?xwl=common/save-all，bean / method 必须给 ③ 上传类失败的错误对象不同（action.response.responseText → {msg}）④ 跨页面传参不在核对范围，params 报『未发现来源』是能力边界不是错误 ⑤ params 缺来源**默认只告警（rc=0）**，要让它阻塞须给 `--strict`（rc=1）"
   },
   {
     "id": 4,
     "prompt": "这个页面里两个按钮都叫 findBton，我要改其中一个的点击事件，工具说重名了。是不是得先把名字改掉？",
-    "expected": "不要直接下结论改名。用 xwl.py itemids --name findBton（或 --dups-only）拿候选清单与分级：说明判据是按**注册键 `normalName || itemId`** 分组、**只两级**（被事件 JS 引用 → error / 未被引用 → benign），列控件注册键重名一般无害、取值控件优先补 normalName 而非改 itemId、按钮/面板/承载被引用就必须唯一；重名时 @ 不猜顺序，要指名第 N 个用 @findBton#2（N 从 1 起）或串联 @ 段限定；最后把候选列给用户选，而不是替他定；处置顺序：先读父子关系判断哪个才是真目标 → 把候选交用户选 → 能用 normalName 就用（不动 itemId、零破坏）→ 类型不接受时才回退改 itemId，且必须同步改事件 JS 引用、复查 itemids"
+    "expected": "不要直接下结论改名。用 xwl.py itemids --name findBton（或 --dups-only）拿候选清单与分级：说明判据是按**注册键 `normalName || itemId`** 分组、**只两级**（被事件 JS 引用 → error / 未被引用 → benign）。保留槽位用准确路径、父级范围或 @名字#N 消歧并保留原名；普通非槽位重名才进入限定范围、#N、准确路径或改名。最后把候选列给用户选，而不是替他定；普通非槽位且类型接受 normalName 时优先补 normalName，否则才考虑改 itemId，并同步改事件 JS 引用、复查 itemids"
   },
   {
     "id": 5,
     "prompt": "我要新建一个 SQL 文件给列表页当数据源，就是那种被 store 用 url 引用的查询文件",
-    "expected": "用 xwl.py new <路径> --kind sql --title … 生成（内置设计器真实顶层键序与 module→dataprovider 两级结构），而不是 cp 一个别的文件当种子、也不是手写顶层键；生成后跑 check 与 sqlrefs 自洽核对，并提示还要把文件登记进所在目录的 folder.json（否则设计器导航树里看不到），以及要让用户能打开还需在数据库里挂菜单（超出本工具范围）"
+    "expected": "用 xwl.py new <路径> --kind sql --title … 生成（内置设计器真实顶层键序与 module→dataprovider 两级结构），成功看 rc=0，先校验后打印提示，SQL 占位必须替换；而不是 cp 一个别的文件当种子、也不是手写顶层键。生成后跑 check 与 sqlrefs 自洽核对；只有需要导航树展示或打开编辑时才登记 folder.json，后台 SQL 载体以存在性、引用链和 sqlrefs 为准"
   },
   {
     "id": 6,
     "prompt": "我新建的页面写进去了，但在设计器左侧树里找不到它，是不是文件坏了？",
-    "expected": "不应直接判断文件坏了。先想到 folder.json（设计器导航树的目录索引）：用 xwl.py folders <file> 查它是否登记进所在目录的 index（index 里带 .xwl 的是文件、不带后缀的是子目录），未登记则用 --register 追加（保原键序、保单行形态、幂等）；并说明 check 通过只代表「格式能加载」，不代表「设计器能看见 / 页面能用」"
+    "expected": "不应直接判断文件坏了。先想到 folder.json（设计器导航树的目录索引）：用 xwl.py folders <file> 检查直接父 index（index 里带 .xwl 的是文件、不带后缀的是子目录），不沿祖先链上探；缺目录名为良性 rc=0，直接父索引不存在时输出固定 [note] 且默认 rc=0，读不动 2、结构坏 1。需要时用 --register 追加（保原键序、保单行形态、幂等）；并说明 check 通过只代表文件级静态项，不代表设计器能看见或页面可用"
   },
   {
     "id": 7,
     "prompt": "我要做一个从来没做过的页面：带查询条件、一个表格、还有导出。你能从头到尾帮我走一遍吗？",
-    "expected": "按 references/walkthrough.md 的端到端顺序走，而不是跳步或只给一段代码：先确认 Python 环境与 --kind（页面 vs SQL 载体）→ new --kind sql → paths 取 @ 路径 → patch 填 serverScript/sql → sqlrefs → new --kind page → patch 按标准节点形态整树搭控件 → params 核对传参 → check → folders --register。全程先 --dry-run 再 --backup；并提醒最后要在设计器里打开一次、以及 WB_MENU 挂菜单属范围外。另注意：`set` 到原本不存在的**对象键**（如给控件补 `normalName`）属**新建键**，该 op 要带 `\"create\": true`（**不带 `create` 默认被拒绝、rc=2**；`set` 上的放行路子只有命令行加 `--allow-new-key`（全局放行），放行时会打一行 `[warn] --allow-new-key 已放行 N 个新建键` 留痕；补数组元素走 append/insert，不算新建键）"
+    "expected": "按 references/walkthrough.md 的端到端顺序走，而不是跳步或只给一段代码：先确认 Python 环境与 --kind（页面 vs SQL 载体）→ new --kind sql → paths 取 @ 路径 → patch 填 serverScript/sql → sqlrefs → new --kind page → patch 搭 grid/store/toolbar/columns → params → check → check --controls → 需要导航可见时才 folders --register → 设计器打开并人工核对布局交互。全程先 --dry-run 再 --backup。另注意：`set` 到原本不存在的**对象键**属新建键，该 op 要带 `\"create\": true`；不带默认被拒绝、rc=2，命令行 `--allow-new-key` 可全局放行并留痕；补数组元素走 append/insert"
   },
   {
     "id": 8,
@@ -47,7 +47,7 @@
   {
     "id": 10,
     "prompt": "我想写个脚本批量给二十几个 xwl 都加上同一个按钮，用文本替换最快吧？",
-    "expected": "劝停并说明理由：文本级替换在 xwl 上极易踩「锚点不唯一」，且改一次就可能写成裸 LF 破坏格式；正确做法是逐个文件走结构级 patch（只给值/子树，格式由序列化器产出），先 --dry-run 看 diff 再 --backup。若确需文本级 edit，工具会强制断言锚点唯一、出现多次就中止，这是防呆不是障碍；不要用 --expect N 绕过"
+    "expected": "劝停并说明理由：文本级盲替换在 xwl 上极易踩重复锚点，且改一次就可能写成裸 LF 破坏格式；正确做法是逐个文件走结构级 patch（只给值/子树，格式由序列化器产出），先 --dry-run 看 diff 再 --backup。若确需文本级 edit，业务操作默认 --expect 1 并把上下文扩到唯一；CLI 的真实契约是核对期望次数，实际出现次数必须等于 --expect"
   },
   {
     "id": 11,
@@ -72,7 +72,7 @@
   {
     "id": 15,
     "prompt": "同事用别的工具生成的 xwl，对象最后一项后面多了个逗号（像 {\"a\":1,}），check 报 ④ 解析失败，文件是不是坏了？",
-    "expected": "不应答成文件坏了。加载器是 org.json，它**接受尾随逗号**（对象与数组都收，如 {\"a\":1,} / [1,2,]）⇒ 工具的 ④（加载器等价解析）必须对齐这个宽容面、不得判 FAIL。说明 ④ 的判据是「归一化后按加载器规则解析通过」（④ 通过 ⇒ 框架能加载它；反向不成立 —— 框架更宽），它与**严格 JSON 解析器不是一回事** —— 别拿严格解析器判『能不能加载』，否则会把框架能加载的合法文件误判成坏文件（org.json 还接受字符串内裸控制字符，且 `{` 之前的前导内容会被丢弃、不算错）。但取向只松在『能不能加载』这一面：`equivalent`（往返等值比较）**仍须严**（1 与 1.0、true 与 1、键序不同都算不等），两者不许统一。删尾随逗号是**字符串感知**的，字符串内的逗号不会被误删。"
+    "expected": "不应答成文件坏了。加载器是 org.json，它**接受尾随逗号**（对象与数组都收，如 {\"a\":1,} / [1,2,]）⇒ 工具的 ④（加载器等价解析）必须对齐这个宽容面、不得判 FAIL。④ 只说明解析阶段接受该文本；`patch/expand` 还要求可安全整份重建，`edit` 走文本级宽容输入，页面可用性另看 ⑧、设计器打开和交互验收。它与**严格 JSON 解析器不是一回事**，删尾随逗号必须字符串感知，字符串内的逗号不得误删。`equivalent`（往返等值比较）仍须严格区分 1 与 1.0、true 与 1、键序。"
   },
   {
     "id": 16,
@@ -82,7 +82,7 @@
   {
     "id": 17,
     "prompt": "我在 CI 里用 xwl.py params 核对页面传参，预期缺来源时返回非零退出码让流水线失败，可现在它返回 0 了，是不是坏了？",
-    "expected": "不应答成坏了。`params` 缺来源**默认只告警（rc=0）**；要让它阻塞须显式加 `--strict`，且要按现行矩阵解释：无问题 `0/0`、确缺参或确悬空 `0/1`、依赖读取失败 `2/2`、读取失败与已确认内容失败并存 `2/1`、仅未核对 `0/2`（默认/strict）。所以 CI 应显式加 `--strict`，但不要把任何非零都简单说成“缺参失败”：`rc=1` 是已确认内容失败，`rc=2` 是未核对/依赖读取未完成（并发并存时内容失败优先）。缺来源时输出末尾会多一行 `[note]` 留痕；`--strict` 只决定退出码，不改变逐条比对结果。"
+    "expected": "不应答成坏了。`params` 缺来源**默认只告警（rc=0）**；要让它阻塞须显式加 `--strict`，矩阵为无问题 `0/0`、确缺参或确悬空 `0/1`、依赖读取失败 `2/2`、读取失败与已确认内容失败并存 `2/1`、仅未核对 `0/2`（默认/strict）。`--strict` 不改变逐请求的已证明/确缺/未核对归属；它改变退出码、缺参收尾提示，并在悬空时新增 `#36`。所以 CI 应显式加 `--strict`，不要把任何非零都简单说成缺参失败。"
   },
   {
     "id": 18,

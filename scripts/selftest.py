@@ -672,7 +672,7 @@ _SPLIT_CARRIERS = [
      ["静默", "绝不能", "相对基线"]),
     # （原「2.4 规模占比」已并入表首的「2.4 写回算法／2.4 规模占比」—— 同锚点同目标，keys 取并集）
     ("2.4 --eol 回退", "references/faq.md",
-     ["不静默", "回退 LF", "三命令共用"]),
+     ["不静默", "回退 LF", "`edit` 不提供 `--eol`", "`patch/expand` 执行整文件 EOL"]),
     # ⚠️ 本外移点原指 `references/measured-data.md` 一份 ⇒ 拆分后其承载词**跨两份**：
     #    「语义无损」「给谁看」落 §五（→ designer），「逐字节相同」落 §九（→ skeleton）
     #    ⇒ 拆成两条（各指其新文件），以保住「承载词缺一即判红」的力度。
@@ -2753,7 +2753,7 @@ def _docs_contract(_S) -> None:
     _has("README.md", "能主动触发的重排", "重排可见的承载句")
     _has("SKILL.md", "node 调用失败", "事件校验失败的归类句")
     _has("SKILL.md", "操作前副本", "回退首选操作前副本")
-    _has("SKILL.md", "会丢", "直接回退会丢未提交编辑的提醒")
+    _has("SKILL.md", "before 快照", "回退可使用本批 before 快照")
     _has("references/generation.md", "分类型", "按类型分别处理的方案名")
     _has("references/generation.md", "cfg_str", "按类型处理的助手名")
 

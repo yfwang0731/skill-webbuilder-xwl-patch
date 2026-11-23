@@ -102,7 +102,60 @@ def _check_write_failures(tmp, node, failures, write) -> None:
     else:
         print("[ok]  写失败给可读 [FAIL] + rc=2，不冒 traceback"
               "（patch / expand / new / folders 四类）")
+    failures.extend(_check_1_9_2_events_write(tmp, write))
     _check_write_gate(tmp, node, failures, write)
+
+
+def _check_1_9_2_events_write(tmp, write):
+    """C29：events 只在成功落盘后宣称覆盖，失败时旧字节不变。"""
+    fail = []
+    page = os.path.join(tmp, "v192_events.xwl")
+    obj = {
+        "title": "t",
+        "children": [{
+            "type": "button", "configs": {"itemId": "b"},
+            "expanded": False, "children": [],
+            "events": {"click": "void 0;"},
+        }],
+    }
+    with open(page, "w", encoding="utf-8", newline="") as fh:
+        fh.write(xwl.dumps_designer(obj, 1, CRLF))
+    outdir = os.path.join(tmp, "v192_events_out")
+    os.makedirs(outdir, exist_ok=True)
+    target = os.path.join(outdir, "event_1_click.js")
+    with open(target, "wb") as fh:
+        fh.write(b"OLD")
+    before = open(target, "rb").read()
+    out = io.StringIO()
+    err = io.StringIO()
+    with _umock.patch.object(xwl, "write_text",
+                             side_effect=xwl.XwlWriteError("injected write failure")):
+        with contextlib.redirect_stdout(out), contextlib.redirect_stderr(err):
+            rc = xwl.main(["events", page, "--outdir", outdir])
+    text = out.getvalue() + err.getvalue()
+    if rc != 2:
+        fail.append("C29 events 写失败应 rc=2，实得 %r：%s" % (rc, text))
+    if open(target, "rb").read() != before:
+        fail.append("C29 events 写失败后旧文件字节发生变化")
+    for wrong in ("已存在、已覆盖", "已导出"):
+        if wrong in text:
+            fail.append("C29 events 写失败输出不得含 %r：%s" % (wrong, text))
+
+    out = io.StringIO()
+    err = io.StringIO()
+    with contextlib.redirect_stdout(out), contextlib.redirect_stderr(err):
+        rc = xwl.main(["events", page, "--outdir", outdir])
+    text = out.getvalue() + err.getvalue()
+    if rc != 0 or "已存在、已覆盖" not in text or "已导出" not in text:
+        fail.append("C29 events 成功覆盖后才应输出覆盖与导出完成，rc=%r：%s"
+                    % (rc, text))
+
+    if fail:
+        return fail
+    print("[ok]  C29 events 覆盖提示时序：写入失败无成功字样且旧字节不变，"
+          "写入成功后才报已覆盖/已导出")
+    return []
+
 
 _JS_GATED_WRITE = ("G1", "G2a", "G4a", "G7", "G10", "G12a", "G12b", "G13a", "G13b", "G14",
                    "G15a", "G15b", "G17", "G22d", "G22b")
