@@ -102,14 +102,14 @@ def _check_write_failures(tmp, node, failures, write) -> None:
     else:
         print("[ok]  写失败给可读 [FAIL] + rc=2，不冒 traceback"
               "（patch / expand / new / folders 四类）")
-    failures.extend(_check_1_9_2_events_write(tmp, write))
+    failures.extend(_check_event_export_write_sequence(tmp, write))
     _check_write_gate(tmp, node, failures, write)
 
 
-def _check_1_9_2_events_write(tmp, write):
-    """C29：events 只在成功落盘后宣称覆盖，失败时旧字节不变。"""
+def _check_event_export_write_sequence(tmp, write):
+    """events_write_sequence：events 只在成功落盘后宣称覆盖，失败时旧字节不变。"""
     fail = []
-    page = os.path.join(tmp, "v192_events.xwl")
+    page = os.path.join(tmp, "events.xwl")
     obj = {
         "title": "t",
         "children": [{
@@ -120,7 +120,7 @@ def _check_1_9_2_events_write(tmp, write):
     }
     with open(page, "w", encoding="utf-8", newline="") as fh:
         fh.write(xwl.dumps_designer(obj, 1, CRLF))
-    outdir = os.path.join(tmp, "v192_events_out")
+    outdir = os.path.join(tmp, "events_out")
     os.makedirs(outdir, exist_ok=True)
     target = os.path.join(outdir, "event_1_click.js")
     with open(target, "wb") as fh:
@@ -134,12 +134,12 @@ def _check_1_9_2_events_write(tmp, write):
             rc = xwl.main(["events", page, "--outdir", outdir])
     text = out.getvalue() + err.getvalue()
     if rc != 2:
-        fail.append("C29 events 写失败应 rc=2，实得 %r：%s" % (rc, text))
+        fail.append("events_write_sequence events 写失败应 rc=2，实得 %r：%s" % (rc, text))
     if open(target, "rb").read() != before:
-        fail.append("C29 events 写失败后旧文件字节发生变化")
+        fail.append("events_write_sequence events 写失败后旧文件字节发生变化")
     for wrong in ("已存在、已覆盖", "已导出"):
         if wrong in text:
-            fail.append("C29 events 写失败输出不得含 %r：%s" % (wrong, text))
+            fail.append("events_write_sequence events 写失败输出不得含 %r：%s" % (wrong, text))
 
     out = io.StringIO()
     err = io.StringIO()
@@ -147,18 +147,18 @@ def _check_1_9_2_events_write(tmp, write):
         rc = xwl.main(["events", page, "--outdir", outdir])
     text = out.getvalue() + err.getvalue()
     if rc != 0 or "已存在、已覆盖" not in text or "已导出" not in text:
-        fail.append("C29 events 成功覆盖后才应输出覆盖与导出完成，rc=%r：%s"
+        fail.append("events_write_sequence events 成功覆盖后才应输出覆盖与导出完成，rc=%r：%s"
                     % (rc, text))
 
     if fail:
         return fail
-    print("[ok]  C29 events 覆盖提示时序：写入失败无成功字样且旧字节不变，"
+    print("[ok]  events_write_sequence events 覆盖提示时序：写入失败无成功字样且旧字节不变，"
           "写入成功后才报已覆盖/已导出")
     return []
 
 
-_JS_GATED_WRITE = ("G1", "G2a", "G4a", "G7", "G10", "G12a", "G12b", "G13a", "G13b", "G14",
-                   "G15a", "G15b", "G17", "G22d", "G22b")
+_JS_GATED_WRITE = ("new_bad_event", "existing_bad_event_unrelated_write", "dry_run_bad_event", "existing_backup_preserved", "unparseable_source_bad_event", "identity_with_slash", "identity_with_dot", "whitespace_only_bad_event", "eol_only_existing_error", "add_second_bad_event",
+                   "root_existing_bad_event", "root_new_bad_event", "edit_valid_to_bad_event", "object_literal_event_accepted", "bare_function_rejected")
 
 def _count_node_gates(fn_name: str) -> int:
     """数某函数体内 `if node:` 的处数（防「新增门控忘登记」）。"""
@@ -685,7 +685,7 @@ def _check_write_gate_rest(tmp, node, failures, write, _cli, _ops, _bytes, _page
         if REQUIRE_ALL:
             _mark_sub(_SUBCHECKS, "js.write_post", "通过", "写后 JS 采集已执行")
     else:
-        print("[note] 未执行 1 条（Node 不可用）：G20a-前置（--no-js 已写入）")
+        print("[note] 未执行 1 条（Node 不可用）：write_post_precondition-前置（--no-js 已写入）")
         if REQUIRE_ALL:
             _mark_sub(_SUBCHECKS, "js.write_post", "未完成", "Node 不可用，写后 JS 采集未跑")
 

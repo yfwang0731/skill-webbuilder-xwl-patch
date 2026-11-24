@@ -168,18 +168,18 @@ def _check_params_paths(tmp, node, failures, write) -> None:
         else:
             failures.append(f"{name} 失败")
 
-    # F05：读依赖失败不得被吞（可选资源面：`var.json` 三分＋sqlrefs 同源；依赖面在 new_guards 块）
-    failures.extend(_f05_var_cases(tmp))
+    # dependency_read_completeness：读依赖失败不得被吞（可选资源面：`var.json` 三分＋sqlrefs 同源；依赖面在 new_guards 块）
+    failures.extend(_dependency_var_cases(tmp))
     # params --upstream 五类默认/strict 真实 rc 矩阵
-    failures.extend(_f05_upstream_matrix_cases(tmp))
-    # AV-03：注册表一次加载的 `params` 面（check/itemids 面在 new_guards 块）
-    failures.extend(_av03_params_cases(tmp))
-    # ITEM-1229 序1：调用点、字段和位置身份（本块）
+    failures.extend(_dependency_upstream_matrix_cases(tmp))
+    # registry_single_load：注册表一次加载的 `params` 面（check/itemids 面在 new_guards 块）
+    failures.extend(_params_registry_single_load_cases(tmp))
+    # parameter_request_identity 序1：调用点、字段和位置身份（本块）
     failures.extend(_request_identity_parser_cases())
-    # ITEM-1230 序2：直属 beforeload 的键集合计算（本块）
+    # beforeload_effective_keys 序2：直属 beforeload 的键集合计算（本块）
     failures.extend(_beforeload_parser_cases())
     # 1.9.2：--list-fields 显式坏注册表降级、grid→store 静态关联、JS 真假引用共享提取器
-    failures.extend(_check_1_9_2_param_cases(tmp))
+    failures.extend(_check_param_binding_and_list_fields(tmp))
 
 
 def _request_identity_parser_cases():
@@ -192,16 +192,16 @@ def _request_identity_parser_cases():
     transfers = xwl.find_transfers_with_target(js, field_set)
     identities = [item[10] for item in transfers]
     if len(transfers) != 3:
-        failures.append("ITEM-1229：三处静态调用/动态 params 应各留一个传参点，实得 %d"
+        failures.append("parameter_request_identity：三处静态调用/动态 params 应各留一个传参点，实得 %d"
                         % len(transfers))
     if len(set(identities)) != 3:
-        failures.append("ITEM-1229：同段 JS 的请求身份不应按 SQL 物理路径合并：%r"
+        failures.append("parameter_request_identity：同段 JS 的请求身份不应按 SQL 物理路径合并：%r"
                         % (identities,))
     if [item[0] for item in transfers] != ["params=对象", "params=对象", "params=动态"]:
-        failures.append("ITEM-1229：动态 params 必须单独标为动态，不冒充显式键：%r"
+        failures.append("parameter_request_identity：动态 params 必须单独标为动态，不冒充显式键：%r"
                         % ([item[0] for item in transfers],))
     if [item[2] for item in transfers] != [["K"], ["other"], []]:
-        failures.append("ITEM-1229：请求供给键必须按调用点分开：%r"
+        failures.append("parameter_request_identity：请求供给键必须按调用点分开：%r"
                         % ([item[2] for item in transfers],))
     combined = xwl.find_transfers_with_target(
         "Wb.request({url:'m?xwl=demo/carrier',params:{K:1},out:app.tbar});",
@@ -209,26 +209,26 @@ def _request_identity_parser_cases():
     if (len(combined) != 2
             or {item[0] for item in combined} != {"out", "params=对象"}
             or len({item[10] for item in combined}) != 1):
-        failures.append("ITEM-1229：同一调用的 out+params 必须归一到唯一身份：%r"
+        failures.append("parameter_request_identity：同一调用的 out+params 必须归一到唯一身份：%r"
                         % (combined,))
     empty = xwl.find_transfers_with_target(
         "Wb.request({url:'m?xwl=demo/carrier'});", field_set)
     if (len(empty) != 1 or empty[0][0] != "无传参"
             or empty[0][4] != "demo/carrier" or empty[0][2]):
-        failures.append("ITEM-1229：静态目标明确的空参调用必须保留独立身份：%r"
+        failures.append("parameter_request_identity：静态目标明确的空参调用必须保留独立身份：%r"
                         % (empty,))
     nested = xwl.find_transfers_with_target(
         "Wb.request({url:'m?xwl=demo/carrier',params:{K:1},"
         "callback:function(){out:app.tbar;}});", field_set)
     if (len(nested) != 1 or nested[0][0] != "params=对象"
             or nested[0][1] or "app.tbar" in nested[0][3]):
-        failures.append("ITEM-1229：嵌套回调/对象中的 out 不得附着外层调用：%r"
+        failures.append("parameter_request_identity：嵌套回调/对象中的 out 不得附着外层调用：%r"
                         % (nested,))
     nested_url = xwl.find_transfers_with_target(
         "Wb.request({params:{K:1},callback:function(){url:'m?xwl=demo/hidden';}});",
         field_set)
     if len(nested_url) != 1 or nested_url[0][4] is not None:
-        failures.append("ITEM-1229：嵌套对象中的 url 不得冒充调用顶层目标：%r"
+        failures.append("parameter_request_identity：嵌套对象中的 url 不得冒充调用顶层目标：%r"
                         % (nested_url,))
     nested_function = xwl.find_transfers_with_target(
         "function nested(){Wb.request({url:'m?xwl=demo/carrier',params:{K:1}});} "
@@ -236,28 +236,28 @@ def _request_identity_parser_cases():
     if (len(nested_function) != 2
             or len({item[10] for item in nested_function}) != 2
             or [item[2] for item in nested_function] != [["K"], ["other"]]):
-        failures.append("ITEM-1229：嵌套函数内真实调用应独立列出、不得与外层互补：%r"
+        failures.append("parameter_request_identity：嵌套函数内真实调用应独立列出、不得与外层互补：%r"
                         % (nested_function,))
     quoted = xwl.find_transfers_with_target(
         "var s = \"Wb.request({url:'m?xwl=demo/carrier', params:{K:1}})\";", field_set)
     if quoted:
-        failures.append("ITEM-1229：字符串字面量内的调用标记不得产生请求/供给：%r"
+        failures.append("parameter_request_identity：字符串字面量内的调用标记不得产生请求/供给：%r"
                         % (quoted,))
     call_url = xwl.find_transfers_with_target(
         "app.st.load({url:'m?xwl=demo/other', params:{K:1}});", field_set)
     if (len(call_url) != 1 or call_url[0][4] != "demo/other"
             or len(call_url[0]) < 12 or not call_url[0][11]):
-        failures.append("ITEM-1229：store.load 调用级 url 应作为该次目标并标记 has_url：%r"
+        failures.append("parameter_request_identity：store.load 调用级 url 应作为该次目标并标记 has_url：%r"
                         % (call_url,))
     store_url = xwl.find_transfers_with_target(
         "app.st.load({params:{K:1}});", field_set)
     if (len(store_url) != 1 or store_url[0][4] is not None
             or len(store_url[0]) < 12 or store_url[0][11]):
-        failures.append("ITEM-1229：未写 url 的 store.load 不应伪造 has_url：%r"
+        failures.append("parameter_request_identity：未写 url 的 store.load 不应伪造 has_url：%r"
                         % (store_url,))
     if failures:
         return failures
-    print("[ok]  ITEM-1229 解析面：同调用 out+params 归一、空参建身份、"
+    print("[ok]  parameter_request_identity 解析面：同调用 out+params 归一、空参建身份、"
           "顶层字段边界与嵌套调用独立")
     return []
 
@@ -270,13 +270,13 @@ def _beforeload_parser_cases():
         present, got_unknown_keys, got_residual_unknown, _notes = (
             xwl._beforeload_param_effect(js, set(initial)))
         if present != set(expected):
-            failures.append("ITEM-1230 %s：有效键应 %r，实得 %r"
+            failures.append("beforeload_effective_keys %s：有效键应 %r，实得 %r"
                             % (name, sorted(expected), sorted(present)))
         if set(got_unknown_keys) != set(unknown_keys):
-            failures.append("ITEM-1230 %s：确定未核对的键应 %r，实得 %r"
+            failures.append("beforeload_effective_keys %s：确定未核对的键应 %r，实得 %r"
                             % (name, sorted(unknown_keys), sorted(got_unknown_keys)))
         if bool(got_residual_unknown) != bool(residual_unknown):
-            failures.append("ITEM-1230 %s：其余键未知标记应 %r，实得 %r"
+            failures.append("beforeload_effective_keys %s：其余键未知标记应 %r，实得 %r"
                             % (name, residual_unknown, got_residual_unknown))
 
     check("静态保留", "", {"K"}, {"K"}, set(), False)
@@ -429,7 +429,7 @@ def _beforeload_parser_cases():
 
     if failures:
         return failures
-    print("[ok]  ITEM-1230 解析面：整体覆盖／追加／Ext.apply 方向／顺序／"
+    print("[ok]  beforeload_effective_keys 解析面：整体覆盖／追加／Ext.apply 方向／顺序／"
           "条件与动态未知／注释字符串与嵌套函数边界")
     return []
 
@@ -444,16 +444,16 @@ def _store(iid, url):
     return {"configs": {"itemId": iid, "url": url}, "type": "store",
             "expanded": False, "children": []}
 
-_F05_CARRIER_OK = ('{"children":[{"type":"dataprovider","configs":'
+_DEPENDENCY_CARRIER_OK = ('{"children":[{"type":"dataprovider","configs":'
                    '{"itemId":"dp","sql":"select * from t where a={?p?}"}}]}')
 
-def _f05_proj(tmp, case):
-    r = os.path.join(tmp, "f05proj", case)
+def _dependency_project(tmp, case):
+    r = os.path.join(tmp, "dependency_cases", case)
     m = os.path.join(r, "modules")
     os.makedirs(m, exist_ok=True)
     return r, m
 
-def _f05_write_var(r, body=None):
+def _write_dependency_var(r, body=None):
     vp = os.path.join(r, "wb", "system", "var.json")
     os.makedirs(os.path.dirname(vp), exist_ok=True)
     if body is not None:
@@ -461,14 +461,14 @@ def _f05_write_var(r, body=None):
             f.write(body)
     return vp
 
-def _f05_write_carrier(m, body=_F05_CARRIER_OK):
+def _write_dependency_carrier(m, body=_DEPENDENCY_CARRIER_OK):
     p = os.path.join(m, "demo", "carrier.xwl")
     os.makedirs(os.path.dirname(p), exist_ok=True)
     with open(p, "w", encoding="utf-8", newline="") as f:
         f.write(body)
     return p
 
-def _f05_make_page(m, *, provide=True, extra=()):
+def _make_dependency_page(m, *, provide=True, extra=()):
     s1 = _store("s1", "m?xwl=demo/carrier")
     if provide:
         s1["configs"]["params"] = "{p:1}"
@@ -476,110 +476,110 @@ def _f05_make_page(m, *, provide=True, extra=()):
           os.path.join(m, "demo", "page.xwl"))
     return os.path.join(m, "demo", "page.xwl")
 
-def _f05_run_params(page, m, strict=False, upstream=False):
+def _run_dependency_params(page, m, strict=False, upstream=False):
     return _run(xwl.cmd_params, file=page, module_root=m, controls=None,
                 list_fields=False, strict=strict, upstream=upstream)
 
-def _f05_var_cases(tmp):
-    """F05 可选资源面：`var.json` 三分 ＋ `sqlrefs` 同源（放在 `params_paths` 块）。
+def _dependency_var_cases(tmp):
+    """dependency_read_completeness 可选资源面：`var.json` 三分 ＋ `sqlrefs` 同源（放在 `params_paths` 块）。
 
     三分：未发现（可选资源缺席 ⇒ **不算失败**）／合法（含空字典）／存在但读不出或结构不合（**失败**）。
     返回失败文案列表（空 = 通过）；通过时单独打一行 `[ok]`。
     """
     fail: list = []
-    r, m = _f05_proj(tmp, "var_kinds")
-    page = _f05_make_page(m)
-    _f05_write_carrier(m)
+    r, m = _dependency_project(tmp, "var_kinds")
+    page = _make_dependency_page(m)
+    _write_dependency_carrier(m)
 
     # ① 未发现 ⇒ 用内置兜底、不算失败（rc=0，且不出现「读依赖失败」）
-    rc, out = _f05_run_params(page, m)
+    rc, out = _run_dependency_params(page, m)
     if rc != 0 or "读依赖失败" in out:
-        fail.append("F05：未发现 var.json 不应算失败（应 rc=0），实得 %s\n%s" % (rc, out))
+        fail.append("dependency_read_completeness：未发现 var.json 不应算失败（应 rc=0），实得 %s\n%s" % (rc, out))
     # ② 合法空字典 ⇒ 正常
-    _f05_write_var(r, "{}")
-    rc, out = _f05_run_params(page, m)
+    _write_dependency_var(r, "{}")
+    rc, out = _run_dependency_params(page, m)
     if rc != 0 or "读依赖失败" in out:
-        fail.append("F05：var.json 合法空字典不应算失败（应 rc=0），实得 %s\n%s" % (rc, out))
+        fail.append("dependency_read_completeness：var.json 合法空字典不应算失败（应 rc=0），实得 %s\n%s" % (rc, out))
     # ③ 坏 JSON ⇒ 默认/strict 均 rc=2 且点名
-    _f05_write_var(r, "{ not json")
+    _write_dependency_var(r, "{ not json")
     for _strict in (False, True):
-        rc, out = _f05_run_params(page, m, strict=_strict)
+        rc, out = _run_dependency_params(page, m, strict=_strict)
         if rc != 2:
-            fail.append("F05：var.json 坏 JSON（strict=%s）应 rc=2，实得 %s\n%s"
+            fail.append("dependency_read_completeness：var.json 坏 JSON（strict=%s）应 rc=2，实得 %s\n%s"
                         % (_strict, rc, out))
         if "读依赖失败" not in out:
-            fail.append("F05：var.json 坏 JSON（strict=%s）未点名读失败：\n%s" % (_strict, out))
+            fail.append("dependency_read_completeness：var.json 坏 JSON（strict=%s）未点名读失败：\n%s" % (_strict, out))
     # ④ 结构不合（顶层非对象）⇒ rc=2 且点名
-    _f05_write_var(r, "[]")
-    rc, out = _f05_run_params(page, m)
+    _write_dependency_var(r, "[]")
+    rc, out = _run_dependency_params(page, m)
     if rc != 2 or "读依赖失败" not in out:
-        fail.append("F05：var.json 结构不合（顶层非对象）应 rc=2 且点名，实得 %s\n%s" % (rc, out))
+        fail.append("dependency_read_completeness：var.json 结构不合（顶层非对象）应 rc=2 且点名，实得 %s\n%s" % (rc, out))
 
     # ⑤ strict「var 读失败 ＋ 已确认缺参」⇒ rc=1 并同时列读取失败；默认档仅有缺参时读失败才升 2
-    r, m = _f05_proj(tmp, "var_bad_miss")
-    page = _f05_make_page(m, provide=False)
-    _f05_write_carrier(m)
-    _f05_write_var(r, "{ not json")
-    rc1, out1 = _f05_run_params(page, m, strict=True)
+    r, m = _dependency_project(tmp, "var_bad_miss")
+    page = _make_dependency_page(m, provide=False)
+    _write_dependency_carrier(m)
+    _write_dependency_var(r, "{ not json")
+    rc1, out1 = _run_dependency_params(page, m, strict=True)
     if rc1 != 1:
-        fail.append("F05：strict「var 读失败＋已确认缺参」应 rc=1，实得 %s\n%s" % (rc1, out1))
+        fail.append("dependency_read_completeness：strict「var 读失败＋已确认缺参」应 rc=1，实得 %s\n%s" % (rc1, out1))
     if "读依赖失败" not in out1:
-        fail.append("F05：strict 缺参时未同时列出 var 读取失败：\n%s" % out1)
-    rc0, out0 = _f05_run_params(page, m)
+        fail.append("dependency_read_completeness：strict 缺参时未同时列出 var 读取失败：\n%s" % out1)
+    rc0, out0 = _run_dependency_params(page, m)
     if rc0 != 2:
-        fail.append("F05：默认档「var 读失败＋仅缺参」应 rc=2（读失败本身升级），实得 %s\n%s"
+        fail.append("dependency_read_completeness：默认档「var 读失败＋仅缺参」应 rc=2（读失败本身升级），实得 %s\n%s"
                     % (rc0, out0))
 
     # ⑥ 无 needed 的**早返**路径：坏 var ⇒ default/strict 均 rc=2 并点名；无 var ⇒ rc=0（未发现不算失败）
     #    （复核退回项：早返曾只合并 carrier/反查失败、漏 `_pref_fail`）
-    r, m = _f05_proj(tmp, "noneed_var")
+    r, m = _dependency_project(tmp, "noneed_var")
     _dump({"title": "p", "children": [{"configs": {"itemId": "btn"}, "type": "button",
                                        "expanded": False, "children": []}]},
           os.path.join(m, "demo", "empty.xwl"))
     page = os.path.join(m, "demo", "empty.xwl")
-    rc, out = _f05_run_params(page, m)
+    rc, out = _run_dependency_params(page, m)
     if rc != 0 or "读依赖失败" in out:
-        fail.append("F05 早返：无 needed＋无 var.json 应 rc=0（未发现不算失败），实得 %s\n%s"
+        fail.append("dependency_read_completeness 早返：无 needed＋无 var.json 应 rc=0（未发现不算失败），实得 %s\n%s"
                     % (rc, out))
-    _f05_write_var(r, "{ not json")
+    _write_dependency_var(r, "{ not json")
     for _strict in (False, True):
-        rc, out = _f05_run_params(page, m, strict=_strict)
+        rc, out = _run_dependency_params(page, m, strict=_strict)
         if rc != 2:
-            fail.append("F05 早返：无 needed＋var.json 坏（strict=%s）应 rc=2，实得 %s\n%s"
+            fail.append("dependency_read_completeness 早返：无 needed＋var.json 坏（strict=%s）应 rc=2，实得 %s\n%s"
                         % (_strict, rc, out))
         if "读依赖失败" not in out:
-            fail.append("F05 早返：无 needed＋var.json 坏（strict=%s）未点名读失败：\n%s"
+            fail.append("dependency_read_completeness 早返：无 needed＋var.json 坏（strict=%s）未点名读失败：\n%s"
                         % (_strict, out))
 
     # ⑦ `sqlrefs` 的 `var.json` 同源：未发现 ⇒ rc=0；坏 ⇒ rc=2 且点名
-    r, m = _f05_proj(tmp, "sqlrefs_var")
-    carrier = _f05_write_carrier(m)
+    r, m = _dependency_project(tmp, "sqlrefs_var")
+    carrier = _write_dependency_carrier(m)
     rc, out = _run(xwl.cmd_sqlrefs, file=carrier)
     if rc != 0:
-        fail.append("F05：sqlrefs 未发现 var.json 应 rc=0，实得 %s\n%s" % (rc, out))
+        fail.append("dependency_read_completeness：sqlrefs 未发现 var.json 应 rc=0，实得 %s\n%s" % (rc, out))
     _note = ("[note] 本检查仅作文件内静态供给集合核对；不证明供给调用必经执行、消费前时序、"
              "分支或跨 module 生命周期有效。")
     if out.splitlines().count(_note) != 1:
-        fail.append("F05：sqlrefs 未发现 var.json 时证明边界 note 不是恰一次：\n%s" % out)
-    _f05_write_var(r, "{ not json")
+        fail.append("dependency_read_completeness：sqlrefs 未发现 var.json 时证明边界 note 不是恰一次：\n%s" % out)
+    _write_dependency_var(r, "{ not json")
     rc, out = _run(xwl.cmd_sqlrefs, file=carrier)
     if rc != 2 or "读依赖失败" not in out:
-        fail.append("F05：sqlrefs 的 var.json 坏 JSON 应 rc=2 且点名，实得 %s\n%s" % (rc, out))
+        fail.append("dependency_read_completeness：sqlrefs 的 var.json 坏 JSON 应 rc=2 且点名，实得 %s\n%s" % (rc, out))
     if out.splitlines().count(_note) != 1:
-        fail.append("F05：sqlrefs 依赖读失败时证明边界 note 不是恰一次：\n%s" % out)
+        fail.append("dependency_read_completeness：sqlrefs 依赖读失败时证明边界 note 不是恰一次：\n%s" % out)
     _lines = out.splitlines()
     if _note in _lines:
         _pos = _lines.index(_note)
         if _pos + 1 >= len(_lines) or not _lines[_pos + 1].startswith("=== 结果:"):
-            fail.append("F05：sqlrefs 依赖读失败时证明边界 note 不在统一结果行之前：\n%s" % out)
+            fail.append("dependency_read_completeness：sqlrefs 依赖读失败时证明边界 note 不在统一结果行之前：\n%s" % out)
 
     if fail:
         return fail
-    print("[ok]  F05 可选资源面：var.json 三分（未发现不算失败/空字典正常/坏或结构不合失败）"
+    print("[ok]  dependency_read_completeness 可选资源面：var.json 三分（未发现不算失败/空字典正常/坏或结构不合失败）"
           "＋ sqlrefs 同源；default/strict 与「同时有已确认缺参」组合按码值解释")
     return []
 
-def _f05_upstream_matrix_cases(tmp):
+def _dependency_upstream_matrix_cases(tmp):
     """`params --upstream` 五类场景的默认/strict rc 矩阵。"""
     fail: list = []
     cases = (
@@ -592,7 +592,7 @@ def _f05_upstream_matrix_cases(tmp):
     no_need_carrier = ('{"children":[{"type":"dataprovider","configs":'
                        '{"itemId":"dp","sql":"select 1 from dual"}}]}')
     for name, provide, reads_bad, unknown, expected in cases:
-        r, m = _f05_proj(tmp, "upstream_matrix_" + name)
+        r, m = _dependency_project(tmp, "upstream_matrix_" + name)
         extra = []
         if unknown:
             extra.append({
@@ -600,14 +600,14 @@ def _f05_upstream_matrix_cases(tmp):
                 "expanded": False, "children": [],
                 "events": {"click": "Wb.request({url:dynUrl, params:{p:1}});"},
             })
-        page = _f05_make_page(m, provide=provide, extra=extra)
-        _f05_write_carrier(m, no_need_carrier if name == "read_failure_only"
-                           else _F05_CARRIER_OK)
+        page = _make_dependency_page(m, provide=provide, extra=extra)
+        _write_dependency_carrier(m, no_need_carrier if name == "read_failure_only"
+                           else _DEPENDENCY_CARRIER_OK)
         if reads_bad:
             with open(os.path.join(m, "bad_caller.xwl"), "w",
                       encoding="utf-8", newline="") as f:
                 f.write("{ broken caller")
-        actual = tuple(_f05_run_params(page, m, strict=strict, upstream=True)[0]
+        actual = tuple(_run_dependency_params(page, m, strict=strict, upstream=True)[0]
                        for strict in (False, True))
         if actual != expected:
             fail.append("upstream 五类矩阵 %s 默认/strict 应 %r，实得 %r"
@@ -617,25 +617,25 @@ def _f05_upstream_matrix_cases(tmp):
     print("[ok]  params --upstream 默认/strict rc 矩阵五类齐全")
     return []
 
-_AV03_REG = [
+_REGISTRY_SINGLE_LOAD_FIXTURE = [
     {"id": "onlyinreg", "general": {"type": "Ext.form.field.text"},
      "configs": {"normalName": "x", "itemId": {"type": "str"}}},
     {"id": "onlynormal", "configs": {"normalName": "y"}},
 ]
 
-def _av03_write(ctrl, body):
+def _write_registry_fixture(ctrl, body):
     with open(ctrl, "w", encoding="utf-8", newline="") as f:
         f.write(body)
 
-def _av03_run_params(ctrl, page, **kw):
+def _run_params_registry_single_load(ctrl, page, **kw):
     kw.setdefault("module_root", None)
     kw.setdefault("list_fields", False)
     kw.setdefault("upstream", False)
     kw.setdefault("strict", False)
     return _run(xwl.cmd_params, file=page, controls=ctrl, **kw)
 
-def _av03_params_cases(tmp):
-    """AV-03 的 `params` 面（挂 `params_paths`）：一次上下文只解析 1 次＋坏注册表可见降级＋union 生效。"""
+def _params_registry_single_load_cases(tmp):
+    """registry_single_load 的 `params` 面（挂 `params_paths`）：一次上下文只解析 1 次＋坏注册表可见降级＋union 生效。"""
     fail: list = []
     r = os.path.join(tmp, "av03params")
     ctrl = os.path.join(r, "wb", "system", "controls.json")
@@ -645,47 +645,47 @@ def _av03_params_cases(tmp):
     _dump({"title": "t", "children": [{"type": "panel", "configs": {"itemId": "p"}}]}, page)
 
     # ① 正常注册表：rc=0、解析 1 次、来源行带路径
-    _av03_write(ctrl, json.dumps(_AV03_REG, ensure_ascii=False))
+    _write_registry_fixture(ctrl, json.dumps(_REGISTRY_SINGLE_LOAD_FIXTURE, ensure_ascii=False))
     n0 = xwl._REG_LOADS
-    rc, out = _av03_run_params(ctrl, page)
+    rc, out = _run_params_registry_single_load(ctrl, page)
     if rc != 0 or xwl._REG_LOADS - n0 != 1:
-        fail.append("AV-03(params)：正常注册表应 rc=0 且解析 1 次，实得 rc=%s n=%d\n%s"
+        fail.append("registry_single_load(params)：正常注册表应 rc=0 且解析 1 次，实得 rc=%s n=%d\n%s"
                     % (rc, xwl._REG_LOADS - n0, out))
     if "控件注册表:" not in out or "读注册表失败" in out:
-        fail.append("AV-03(params)：正常注册表下来源行/失败提示不对：\n%s" % out)
+        fail.append("registry_single_load(params)：正常注册表下来源行/失败提示不对：\n%s" % out)
 
     # ② 坏注册表：rc 保持改前基线 0、解析 1 次、**可见「不可用＋据已降级」**
-    _av03_write(ctrl, "{ not json")
+    _write_registry_fixture(ctrl, "{ not json")
     n0 = xwl._REG_LOADS
-    rc, out = _av03_run_params(ctrl, page)
+    rc, out = _run_params_registry_single_load(ctrl, page)
     if rc != 0 or xwl._REG_LOADS - n0 != 1:
-        fail.append("AV-03(params)：坏注册表应保持 rc=0（改前基线）且解析 1 次，实得 rc=%s n=%d\n%s"
+        fail.append("registry_single_load(params)：坏注册表应保持 rc=0（改前基线）且解析 1 次，实得 rc=%s n=%d\n%s"
                     % (rc, xwl._REG_LOADS - n0, out))
     for k in ("[warn] 读注册表失败：", "已回退内置兜底"):
         if k not in out:
-            fail.append("AV-03(params)：坏注册表缺少降级说明 %r：\n%s" % (k, out))
+            fail.append("registry_single_load(params)：坏注册表缺少降级说明 %r：\n%s" % (k, out))
 
     # ③ `--list-fields` 也走同一事实源：注册表里的类型出现在字段清单、解析 1 次
-    _av03_write(ctrl, json.dumps(_AV03_REG, ensure_ascii=False))
+    _write_registry_fixture(ctrl, json.dumps(_REGISTRY_SINGLE_LOAD_FIXTURE, ensure_ascii=False))
     n0 = xwl._REG_LOADS
-    rc, out = _av03_run_params(ctrl, page, list_fields=True)
+    rc, out = _run_params_registry_single_load(ctrl, page, list_fields=True)
     if rc != 0 or xwl._REG_LOADS - n0 != 1:
-        fail.append("AV-03(params)：--list-fields 应 rc=0 且解析 1 次，实得 rc=%s n=%d\n%s"
+        fail.append("registry_single_load(params)：--list-fields 应 rc=0 且解析 1 次，实得 rc=%s n=%d\n%s"
                     % (rc, xwl._REG_LOADS - n0, out))
     if "onlyinreg" not in out:
-        fail.append("AV-03(params)：--list-fields 未并入注册表类型（onlyinreg）：\n%s" % out)
+        fail.append("registry_single_load(params)：--list-fields 未并入注册表类型（onlyinreg）：\n%s" % out)
 
     if fail:
         return fail
-    print("[ok]  AV-03(params) 注册表一次加载：正常/坏注册表均解析 1 次、坏注册表 rc 保持 0"
+    print("[ok]  registry_single_load(params) 注册表一次加载：正常/坏注册表均解析 1 次、坏注册表 rc 保持 0"
           " 且可见「不可用＋已回退内置兜底」、--list-fields 共用同一事实源")
     return []
 
 
-def _check_1_9_2_param_cases(tmp):
-    """1.9.2 C14/C26/C27/C34 的定向可失败判据。"""
+def _check_param_binding_and_list_fields(tmp):
+    """1.9.2 list_fields_degradation/grid_store_association/js_reference_filter/requestag_fixed_url 的定向可失败判据。"""
     fail = []
-    root = os.path.join(tmp, "v192_params")
+    root = os.path.join(tmp, "parameter_binding")
     os.makedirs(root, exist_ok=True)
 
     def _run_both(**kw):
@@ -702,26 +702,26 @@ def _check_1_9_2_param_cases(tmp):
     rc, out, err = _run_both(file=None, module_root=None, controls=ctrl,
                              list_fields=True, upstream=False, strict=False)
     if rc != 0 or xwl._REG_LOADS - before_loads != 1:
-        fail.append("C14 --list-fields 坏 --controls 应 rc=0 且单次读取，实得 rc=%r n=%d"
+        fail.append("list_fields_degradation --list-fields 坏 --controls 应 rc=0 且单次读取，实得 rc=%r n=%d"
                     % (rc, xwl._REG_LOADS - before_loads))
     if "[warn] 读注册表失败：" not in err or "已回退内置兜底" not in err:
-        fail.append("C14 --list-fields 坏 --controls 必须在 stderr 可见降级说明，"
+        fail.append("list_fields_degradation --list-fields 坏 --controls 必须在 stderr 可见降级说明，"
                     "stdout=%r stderr=%r" % (out, err))
     missing = os.path.join(root, "missing-controls.json")
     before_loads = xwl._REG_LOADS
     rc, out, err = _run_both(file=None, module_root=None, controls=missing,
                              list_fields=True, upstream=False, strict=False)
     if rc != 0 or xwl._REG_LOADS - before_loads != 0:
-        fail.append("C14 --list-fields 缺失 --controls 应 rc=0 且不重复读，实得 rc=%r n=%d"
+        fail.append("list_fields_degradation --list-fields 缺失 --controls 应 rc=0 且不重复读，实得 rc=%r n=%d"
                     % (rc, xwl._REG_LOADS - before_loads))
     if "[warn] 读注册表失败：" not in err:
-        fail.append("C14 --list-fields 缺失 --controls 必须在 stderr 可见降级说明")
+        fail.append("list_fields_degradation --list-fields 缺失 --controls 必须在 stderr 可见降级说明")
     rc, out, err = _run_both(file=None, module_root=None, controls=None,
                              list_fields=True, upstream=False, strict=False)
     if rc != 0 or "读注册表失败" in out or "读注册表失败" in err:
-        fail.append("C14 --list-fields 未指定 controls 不应报失败降级")
+        fail.append("list_fields_degradation --list-fields 未指定 controls 不应报失败降级")
 
-    # C27：三处入口共用同一提取器，字符串/模板字面量与注释不是引用。
+    # js_reference_filter：三处入口共用同一提取器，字符串/模板字面量与注释不是引用。
     ref_cases = {
         "普通单引号字符串": ("var s='app.tbar';", []),
         "普通双引号字符串": ('var s="app.tbar";', []),
@@ -734,7 +734,7 @@ def _check_1_9_2_param_cases(tmp):
     for label, (expr, expected) in ref_cases.items():
         got = xwl._app_refs_in(expr)
         if got != expected:
-            fail.append("C27 %s 的 app 引用应为 %r，实得 %r" %
+            fail.append("js_reference_filter %s 的 app 引用应为 %r，实得 %r" %
                         (label, expected, got))
 
     def _dump(path, obj):
@@ -792,7 +792,7 @@ def _check_1_9_2_param_cases(tmp):
     rc, out = _run(xwl.cmd_params, file=page, module_root=module_root, controls=None,
                    list_fields=False, upstream=False, strict=True)
     if rc != 0 or "请求:" not in out or "供给键 ['kw']" not in out:
-        fail.append("C26 唯一 grid→直接 store 槽位 strict 应关联请求并供给 kw，rc=%r\n%s"
+        fail.append("grid_store_association 唯一 grid→直接 store 槽位 strict 应关联请求并供给 kw，rc=%r\n%s"
                     % (rc, out))
 
     two_grids = _grid_store(event="app.g1.store.load({ out: app.tbar });")
@@ -810,7 +810,7 @@ def _check_1_9_2_param_cases(tmp):
     rc, out = _run(xwl.cmd_params, file=page, module_root=module_root, controls=None,
                    list_fields=False, upstream=False, strict=True)
     if rc != 2 or "未核对" not in out:
-        fail.append("C26 grid 注册键歧义必须 strict rc=2 且未核对，实得 rc=%r\n%s"
+        fail.append("grid_store_association grid 注册键歧义必须 strict rc=2 且未核对，实得 rc=%r\n%s"
                     % (rc, out))
 
     multiple = [_grid_store()["children"][0]["children"][0],
@@ -823,7 +823,7 @@ def _check_1_9_2_param_cases(tmp):
     rc, out = _run(xwl.cmd_params, file=page, module_root=module_root, controls=None,
                    list_fields=False, upstream=False, strict=True)
     if rc != 2 or "未核对" not in out:
-        fail.append("C26 grid 多 store 必须 strict rc=2 且未核对，实得 rc=%r\n%s"
+        fail.append("grid_store_association grid 多 store 必须 strict rc=2 且未核对，实得 rc=%r\n%s"
                     % (rc, out))
 
     page = os.path.join(module_root, "demo", "page_nonslot.xwl")
@@ -832,12 +832,12 @@ def _check_1_9_2_param_cases(tmp):
     rc, out = _run(xwl.cmd_params, file=page, module_root=module_root, controls=None,
                    list_fields=False, upstream=False, strict=True)
     if rc != 2 or "未核对" not in out:
-        fail.append("C26 store 非 grid 直接槽位必须 strict rc=2 且未核对，实得 rc=%r\n%s"
+        fail.append("grid_store_association store 非 grid 直接槽位必须 strict rc=2 且未核对，实得 rc=%r\n%s"
                     % (rc, out))
 
     if fail:
         return fail
-    print("[ok]  C14/C26/C27/C34：list-fields 降级可见且单次读取、"
+    print("[ok]  list_fields_degradation/grid_store_association/js_reference_filter/requestag_fixed_url：list-fields 降级可见且单次读取、"
           "grid→store 唯一正例与歧义/多 store/非槽位负例、JS 真假引用共享提取器")
     return []
 

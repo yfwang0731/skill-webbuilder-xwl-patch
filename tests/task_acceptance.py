@@ -1,5 +1,5 @@
 # -*- coding: utf-8 -*-
-"""ITEM-1205 · 任务级成果物验收执行器（静态应检清单）。
+"""task_acceptance_static_checklist · 任务级成果物验收执行器（静态应检清单）。
 
 范式：给定一个「任务」目录（一组 .xwl 页面 / SQL 载体），按 **.xwl 页面关系最多递归一层**，
 静态推导出「应检清单（expected checklist）」，再对照黄金应检清单给出**覆盖率 / 精确率**，
@@ -314,7 +314,7 @@ def _selftest():
             fh.write(text)
 
     fails = []
-    tmp = tempfile.mkdtemp(prefix="taskacc1205_")
+    tmp = tempfile.mkdtemp(prefix="artifact_acceptance_")
 
     def _page(title="P", page_link="", children=None):
         return {"hidden": False,
@@ -402,7 +402,7 @@ def _selftest():
         for f in fails:
             print("[FAIL] " + f)
         return 1
-    print("[ok]  ITEM-1205 执行器自检：三负例 + 黄金覆盖/精确率 全部符合")
+    print("[ok]  task_acceptance_static_checklist 执行器自检：三负例 + 黄金覆盖/精确率 全部符合")
     return 0
 
 
@@ -410,7 +410,7 @@ def _selftest():
 # CLI
 # --------------------------------------------------------------------------- #
 def main(argv=None):
-    p = argparse.ArgumentParser(description="ITEM-1205 任务级成果物验收执行器（静态应检）")
+    p = argparse.ArgumentParser(description="task_acceptance_static_checklist 任务级成果物验收执行器（静态应检）")
     p.add_argument("task_dir", nargs="?", help="任务目录（含 .xwl）")
     p.add_argument("--golden", help="黄金应检清单 JSON")
     p.add_argument("--json", action="store_true", help="输出机器可读 JSON")

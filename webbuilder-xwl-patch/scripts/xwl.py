@@ -1261,22 +1261,22 @@ def _load_chain_issues(obj) -> list:
     return issues
 
 
-# ⑧ 的**第二类**判据 —— **数据加载链**（`M4` 节点 2）。口径来源＝`acceptance_metrics.py` 的 `M4`
-#   （该工具的判据已于 2026-10-10 修定：①按值扫、逐段剥注释 ②`store.reload(` 算 ③`Wb.request` 不算）。
+# ⑧ 的**第二类**判据 —— **数据加载链**：①按值扫、逐段剥注释；②`store.reload(` 算；
+#   ③`Wb.request` 不算。
 #   ⚠️ 与上面三条的**性质不同**：那三条是「加载期必抛」的硬结构；本条是**负向断言**
 #      （「结果表**永不**加载」）—— 静态文本证不了「永不」⇒ 同样只 `[warn]`、不进 rc，
 #      且文案必须带"人工确认"提示（父页以窗口/子页方式打开本页时由父页 load，本页文件里看不到）。
 def _store_load_chain_issues(obj) -> list:
     """返回「数据加载链」问题清单（空 ＝ 有加载通路 / 无 store / `obj` 非对象）。
 
-    判据（三条判定同源于 `acceptance_metrics.py` 的 `M4`；⚠️ **取页口径不同** —— `M4` 按**文件名** `*.page.xwl` 认页，`check` 面对**任意** `.xwl` ⇒ 这里按**内容级**认页（页内有 `type == "store"` 就查），见 `references/faq.md` ⑧）：
+    判据（⚠️ **取页口径**：`check` 面对**任意** `.xwl`，按**内容级**认页，页内有 `type == "store"` 就查；见 `references/faq.md` ⑧）：
       ① 页内有 `store`，且**没有任何** `configs.autoLoad` ∈ {`True`, `"true"`, `"1"`}；
       ② 且**承载 JS 的字符串**（带 `type` 的节点的 `events.*` 值 ＋ `configs` 字符串值）里
          扫不到 `.load(` / `store.reload(` —— ⚠️ 逐段过 `strip_js_comments`（注释里的不算）；
-         ⚠️ 裸 `reload(` 不算（会误命中 `Wb.reload(`）、`Wb.request` 也不算（见 `M4` 的口径声明）；
+         ⚠️ 裸 `reload(` 不算（会误命中 `Wb.reload(`）、`Wb.request` 也不算；
       ③ ①② 同时成立 ⇒ 报一条。
 
-    ⚠️ **遍历只走 `children`**（⛔ 不下钻 `configs`）：与 `M4` 的 `iter_nodes` 同源 ——
+    ⚠️ **遍历只走 `children`**（⛔ 不下钻 `configs`）——
        `configs` 里的内联对象会成"幻影控件"（同 `_iter_controls` 的用途边界）。
     """
     issues: list = []
@@ -1501,7 +1501,7 @@ def _main_grid_autoload_note(obj) -> str:
 def _js_err_head(err: str) -> str:
     """从 node `--check` 的 stderr 里取**真正的诊断行**（供 ⑥ / ⑥-ext 报错正文用）。
 
-    ⚠️（`#78`）stderr 首行形如 `<临时文件>:<行>` —— 那临时文件由本工具写、跑完即删
+    ⚠️（诊断首行）stderr 首行形如 `<临时文件>:<行>` —— 那临时文件由本工具写、跑完即删
     ⇒ 它是**死链、无信息量**，真正的 `SyntaxError: …` 在后面。
     ⚠️（批 C·C3）取「**行首**是错误类名」的那一行 —— ⛔ 不能只判「含 `Error`」，否则**路径**里带
     `Error` 的行（如 `C:\\Error\\xwl_ev_ab.js:1`）会被误当诊断；「含 `Error`」降为**次级**判据；
@@ -1734,7 +1734,7 @@ def cmd_check(args) -> int:
                 f"③ 第 {bad_ws[:10]} 行以「反斜杠+空白」结尾（续行符后不能有空格/Tab）"
             )
 
-        # ⑤ 末行不得以续行符结尾。⚠️（`#79`）先**剥净尾空**再判 —— `ANY_EOL_RE.split` 对「以换行
+        # ⑤ 末行不得以续行符结尾。⚠️（行尾续行符检查）先**剥净尾空**再判 —— `ANY_EOL_RE.split` 对「以换行
         #   结尾」的文本**每多一个尾空行就多切出一个空串** ⇒ **只剥一层仍会漏判**（+1 / +2 尾空行
         #   都不命中）⇒ 改「去掉末尾换行后取最后一段」。
         _txt = text.rstrip("\r\n")
@@ -1831,7 +1831,7 @@ def cmd_check(args) -> int:
             else:
                 slot_warns = _slot_msgs
 
-        # ⑨ 校 configs 键合法性（#48）＋ ⑥ 扩到 configs 内标 [js] 的键（#49）
+        # ⑨ 校 configs 键合法性＋ ⑥ 扩到 configs 内标 [js] 的键
         #    ⚠️ **只在显式给 `--controls` 时跑**（判据来源是注册表）⇒ 默认整段不跑、输出逐字节不变。
         #    ⚠️ 必须落在 `if errors`（下面）**之前**：⑥-ext 的**语法错**是**进 rc** 的判定，
         #       若放在汇总行/⑧ 之后再判，会出现「先打 `-> OK`、再打 `[FAIL] ⑥`」的自相矛盾。
@@ -1920,7 +1920,7 @@ def cmd_check(args) -> int:
         for n in notes:
             print(f"  [note] {n}")
         # ⑧ 加载链完整性（**只提示、不进 rc**）—— 判据见 `_load_chain_issues`（结构位三条）
-        #    ＋ `_store_load_chain_issues`（数据加载链，`M4` 节点 2；同为 warn、不进 rc）。
+        #    ＋ `_store_load_chain_issues`（数据加载链；同为 warn、不进 rc）。
         #    ⚠️ 必须打在 `if errors … else …`（916–939）**之外**：④ 失败（`obj is None`）时
         #       也要留一行"因解析失败跳过"，塞进 `else` 会让 FAIL 时 ⑧ 消失。
         if 8 in checks:
@@ -2449,7 +2449,7 @@ def _scan_configs_js(obj, reg_types):
     for _node, t, cfg, *_ in _iter_controls(obj):
         if t not in reg_types:
             continue
-        # `#71`：迭代 **`sorted(...)`**（原为裸 `set`）。`set` 的迭代序随 `PYTHONHASHSEED` 变
+        # 确定性排序：迭代 **`sorted(...)`**（原为裸 `set`）。`set` 的迭代序随 `PYTHONHASHSEED` 变
         #   （CPython 默认开 str hash 随机化）⇒ 同一节点 **≥2 个坏 `[js]` 键**时，`[FAIL]` 行的
         #   **顺序不确定**，破坏本仓「确定 / 可 diff」命门（多处验收靠逐字节比对）。
         for k in sorted(reg_types[t]["js"]):
@@ -2461,7 +2461,7 @@ def _scan_configs_js(obj, reg_types):
 
 
 def _check_registry_dims(obj, controls: str, node, no_js: bool, reg=None):
-    """⑨ 校 configs 键合法性（#48）＋ ⑥ 扩到 configs 内联 `[js]` 的键（#49）。
+    """⑨ 校 configs 键合法性＋ ⑥ 扩到 configs 内联 `[js]` 的键。
 
     返回 `(fail_bodies, show_lines, warn_bodies, n_key_hits)`（**纯数据、不打印**）：
     · `fail_bodies` —— 进 rc 的失败正文（**仅 ⑥-ext 的语法错**；调用方以 `[FAIL] ` 前缀并入 `errors`）；
@@ -2477,8 +2477,8 @@ def _check_registry_dims(obj, controls: str, node, no_js: bool, reg=None):
     ⚠️ ⑨「键不在注册表」取 **warn（⛔ 不进 rc）** —— 实测存量语料里这类命中**几乎都是
        「注册表未收录的既有键」**（`column.keyNameExp` 576／`array.height/width/x/y` 316／
        平台自身错拼 `text.lableAlign` 240／`check.returnNumber` 只在缺该键的根报 276…），
-       若判 FAIL 会**开开关即 466 文件红**，与 `#34`「一开机即红 ⇒ 使用者弃用」**同型** ⇒ 不能取。
-       改 warn 后**仍"能被检出"**（warn 也是检出）⇒ 不影响 `#48` 的验收意图（"工具能报出来"，
+       若判 FAIL 会**开开关即 466 文件红**，与「警告不应阻断」的稳定性要求**同型** ⇒ 不能取。
+       改 warn 后**仍"能被检出"**（warn 也是检出）⇒ 不影响「注册表键校验」的验收意图（"工具能报出来"，
        而非"必须阻塞"）。⚠️ **白名单本轮不做**（降 warn 后误报不再阻塞，紧迫性下降）——
        登记为「将来若要开严格档（进 rc）⇒ 白名单是前置」。
     ⚠️ ⑥-ext（configs 内联 `[js]` 的**语法错**）仍判 **FAIL（进 rc）** —— 那是**真坏**、
@@ -2548,7 +2548,7 @@ def cmd_edit(args) -> int:
         print(f"[warn] 目标文件换行混用（{n_crlf} 个 CRLF + {n_lf} 个裸 LF + {n_cr} 个裸 CR）："
               f"锚点按 {eol_name(eol)} 归一化；若匹配不到，先修文件换行（`check` 第 ② 项）")
 
-    # `#73`：两个 `--*-file` 的**值**指向不存在（或不可读）的文件时，直接 `open()` ⇒ **裸 traceback**、
+    # 文件参数读取失败：两个 `--*-file` 的**值**指向不存在（或不可读）的文件时，直接 `open()` ⇒ **裸 traceback**、
     #   `rc=1`；而 `patch --ops`／`new --from-json` 对同族情形是"**可读 `[FAIL]` ＋ `rc=2`**" ⇒ 口径不一。
     #   ⚠️ 缺 **flag** 本就是 argparse `rc=2`（两参数 `required=True`，`xwl.py:5866-5867`）⇒ 本条只管
     #   「**值**指向不存在文件」这一路。形态照 `cmd_patch` 的「读 ops 失败」。
@@ -3242,7 +3242,7 @@ def _is_new_object_key(parent, key) -> bool:
 
 
 def _is_container(v) -> bool:
-    """`v` 是不是**容器**（对象 / 数组）——`#72` 用它判「把整个容器覆盖成标量」这种结构损坏。
+    """`v` 是不是**容器**（对象 / 数组）——容器覆盖守卫用它判「把整个容器覆盖成标量」这种结构损坏。
 
     标量 = 既不是 `dict` 也不是 `list`（含 `str`/`int`/`float`/`bool`/`None`）。
     """
@@ -3317,13 +3317,13 @@ def apply_ops(obj, ops, created=None, warned=None, allow_new_key=False, inserted
       · `created` ：带 `"create": true` 的新建键；
       · `warned`  ：**不带** `create`、但在 `allow_new_key=True` 下被放行的新建键；
       · `inserted`：`insertKey` **新建**的键（自授权 ⇒ 无 `create`，但**必须可见**，见下）。
-      · `overwrites`（`#72`）：`set`/`insertKey` **把已存在的容器键**（旧值是 `dict`/`list`）
+      · `overwrites`（容器覆盖守卫）：`set`/`insertKey` **把已存在的容器键**（旧值是 `dict`/`list`）
         覆盖成**标量**（新值不是 `dict`/`list`）的键 —— 这是**结构损坏**级动作 ⇒ 调用方据此打
         `[warn]` 让人看见（⚠️ 只是**加信号**：⛔ 不改 `rc`、⛔ 不改既有 `create`/`--allow-new-key`
         的默认拒绝语义）。
     四者都是**向后兼容的可选关键字**，既有 `apply_ops(obj, ops)` 调用不受影响。
 
-    **`insertKey`（对象键的定位插入/改位；`#44`）** —— 补 `set` 的缺口：`set`+`create` 只能把
+    **`insertKey`（对象键的定位插入/改位）** —— 补 `set` 的缺口：`set`+`create` 只能把
     新键**追加到末尾**（实测键序 `[…, value, itemId]`），而设计器要的是 `itemId→hidden→…`
     （`dumps_designer` **不排序键** ⇒ 插入序直接进产物、与 `equivalent` 的「含键序」比对相关）。
       · `path` 末段 = 要放的**键名**（字符串），`path[:-1]` 指到**父对象**（支持 `@itemId` 段）；
@@ -3379,7 +3379,7 @@ def apply_ops(obj, ops, created=None, warned=None, allow_new_key=False, inserted
                         "第 %d 个 op（set）：下标 %d 越界 —— 数组长度 %d，合法区间 [0, %d]"
                         "；用 paths / dump 核对 path（末段是数组下标，不是对象键）"
                         % (i, idx, len(parent), len(parent) - 1))
-                # `#72`：数组下标命中**已存在的容器元素**（`dict`/`list`）而新值是**标量**
+                # 容器覆盖守卫：数组下标命中**已存在的容器元素**（`dict`/`list`）而新值是**标量**
                 #   ⇒ 与 dict 分支同款结构损坏（把整个容器静默替换成标量）⇒ 收进 `overwrites`
                 #   （下标已在上面的越界检查里保证存在 ⇒ 直接读 `parent[idx]` 拿旧值）。
                 if (_is_container(parent[idx]) and not _is_container(op["value"])
@@ -3387,7 +3387,7 @@ def apply_ops(obj, ops, created=None, warned=None, allow_new_key=False, inserted
                     overwrites.append(_fmt_keypath(path))
                 parent[idx] = op["value"]
             else:
-                # `#72`：末段命中**已存在的容器键**（`configs`/`children` …）而新值是**标量**
+                # 容器覆盖守卫：末段命中**已存在的容器键**（`configs`/`children` …）而新值是**标量**
                 #   ⇒ 既不是"新建键"、也不是普通改键：它会把**整个容器静默替换成标量**（结构损坏）
                 #   ⇒ 收进 `overwrites` 供调用方打 `[warn]`（⛔ 只加信号：不改 rc、不改默认拒绝语义）。
                 if (key in parent and _is_container(parent[key])
@@ -3432,7 +3432,7 @@ def apply_ops(obj, ops, created=None, warned=None, allow_new_key=False, inserted
                         "；用 paths / dump 核对 path" % (i, _fmt_keypath(path)))
                 del parent[key]
         elif kind == "insertKey":
-            # 对象键的**定位插入/改位**（#44）—— 只管对象；数组用 insert/append。
+            # 对象键的**定位插入/改位** —— 只管对象；数组用 insert/append。
             parent, key = resolve_parent(obj, path)
             if not isinstance(parent, dict):
                 raise ValueError(
@@ -3476,7 +3476,7 @@ def apply_ops(obj, ops, created=None, warned=None, allow_new_key=False, inserted
                 pos = len(order)            # 缺省 = 末尾（与 set+create 的落点一致）
             if not existed and inserted is not None:
                 inserted.append(_fmt_keypath(path))
-            # `#72`：键**已存在**且旧值是容器、新值是标量 ⇒ 与 `set` 同款结构损坏 ⇒ 收进 `overwrites`
+            # 容器覆盖守卫：键**已存在**且旧值是容器、新值是标量 ⇒ 与 `set` 同款结构损坏 ⇒ 收进 `overwrites`
             #   （仍在 `parent.clear()` 之前读 `parent[key]` ⇒ 取到的还是旧值）。
             if (existed and _is_container(parent[key])
                     and not _is_container(op["value"]) and overwrites is not None):
@@ -3924,7 +3924,7 @@ def cmd_itemids(args) -> int:
         print(f"[FAIL] {exc}")
         return 2
 
-    # `#74`（`itemids` 侧）：给了 `--controls` 但**读不动 / 不是注册表** ⇒ ⛔ 不再**静默**回退、
+    # 注册表加载可见性（`itemids` 侧）：给了 `--controls` 但**读不动 / 不是注册表** ⇒ ⛔ 不再**静默**回退、
     #   且来源行**不再打印用户给的坏路径**（形态与 `params` 侧同一口径）。
     #   ⚠️ 只改调用方 —— `controls_source_line` 三处复用，⛔ 不动它（否则连带 `check ⑦`）。
     _i_ctl = getattr(args, "controls", None)
@@ -4134,7 +4134,7 @@ def _cmd_patch_locked(args) -> int:
         # `--dry-run` 也能看见（下面会一并打印 diff）。把"手滑"的代价从闸门换成**可见性**。
         print("[note] `insertKey` 新建键 %d 个：%s" % (len(inserted), ", ".join(inserted)))
     if overwrites:
-        # `#72`：把**已存在的容器键**（对象/数组）覆盖成**标量** ⇒ 结构损坏级动作，**必须可见**
+        # 容器覆盖守卫：把**已存在的容器键**（对象/数组）覆盖成**标量** ⇒ 结构损坏级动作，**必须可见**
         #   （`rc` 不变、也不改默认拒绝语义 —— 这不是"新建键"）。`--dry-run` 同样会打（在下面 return 之前）。
         print("[warn] 有 %d 个 op 把**已存在的容器键**（对象/数组）覆盖成了标量 —— 这是结构损坏级改动，"
               "请确认是本意：%s" % (len(overwrites), ", ".join(overwrites)))
@@ -4170,9 +4170,9 @@ def _cmd_patch_locked(args) -> int:
             # ⇒ 改打**一行摘要**，跳过逐行 diff（判据 = stdout 里 diff 段落行数）。
             print("  （单行源：整份重排为多行，diff = 整个文件）")
         else:
-            # `#54`：**不再按 40 行截断**（原 `if shown >= 40: print("  ...（略）"); break`）。
+            # 完整 diff 预览：**不再按 40 行截断**（原 `if shown >= 40: print("  ...（略）"); break`）。
             #   起因：`--dry-run` 是「先看 diff 再落盘」的**硬闸门**；截断它 ⇒ 整树 `set` 时
-            #   看不到全量 diff ⇒ 闸门形同虚设（见 `#54` 台账注记）。放开后 diff 段行数＝全量。
+            #   看不到全量 diff ⇒ 闸门形同虚设。放开后 diff 段行数＝全量。
             #   ⚠️ 只改**多行源**这条分支；单行源那条不受影响、仍恰 1 行摘要
             #   （`patch_contract` 5-12 的判据＝「单行源 diff 段落恰 1 行 / 多行源 > 1 行」）。
             a = text.splitlines()
@@ -4180,7 +4180,7 @@ def _cmd_patch_locked(args) -> int:
             for line in difflib.unified_diff(a, b, "before", "after", lineterm="", n=1):
                 if line.startswith(("---", "+++", "@@")):
                     continue
-                # `#54`：**行宽也不再静默截断**（原 `line[:200]`）—— 与「行数放开」同理：
+                # 完整 diff 预览：**行宽也不再静默截断**（原 `line[:200]`）—— 与「行数放开」同理：
                 #   闸门要能看全量；半行且无 `…` 标记 ＝ **静默失真**。整行原样打印。
                 print("  " + line)
         if created:
@@ -4926,7 +4926,7 @@ def cmd_folders(args) -> int:
     level = 0                  # 最高严重度：读不动 2 ＞ 结构损坏／确认悬空 1 ＞ 0
     detail: list = []
     registered_at = None
-    _has_fj = False   # `#57`：本轮是否见过「可用的 folder.json」（决定建议 `--register` 还是「先建 folder.json」）
+    _has_fj = False   # 目录索引提示：本轮是否见过「可用的 folder.json」（决定建议 `--register` 还是「先建 folder.json」）
     for d, names in sorted(jobs):
         n_dir += 1
         rel = safe_relpath(d, base) if recursive else os.path.basename(d)
@@ -4949,7 +4949,7 @@ def cmd_folders(args) -> int:
             continue
         # state == ok
         n_fj += 1
-        _has_fj = True   # `#57`：该目录有可用的 folder.json ⇒ `--register` 才可能成功
+        _has_fj = True   # 目录索引提示：该目录有可用的 folder.json ⇒ `--register` 才可能成功
         idx = data["index"]
         miss = [x for x in names if x not in idx]
         if miss:
@@ -6205,9 +6205,9 @@ def strip_js_comments(js: str) -> str:
 
 
 def strip_sql_comments(sql: str) -> str:
-    """去掉 SQL 的 `--` / `#` 行注释与 `/* */` 块注释（**引号内不动**）—— `#50` 需求侧剥注释用。
+    """去掉 SQL 的 `--` / `#` 行注释与 `/* */` 块注释（**引号内不动**）—— SQL 注释剥离用。
 
-    ⚠️ **为什么不能直接复用 `strip_js_comments`**（`#50` 前置验证实测）：
+    ⚠️ **为什么不能直接复用 `strip_js_comments`**（SQL 注释剥离验证实测）：
       `strip_js_comments` 是**面向 JS** 的剥离器 —— 它认 `//` 行注释，**不认** SQL 的 `--` 行注释；
       而 SQL 里的 `//` **不是**注释（可能是 `'jdbc:mysql://…'` 一类串里的 `//`）⇒ 口径不对。
       实测：对 `"select a -- {?x?}\\nfrom t"`，`strip_js_comments` **原样返回**（`{?x?}` 仍在）
@@ -6217,7 +6217,7 @@ def strip_sql_comments(sql: str) -> str:
     ⚠️ **`#` 是 MySQL 行注释**（本后端确为 MySQL）—— 从 `#` 到行尾整段剥除（引号内不动）。
       ⛔ **不剥会导致误报**：`# {?x?}` 一类被注释掉的引用会残留 `{?x?}` ⇒ 被 `find_sql_refs`
       当成真实引用计入。
-    ⚠️ `#83`：**`{#…#}` 是模板定界符、不是注释** ⇒ 遇 `{#` 先**整块保留**（跳到配对的 `#}`）、
+    ⚠️ SQL 模板定界符保护：**`{#…#}` 是模板定界符、不是注释** ⇒ 遇 `{#` 先**整块保留**（跳到配对的 `#}`）、
       再走 `#` 行注释分支。⛔ 否则 `select {#cols#} … {?real?}` 同行里的 `{?real?}` 会被吞
       ⇒ `params` 假阴性（本条修的就是「同行 `{#…#}` 在 `{?…?}` **之前**」这一形态）。
     ⚠️ 本函数**自实现** `/* */` 块注释（SQL 标准块注释、**不嵌套**）——⛔ **不再委托
@@ -6248,7 +6248,7 @@ def strip_sql_comments(sql: str) -> str:
                 i += 1
             continue
         if ch == "{" and i + 1 < n and sql[i + 1] == "#":
-            # `#83`：平台 SQL ＝ MySQL **＋ `{#…#}` 模板语法** —— 此处 `#` 是**定界符、不是注释**
+            # SQL 模板定界符保护：平台 SQL ＝ MySQL **＋ `{#…#}` 模板语法** —— 此处 `#` 是**定界符、不是注释**
             #   ⇒ 整个 `{# … #}` **原样保留**。⛔ 不保护的话 `#` 会被当行注释、**吞掉同行其后的
             #   `{?名?}`** ⇒ `params` 假阴性（漏报绑定参数）。未闭合 `{#` ⇒ 余下原样（不吞）。
             _j = sql.find("#}", i + 2)
@@ -7528,8 +7528,8 @@ def _mxwl_target(url: str):
     return url.split("m?xwl=")[-1].split("&")[0]
 
 
-def _ref_kind36(tgt: str) -> str:
-    """`#36` 对取数 url 目标键的分类：`placeholder` / `framework` / `dangling`。
+def _classify_mxwl_target(tgt: str) -> str:
+    """取数 url 完整性：对取数 url 目标键的分类：`placeholder` / `framework` / `dangling`。
 
     · `placeholder` —— **显式占位**（`<…>` 角括号 / `…` 省略号）：有意待定，**永不判红**；
     · `framework`   —— **框架端点**（首段 `common`）：平台自带、非业务载体；
@@ -7539,7 +7539,7 @@ def _ref_kind36(tgt: str) -> str:
 
     ⚠️ **`__MODULE__` 不在这里判**（把它与 `<…>`/`…` 一起折成 `placeholder` 会⇒ 永不判红）：
     它**有可解析的语义**（＝当前页所在模块目录），能解析到真实目录时就该被看见 ——
-    故改走 `_mod36_state()` 的**两段判**。本函数只留"没有可解析语义"的两类。
+    故改走 `_resolve_module_placeholder()` 的**两段判**。本函数只留"没有可解析语义"的两类。
 
     ⚠️ **已知逃逸面**（⛔ 别宣称"占位都查干净了"）：`__MODULE__/x` 这类取数目标在多数执行上下文下
     **不指向真文件**（框架运行期才替换，且替换成什么取决于调用方）；工具只能按
@@ -7552,12 +7552,12 @@ def _ref_kind36(tgt: str) -> str:
     return "dangling"
 
 
-def _is_mod36(tgt: str) -> bool:
-    """目标键里是否含 `__MODULE__` 段（含即走两段判，见 `_mod36_state`）。"""
+def _uses_module_placeholder(tgt: str) -> bool:
+    """目标键里是否含 `__MODULE__` 段（含即走两段判，见 `_resolve_module_placeholder`）。"""
     return "__MODULE__" in tgt
 
 
-def _mod36_state(root, page_file, tgt, root_state):
+def _resolve_module_placeholder(root, page_file, tgt, root_state):
     """`__MODULE__` 的**两段判** → `(state, fp, why)`。
 
     · `("resolved", fp, sub_dir)` —— 能把 `__MODULE__` 换成**真实目录**并据此定位到目标文件
@@ -7580,7 +7580,7 @@ def _mod36_state(root, page_file, tgt, root_state):
     解析失败的**五种**原因（都会原样回给调用方）：
       ① 没给 `--module-root`（或它不是目录）；② 给了但**不像**模块根（`_module_root_state` ≠ ok）；
       ③ 拿不到当前页路径 / 页不在模块根之下（`..`）；④ `__MODULE__` 不在首段、或其后没有子路径；
-      ⑤ `__MODULE__` 之后的段本身是**显式占位**（`<…>`／`…`）⇒ 按占位放过（判据与 `_ref_kind36` 同口径、
+      ⑤ `__MODULE__` 之后的段本身是**显式占位**（`<…>`／`…`）⇒ 按占位放过（判据与 `_classify_mxwl_target` 同口径、
          永不判红）—— ⛔ 否则 `<abc>` 在 Windows 下因非法文件名字符**恒**判悬空、把"有意待定"确定性判红。
     """
     if not tgt.startswith("__MODULE__"):
@@ -7588,9 +7588,9 @@ def _mod36_state(root, page_file, tgt, root_state):
     rest = tgt[len("__MODULE__"):].lstrip("/")
     if not rest:
         return "unresolved", None, "`__MODULE__` 之后没有子路径 ⇒ 定位不到具体文件"
-    # `rest` 本身是**显式占位**（判据与 `_ref_kind36` 逐字同口径，⛔ 别自创一套）⇒ 与整键占位同样放过。
+    # `rest` 本身是**显式占位**（判据与 `_classify_mxwl_target` 逐字同口径，⛔ 别自创一套）⇒ 与整键占位同样放过。
     #   不判的话：`__MODULE__/<abc>` 会走到 `resolved`，而 Windows 下 `<`/`>` 是非法文件名字符 ⇒
-    #   `os.path.exists` 恒 False ⇒ 必进 `dangling36` ⇒ `--strict` 把"有意待定"确定性判红。
+    #   `os.path.exists` 恒 False ⇒ 必进 `dangling_targets` ⇒ `--strict` 把"有意待定"确定性判红。
     if "…" in rest or "..." in rest or ("<" in rest and ">" in rest):
         return "unresolved", None, (
             "`__MODULE__` 之后的 `%s` 是**显式占位**（`<…>`／`…`）⇒ 有意待定，按占位放过" % rest)
@@ -7611,10 +7611,10 @@ def _mod36_state(root, page_file, tgt, root_state):
 
 
 def _module_root_state(root) -> str:
-    """`#75`：`--module-root` 的状态 —— `"missing"`（未给 / 不存在）/ `"suspect"`（存在但**不像**模块根）/ `"ok"`。
+    """模块根校验：`--module-root` 的状态 —— `"missing"`（未给 / 不存在）/ `"suspect"`（存在但**不像**模块根）/ `"ok"`。
 
     ⚠️ **只用于"避免谎报"**：`"suspect"` 时 `store.url` / `direct` 两处打「**未核对**」＋原因，
-    ⛔ **不进 `#36` 分类**（否则把"根给错"误报成"载体悬空"⇒ `--strict` 下冤枉判红）。
+    ⛔ **不进取数 url 完整性分类**（否则把"根给错"误报成"载体悬空"⇒ `--strict` 下冤枉判红）。
     判据（**保守**）：目录名为 `modules`，**或**浅层（≤300 个条目）能找到 ≥1 个 `.xwl`。
     ⚠️ 本函数返回 `"missing"` 的两支**在 `params` 路径上不可达**（如实拆分；原「既有实现已覆盖」
       的表述不实 —— `elif not root:` 只覆盖「**没给**」、不覆盖「**给了但路径不可用**」）：
@@ -7637,33 +7637,33 @@ def _module_root_state(root) -> str:
     return "suspect"
 
 
-def _emit_36(args, dangling36, placeholder36, mod36_notes=None) -> None:
-    """`#36` 判失败形态（`--strict` 下才出）：真·悬空取数 url **单列为失败项**。
+def _emit_mxwl_target_notes(args, dangling_targets, placeholder_targets, module_placeholder_notes=None) -> None:
+    """取数 url 完整性判失败形态（`--strict` 下才出）：真·悬空取数 url **单列为失败项**。
 
     · `[warn]` —— 真·悬空取数 url（载体文件不存在）⇒ ⭐ **`--strict` 下判失败（rc=1）**；
       ⚠️ `__MODULE__` **能解析到真实目录**但目标文件不在 ⇒ 也走这一支（与普通 `m?xwl=` 同口径），
       **除非该段（`__MODULE__` 之后的段）本身是显式占位** ⇒ 那样按下一句的 `[note]` 放过、⛔ 不进本支；
     · `[note]` —— 显式占位（`<…>` / `…`），**永不判红**；
     · `[note]`（另一句）—— `__MODULE__` **未落到具体载体**（目录解析不到，**或**其后是显式占位）
-      ⇒ 按**显式占位**处理，并逐条写出"为什么放过"（`mod36_notes`：`(目标, 原因)`）。
+      ⇒ 按**显式占位**处理，并逐条写出"为什么放过"（`module_placeholder_notes`：`(目标, 原因)`）。
       起因：只写"占位"而不交代原因，会让读者以为工具"验过了"，实际是"没敢判"。
     ⚠️ 本函数只负责**打印**；把 rc 抬到 1 的是两个出口（末行 ＋ 早返各一处）——
       两个 `return` 路径都调本函数 ⇒ 信号不因分支漏掉（⛔ 但 rc 必须在**出口**处理）。
     """
     if not getattr(args, "strict", False):
         return
-    if dangling36:
-        print("\n  [warn] `#36`：%d 处取数 url 指向的载体**不存在**（整条取数链断掉）：%s"
-              % (len(dangling36), ", ".join(sorted(set(dangling36)))))
+    if dangling_targets:
+        print("\n  [warn] 取数 url 的载体不存在：%d 处（整条取数链断掉）：%s"
+              % (len(dangling_targets), ", ".join(sorted(set(dangling_targets)))))
         print("         ⚠️ `--strict` 下**判失败**（rc=1）；不加 `--strict` 时**本行不打印**（该项只在 `--strict` 下检查），rc 也不变。")
-    if placeholder36:
-        print("\n  [note] `#36`：%d 处取数 url 为**显式占位**（`<…>` / `…`，有意待定）"
+    if placeholder_targets:
+        print("\n  [note] 取数 url 为显式占位：%d 处（`<…>` / `…`，有意待定）"
               "⇒ 只提示、**永不判红**：%s"
-              % (len(placeholder36), ", ".join(sorted(set(placeholder36)))))
-    if mod36_notes:
-        print("\n  [note] `#36`：%d 处 `__MODULE__` 取数 url **未落到具体载体 ⇒ 按显式占位处理**"
-              "（不是「验过了」，是「没敢判」）：" % len(mod36_notes))
-        for _t, _why in mod36_notes:
+              % (len(placeholder_targets), ", ".join(sorted(set(placeholder_targets)))))
+    if module_placeholder_notes:
+        print("\n  [note] 取数 url 为显式占位：%d 处 `__MODULE__` **未落到具体载体 ⇒ 按显式占位处理**"
+              "（不是「验过了」，是「没敢判」）：" % len(module_placeholder_notes))
+        for _t, _why in module_placeholder_notes:
             print("         · %s —— %s" % (_t, _why))
         print("         ⚠️ 已知逃逸面：`__MODULE__` 在多数执行上下文下由框架运行期替换、不指向真文件；"
               "工具只在**能解析到真实目录**时才判悬空。")
@@ -7822,7 +7822,7 @@ def _print_params_tail(args, root, text, stores, field_set, target_is_carrier=Fa
     if not root or not os.path.isdir(root):
         print("\n[note] --upstream：未找到模块根（用 --module-root 指定）⇒ 跳过跨页反查")
         return None
-    # `#53`：目标键**参数化**（默认 ＝ 本文件键）。目标为**页面** ⇒ "谁调用本页"（输出不变）；
+    # 上游目标上下文：目标键**参数化**（默认 ＝ 本文件键）。目标为**页面** ⇒ "谁调用本页"（输出不变）；
     #   目标为 **SQL 载体** ⇒ "谁引用本载体"（`target_is_carrier` 由 `cmd_params` 按结构判出，文案分场景）。
     #   ⛔ 不新增 CLI 参数 —— 载体经"页面 ＋ 载体"成对工作流直接把载体文件传给 `params --upstream`。
     target_key = _page_ref_key(args.file, root)
@@ -7833,11 +7833,11 @@ def _print_params_tail(args, root, text, stores, field_set, target_is_carrier=Fa
         print("\n=== [引用本载体的页面] ===")
         print("  本载体被 %d 处引用（列出引用方文件；只展开 `m?xwl=` 命中方，"
               "`out:` 与运行时拼接的 url 只计数、不展开）" % n_all)
-        _seen53: set = set()
+        _seen_upstream_targets: set = set()
         for _caller, _keys in info["calls"]:
-            if _caller in _seen53:
+            if _caller in _seen_upstream_targets:
                 continue
-            _seen53.add(_caller)
+            _seen_upstream_targets.add(_caller)
             print("    %s  → 传入键 %s" % (_caller, _keys or "（无字面量键）"))
     else:
         print("\n=== [外部可传入] ===")
@@ -7928,10 +7928,10 @@ def cmd_params(args) -> int:
         return 2
 
     root = args.module_root
-    # `#75`／**用法错**（本批唯一行为变更）：给了 `--module-root` 但**指向不存在的路径 /
+    # 模块根校验／**用法错**：给了 `--module-root` 但**指向不存在的路径 /
     #   不是目录** ⇒ 直接判**用法错** `rc=2`，⛔ **不受 `--strict` 影响**（给不给 `--strict` 都 `rc=2`）。
     #   ⭐ 有了这条守卫，`_module_root_state()` 返回 `"missing"` 的情形**只剩** `root is None`
-    #   （未给且推导不到）；而 `root is None` 已被下方 `if not root:` 的分支接走 ⟹ `#75` 的
+    #   （未给且推导不到）；而 `root is None` 已被下方 `if not root:` 的分支接走 ⟹ 模块根校验的
     #   `== "suspect"` 两处（store 支 / direct 支）**不必**改。
     #   ⚠️ **边界**：本守卫落在 `--list-fields` 早返**之后** ⇒ `params --list-fields --module-root <坏路径>`
     #      **不触发**（该模式不使用模块根 ⇒ 故不校验；实测 `rc=0`）。⛔ **不把守卫前移** —— 那会新增一个
@@ -7953,7 +7953,7 @@ def cmd_params(args) -> int:
     print(f"模块根: {root or '（未找到 modules 目录，请用 --module-root 指定）'}")
     print(f"取值控件类型（{len(field_set)} 种）: {', '.join(field_set)}")
     # 注册表来源 —— 与 `itemids` / `check ⑦` 逐字同一句（三处复用 controls_source_line）
-    # `#74`：给了 `--controls` 但**读不动/不是注册表**时，⛔ **不再把用户给的坏路径当"来源"打印**
+    # 注册表加载可见性：给了 `--controls` 但**读不动/不是注册表**时，⛔ **不再把用户给的坏路径当"来源"打印**
     #   （那读起来像"真的读到了它"、且是**静默回退**）；对齐 `check` 的诚实做法：先说读失败、来源按「**未找到**」。
     #   ⚠️ 只改**调用方**（`controls_source_line` 三处复用，⛔ 不动它，否则连带 `check ⑦`）。
     _p_ctl = getattr(args, "controls", None)
@@ -7996,7 +7996,7 @@ def cmd_params(args) -> int:
                 for m in _REQ_URL_RE.finditer(js):
                     if _masked_js[m.start()] == " ":
                         continue  # 字符串/模板字面量里的 url 键不是真实请求
-                    tgt = m.group(1).split("m?xwl=")[-1].split("&")[0].strip()   # `#36`：去首尾空白（空目标视为无引用）
+                    tgt = m.group(1).split("m?xwl=")[-1].split("&")[0].strip()   # 取数 url 完整性：去首尾空白（空目标视为无引用）
                     if tgt and tgt not in direct:
                         direct.append(tgt)
             for k, v in node.items():
@@ -8006,27 +8006,27 @@ def cmd_params(args) -> int:
                 scan(v, path + (i,))
 
     scan(obj)
-    # `#53`：目标为 SQL 载体时，`--upstream` 文案分场景（"引用本载体的页面"）。
+    # 上游目标上下文：目标为 SQL 载体时，`--upstream` 文案分场景（"引用本载体的页面"）。
     _target_is_carrier = _is_sql_carrier(obj)
 
     print(f"\n=== store（{len(stores)} 个）===")
-    # `#56`：`sql_files` 驱动下面「SQL 侧」段的打印。**同一载体被多 store 引用**时，若不合并则每 store 各
+    # SQL 载体去重：`sql_files` 驱动下面「SQL 侧」段的打印。**同一载体被多 store 引用**时，若不合并则每 store 各
     #   `append` 一次 ⇒ 同一段打印 N 次（噪音）。改为**合并**（每载体只留一次、保首现序）＋ 另记
     #   **引用计数** `sql_ref_count` ⇒ 打印时标 `（同载体 ×N）`。⛔ **不裸去重**（会丢掉"被 N 处引用"
     #   这个信号）；⚠️ 落默认面 ⇒ 列入本段声明的**默认面变更清单**。
     sql_files: list[tuple[str, str]] = []
     sql_ref_count: dict[str, int] = {}
-    # `#36`：收集"真·悬空"与"显式占位"的取数 url 目标（预告块在下方；⛔ 不改 rc）。
-    dangling36: list[str] = []
-    placeholder36: list[str] = []
-    # `#36`／`__MODULE__` 两段判：**解析不到**模块目录的那些（`(目标, 原因)`）—— 单独一句 `[note]`。
-    mod36_notes: list[tuple] = []
-    # `#56`：`sql_files` 去重键从**原样字符串 `tgt`** 改为**物理文件身份**
+    # 取数 url 完整性：收集"真·悬空"与"显式占位"的取数 url 目标（提示块在下方；⛔ 不改 rc）。
+    dangling_targets: list[str] = []
+    placeholder_targets: list[str] = []
+    # 取数 url 完整性／`__MODULE__` 两段判：**解析不到**模块目录的那些（`(目标, 原因)`）—— 单独一句 `[note]`。
+    module_placeholder_notes: list[tuple] = []
+    # SQL 载体去重：`sql_files` 去重键从**原样字符串 `tgt`** 改为**物理文件身份**
     #   （`os.path.normcase(os.path.abspath(fp))`）—— 同一载体经不同文本形式（`a/b` vs `./a//b`、
     #   大小写差异）命中时，按原样字符串去重 ⇒ 会**重复登记同一段**、且引用计数**裂成多份**。
     #   `sql_files` 仍存 `(显示名, fp)`（显示名取**首现文本**，保证输出稳定）；`_phys_display`
     #   记 物理键 → 显示名，供计数回填。`Wb.request` 侧也走同一收集 ⇒ 修掉"已由 store 登记过就不再
-    #   计数"的漏计（`#56` 引用计数口径）。
+    #   计数"的漏计（SQL 载体去重的引用计数口径）。
     _phys_display: dict[str, str] = {}
     # ⭐ 读依赖（SQL 载体／`var.json`／反查扫描）失败必须**留缺口**（路径＋原因）：
     #   ⛔ 不再 `except Exception: continue` 静默吞 —— 读不出会让"需要集合"不完整却仍显示无问题。
@@ -8042,43 +8042,43 @@ def cmd_params(args) -> int:
             disp = tgt
         sql_ref_count[disp] = sql_ref_count.get(disp, 0) + 1
 
-    # `#75`：模块根状态**只算一次**（`missing` / `suspect` / `ok`）—— `suspect` 时下面两处改「未核对」。
-    _root_state36 = _module_root_state(root)
+    # 模块根校验：模块根状态**只算一次**（`missing` / `suspect` / `ok`）—— `suspect` 时下面两处改「未核对」。
+    root_state = _module_root_state(root)
     for cfg, _store_label, _store_identity in stores:
         url, iid = cfg.get("url"), cfg.get("itemId")
         line = f"  itemId={iid!r} autoLoad={cfg.get('autoLoad')!r}"
         if isinstance(cfg.get("params"), (dict, list)) and cfg.get("params"):
             line += f"  自身params配置={cfg['params']!r}(store.load 合并链默认层，params > out 覆盖它)"
         if isinstance(url, str) and "m?xwl=" in url:
-            tgt = url.split("m?xwl=")[-1].split("&")[0].strip()   # `#36`：去首尾空白（空目标视为无引用）
+            tgt = url.split("m?xwl=")[-1].split("&")[0].strip()   # 取数 url 完整性：去首尾空白（空目标视为无引用）
             if not tgt:
-                # `#36`：`m?xwl=` 目标为空 ⇒ 视为**无引用**（⛔ 不判 `dangling`、不产生假预告）。
+                # 取数 url 完整性：`m?xwl=` 目标为空 ⇒ 视为**无引用**（⛔ 不判 `dangling`、不产生假提示）。
                 line += "\n      url=(m?xwl= 目标为空) → 视为无引用，跳过分类"
-            elif _is_mod36(tgt):
-                # ⭐ `__MODULE__` **两段判**（见 `_mod36_state`）：能解析到真实目录 ⇒ 与普通 `m?xwl=` 同口径；
+            elif _uses_module_placeholder(tgt):
+                # ⭐ `__MODULE__` **两段判**（见 `_resolve_module_placeholder`）：能解析到真实目录 ⇒ 与普通 `m?xwl=` 同口径；
                 #   解析不到 ⇒ 按显式占位（`[note]`，并写明原因）。本支必须排在 `elif not root:` **之前** ——
-                #   否则"没给模块根"会被下面那句"未计入 `#36` 预告"吞掉，连"为什么放过"都不说。
-                _st36, _fp36, _why36 = _mod36_state(root, getattr(args, "file", None), tgt, _root_state36)
-                if _st36 != "resolved":
-                    line += f"\n      url={tgt} → **按显式占位处理**（{_why36}）"
-                    mod36_notes.append((tgt, _why36))
+                #   否则"没给模块根"会被下面那句"未计入取数 url 完整性提示"吞掉，连"为什么放过"都不说。
+                state, path, reason = _resolve_module_placeholder(root, getattr(args, "file", None), tgt, root_state)
+                if state != "resolved":
+                    line += f"\n      url={tgt} → **按显式占位处理**（{reason}）"
+                    module_placeholder_notes.append((tgt, reason))
                 else:
-                    _ok36 = os.path.exists(_fp36)
-                    line += (f"\n      url={tgt} → {'存在' if _ok36 else '未找到'}"
-                             f"（`__MODULE__` → {_why36}）")
-                    if _ok36:
-                        _add_carrier(tgt, _fp36)
+                    ok = os.path.exists(path)
+                    line += (f"\n      url={tgt} → {'存在' if ok else '未找到'}"
+                             f"（`__MODULE__` → {reason}）")
+                    if ok:
+                        _add_carrier(tgt, path)
                     else:
-                        dangling36.append(tgt)      # 能解析到目录、目标却不在 ⇒ **真悬空**
+                        dangling_targets.append(tgt)      # 能解析到目录、目标却不在 ⇒ **真悬空**
             elif not root:
-                # `#36`：**未定位模块根** ⇒ 无从判定载体是否存在 ⇒ ⛔ 不谎报"未找到/不存在"、
-                #   ⛔ 不进 `#36` 分类（若在此 `fp=None ⇒ ok=False` 落 `dangling` ⇒ 全量假 `[warn]`）。
-                line += f"\n      url={tgt} → 未定位模块根，无法判定是否存在（未计入 `#36` 预告）"
-            elif _root_state36 == "suspect" and not os.path.exists(
+                # 取数 url 完整性：**未定位模块根** ⇒ 无从判定载体是否存在 ⇒ ⛔ 不谎报"未找到/不存在"、
+                #   ⛔ 不进取数 url 完整性分类（若在此 `fp=None ⇒ ok=False` 落 `dangling` ⇒ 全量假 `[warn]`）。
+                line += f"\n      url={tgt} → 未定位模块根，无法判定是否存在（未计入取数 url 完整性提示）"
+            elif root_state == "suspect" and not os.path.exists(
                     os.path.join(root, tgt.replace("/", os.sep) + ".xwl")):
-                # `#75`：模块根**存在但不像模块根**（如误指向 webapp 根而非 `…/wb/modules`）⇒
+                # 模块根校验：模块根**存在但不像模块根**（如误指向 webapp 根而非 `…/wb/modules`）⇒
                 #   ⛔ **不谎报「未找到」**（那是"载体悬空"的意思、还会在 `--strict` 下冤枉判红）
-                #   ⇒ 改「**未核对**」＋原因；⛔ 不进 `#36` 分类。
+                #   ⇒ 改「**未核对**」＋原因；⛔ 不进取数 url 完整性分类。
                 line += f"\n      url={tgt} → **未核对**（模块根不像模块根：{root}）"
             else:
                 fp = os.path.join(root, tgt.replace("/", os.sep) + ".xwl")
@@ -8087,60 +8087,60 @@ def cmd_params(args) -> int:
                 if ok:
                     _add_carrier(tgt, fp)
                 else:
-                    _k36 = _ref_kind36(tgt)
-                    if _k36 == "placeholder":
-                        placeholder36.append(tgt)
-                    elif _k36 == "dangling":
-                        dangling36.append(tgt)
+                    kind = _classify_mxwl_target(tgt)
+                    if kind == "placeholder":
+                        placeholder_targets.append(tgt)
+                    elif kind == "dangling":
+                        dangling_targets.append(tgt)
         else:
             line += (f"\n      url={url!r}（非 m?xwl：可能是 Java bean / 其它数据源，"
                      f"也可能是「捷径 url」—— 框架支持、表在 wb/system/url.json；本工具不解析捷径）")
         print(line)
 
     if direct:
-        # `#80`：**名不再误标** —— 该清单由 `_REQ_URL_RE`（只看 `url:` ＋ `m?xwl=`、
+    # 取数 url 引用分组：**名不再误标** —— 该清单由 `_REQ_URL_RE`（只看 `url:` ＋ `m?xwl=`、
         #   **不区分调用方**）喂 ⇒ 里面 `Wb.request` / `Wb.open` / `store.load` 三处**都有**。
         #   ⚠️ ⛔ **不含** store 的 `configs.url` 键 —— 该正则要求 `url` 后**直接**接 `:`，
         #   而 store 的 JSON 键形态 `"url":` **不匹配**（store 配置的 url 走另一条收集路径）。
         #   ⛔ 本段**只承诺"名不再误标"**、⛔ **不承诺"来源可分"**（那需要引入"调用方判定"＝结构改造）。
         print(f"\n=== `url:'m?xwl=…'` 引用的 m?xwl（{len(direct)} 个；**不区分调用方**）===")
         for tgt in direct:
-            if _is_mod36(tgt):
+            if _uses_module_placeholder(tgt):
                 # 与 store 支**同口径**的两段判（`direct` 里这条可能是 `store.load` / `Wb.request` / `Wb.open`）。
-                _st36, _fp36, _why36 = _mod36_state(root, getattr(args, "file", None), tgt, _root_state36)
-                if _st36 != "resolved":
-                    print(f"  {tgt}.xwl → **按显式占位处理**（{_why36}）")
-                    mod36_notes.append((tgt, _why36))
+                state, path, reason = _resolve_module_placeholder(root, getattr(args, "file", None), tgt, root_state)
+                if state != "resolved":
+                    print(f"  {tgt}.xwl → **按显式占位处理**（{reason}）")
+                    module_placeholder_notes.append((tgt, reason))
                     continue
-                _ok36 = os.path.exists(_fp36)
+                ok = os.path.exists(path)
                 print(f"  {tgt}.xwl → "
-                      f"{'存在（纳入核对）' if _ok36 else '未找到（`__MODULE__` 已解析到真实目录）'}")
-                if _ok36:
-                    _add_carrier(tgt, _fp36)
+                      f"{'存在（纳入核对）' if ok else '未找到（`__MODULE__` 已解析到真实目录）'}")
+                if ok:
+                    _add_carrier(tgt, path)
                 else:
-                    dangling36.append(tgt)
+                    dangling_targets.append(tgt)
                 continue
             if not root:
-                # `#36`：未定位模块根 ⇒ 无法判定 ⇒ ⛔ 不谎报"未找到"、⛔ 不进 `#36` 分类。
-                print(f"  {tgt}.xwl → 未定位模块根，无法判定（未计入 `#36` 预告）")
+                # 取数 url 完整性：未定位模块根 ⇒ 无法判定 ⇒ ⛔ 不谎报"未找到"、⛔ 不进取数 url 完整性分类。
+                print(f"  {tgt}.xwl → 未定位模块根，无法判定（未计入取数 url 完整性提示）")
                 continue
             fp = os.path.join(root, tgt.replace("/", os.sep) + ".xwl")
             ok = os.path.exists(fp)
-            if _root_state36 == "suspect" and not ok:
-                # `#75`（`direct` 支，与 `store` 支**同口径**）：模块根**存在但不像模块根** ⇒ ⛔ 不谎报「未找到」。
+            if root_state == "suspect" and not ok:
+                # 模块根校验（`direct` 支，与 `store` 支**同口径**）：模块根**存在但不像模块根** ⇒ ⛔ 不谎报「未找到」。
                 print(f"  {tgt}.xwl → **未核对**（模块根不像模块根：{root}）")
                 continue
             print(f"  {tgt}.xwl → {'存在（纳入核对）' if ok else '未找到（可能是框架端点，如 common/save-all）'}")
             if ok:
-                # `#56`：走统一收集 ⇒ 已由 store 登记过的载体**也累计**引用计数（若在此 `all(...)`
+                # SQL 载体去重：走统一收集 ⇒ 已由 store 登记过的载体**也累计**引用计数（若在此 `all(...)`
                 #   为假就整段跳过 ⇒ `（同载体 ×N）` 漏计 `Wb.request` 那一份）。
                 _add_carrier(tgt, fp)
             else:
-                _k36 = _ref_kind36(tgt)
-                if _k36 == "placeholder":
-                    placeholder36.append(tgt)
-                elif _k36 == "dangling":
-                    dangling36.append(tgt)
+                kind = _classify_mxwl_target(tgt)
+                if kind == "placeholder":
+                    placeholder_targets.append(tgt)
+                elif kind == "dangling":
+                    dangling_targets.append(tgt)
 
     def _phys(fp: str) -> str:
         return os.path.normcase(os.path.abspath(fp))
@@ -8432,12 +8432,12 @@ def cmd_params(args) -> int:
             carrier_failed.append((tgt, str(exc)))
             print(f"\n=== SQL 侧 {tgt}.xwl 读取失败: {exc}")
             continue
-        _n_ref56 = sql_ref_count.get(tgt, 1)
-        _ref56 = ("（同载体 ×%d）" % _n_ref56) if _n_ref56 > 1 else ""
-        print(f"\n=== SQL 侧: {tgt}.xwl{_ref56} ===")
+        _reference_count = sql_ref_count.get(tgt, 1)
+        _reference_count_suffix = ("（同载体 ×%d）" % _reference_count) if _reference_count > 1 else ""
+        print(f"\n=== SQL 侧: {tgt}.xwl{_reference_count_suffix} ===")
         for t, cfg, _p in iter_nodes(so):
             if t == "module" and isinstance(cfg.get("serverScript"), str):
-                # `#50`：需求侧提取前**先剥 JS 注释**（`//`）—— 与来源侧同口径。
+                # SQL 注释剥离：需求侧提取前**先剥 JS 注释**（`//`）—— 与来源侧同口径。
                 ss = strip_js_comments(cfg["serverScript"])
                 g, hs = _APP_REF_GET.findall(ss), _PARAM_RE.findall(ss)
                 print(f"  serverScript: app.get(名)={g or []}  {{?名?}}={hs or []}")
@@ -8446,7 +8446,7 @@ def cmd_params(args) -> int:
             if t == "dataprovider":
                 for k in ("sql", "totalSql"):
                     if isinstance(cfg.get(k), str):
-                        # `#50`：SQL 侧提取前**先剥 SQL 注释**（`--` ＋ `/* */`）。
+                        # SQL 注释剥离：SQL 侧提取前**先剥 SQL 注释**（`--` ＋ `/* */`）。
                         ps = _PARAM_RE.findall(strip_sql_comments(cfg[k]))
                         print(f"  {k}: {{?名?}} = {ps or []}")
                         need_sql |= set(ps)
@@ -8595,10 +8595,10 @@ def cmd_params(args) -> int:
         print(f"  [FAIL] 读依赖失败：{_pref_fail[0]}（{_pref_fail[1]}）—— "
               "「框架内置变量」判定不完整（已按内置兜底继续，但本次核对**未完成**）")
     if not needed:
-        # `#58`："页面**压根没有 store**"与"**有 store、但 SQL 侧无 `{?名?}`／`app.get`**"是两种
+    # 空 store 与无参数之别："页面**压根没有 store**"与"**有 store、但 SQL 侧无 `{?名?}`／`app.get`**"是两种
         #   不同处境，合并成一句 `（SQL 侧没有 {?…?} / app.get，跳过交叉核对）` ⇒ 易被读成
         #   "已核对完成" ⇒ **拆成两句**（本行属**默认面输出变更**，已列入本段声明的**默认面变更清单**）。
-        # `#51`：这两句**无条件**前置 `[warn] ` 级别前缀 —— 原**无级别前缀** ⇒ 与"已核对完成"肉眼难分。
+    # 警告级别前缀：这两句**无条件**前置 `[warn] ` 级别前缀 —— 原**无级别前缀** ⇒ 与"已核对完成"肉眼难分。
         #   ⚠️ `rc` 在**默认面**不变（不给 `--strict` 时本分支恒 `return 0`）；⭐ **但给了 `--strict`
         #     且确悬空时**，本分支会由下方早返出口 `return 1`（原写「恒 `return 0`」与下方早返 `return 1` 出口矛盾，已改正）。
         #   ⭐ 本行**是**默认面输出变更 ⇒ 已列入本段声明的**默认面变更清单**。
@@ -8606,7 +8606,7 @@ def cmd_params(args) -> int:
             print("\n[warn] （有 %d 个 store，但 SQL 侧没有 {?…?} / app.get，跳过交叉核对）" % len(stores))
         else:
             print("\n[warn] （未发现 store，跳过交叉核对）")
-        _emit_36(args, dangling36, placeholder36, mod36_notes)
+        _emit_mxwl_target_notes(args, dangling_targets, placeholder_targets, module_placeholder_notes)
         _tail = _print_params_tail(args, root, text, [cfg for cfg, _l, _i in stores], field_set,
                                    target_is_carrier=_target_is_carrier)
         # 读依赖失败（载体／`var.json`／反查扫描）⇒ 本次核对未完成：默认与 `--strict` 均 rc=2；
@@ -8620,12 +8620,12 @@ def cmd_params(args) -> int:
         if _read_fail:
             print("  [FAIL] 依赖读取失败 %d 处 ⇒ 本次核对**未完成**（缺参/未核对结论不完整）：%s"
                   % (len(_read_fail), "、".join(str(_p) for _p, _w in _read_fail[:8])))
-        # `#36` 判失败（⭐ **早返出口**）：**"悬空-only"页**（页面无参数需求、只悬空）走的正是本出口
+        # 取数 url 完整性判失败（⭐ **早返出口**）：**"悬空-only"页**（页面无参数需求、只悬空）走的正是本出口
         #   ⇒ ⛔ 只改末行 ⇒ 该形态仍 `rc=0`。⚠️ 上方那两条「跳过交叉核对」的 `[warn]` **原文案一字不动**
         #   （它们是**默认面**）⇒ 本出口只在 `--strict` 且**确悬空**时**追加一句**、并把 rc 抬到 1。
-        if dangling36 and getattr(args, "strict", False):
+        if dangling_targets and getattr(args, "strict", False):
             print("         ⚠️ 已跳过交叉核对，**但存在 %d 处悬空取数 url**，按 `--strict` 判失败（rc=1）。"
-                  % len(dangling36))
+                  % len(dangling_targets))
             return 1
         if getattr(args, "strict", False) and _incomplete_before_clear:
             print("         ⚠️ 已跳过交叉核对，**但存在请求目标或动态参数附着未知**，"
@@ -8719,7 +8719,7 @@ def cmd_params(args) -> int:
     if extra:
         print(f"  [info] 页面送了但 SQL 未用到: {extra}")
     print("\n  提示：参数名 = 控件 `itemId`；改了 itemId 或把控件移出容器都会**静默失效**（取到空值）。")
-    _emit_36(args, dangling36, placeholder36, mod36_notes)
+    _emit_mxwl_target_notes(args, dangling_targets, placeholder_targets, module_placeholder_notes)
     _tail = _print_params_tail(args, root, text, [cfg for cfg, _l, _i in stores], field_set,
                                target_is_carrier=_target_is_carrier)
     # 读依赖失败（SQL 载体／`var.json`／反查扫描）⇒ 本次核对未完成：
@@ -8733,11 +8733,11 @@ def cmd_params(args) -> int:
     if _read_fail:
         print("  [FAIL] 依赖读取失败 %d 处 ⇒ 本次核对**未完成**（缺参/未核对结论不完整）：%s"
               % (len(_read_fail), "、".join(str(_p) for _p, _w in _read_fail[:8])))
-    # `#36` 判失败（⭐ **末行出口**）：已确认缺参（`miss`）／真·悬空 url ⇒ `--strict` 下 rc=1；
+    # 取数 url 完整性判失败（⭐ **末行出口**）：已确认缺参（`miss`）／真·悬空 url ⇒ `--strict` 下 rc=1；
     #   仅「未核对」⇒ `--strict` 下 rc=2（输入不可静态判定，非内容判据失败）；否则 rc=0。
-    #   ⛔ 显式占位不计入 `dangling36`（分类见 `_ref_kind36`）⇒ 占位豁免继续生效。
+    #   ⛔ 显式占位不计入 `dangling_targets`（分类见 `_classify_mxwl_target`）⇒ 占位豁免继续生效。
     if getattr(args, "strict", False):
-        if miss or dangling36:
+        if miss or dangling_targets:
             return 1
         if unknown or unattached:
             return 2

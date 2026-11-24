@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
-"""M2 契约校验器注入回归：证明 4.7 十六条判据「能红」。
+"""contract_validation 契约校验器注入回归：证明 4.7 十六条判据「能红」。
 
 做法：每次把「正式数据的副本」放到临时目录（tmp root），施加一次最小注入，
 调 contract_validator.run_all(root, only={判据ID})，断言目标判据由 PASS 变 FAIL。
@@ -223,7 +223,7 @@ def main():
     results = []
     for jid, mut in CASES:
         results.append(run_one(jid, mut))
-    print("== M2 契约校验器注入回归（干净绿 + 注入红）==")
+    print("== contract_validation 契约校验器注入回归（干净绿 + 注入红）==")
     print("%-32s %-20s %s" % ("判据ID", "结果", "明细"))
     print("-" * 100)
     ok = 0

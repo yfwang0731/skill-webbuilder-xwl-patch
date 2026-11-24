@@ -290,12 +290,12 @@ def _check_itemids(tmp, node, failures, write) -> None:
     except Exception as exc:  # noqa: BLE001
         failures.append("itemids --name --json 的输出不是 JSON: %s | %r" % (exc, out[:80]))
 
-    failures.extend(_check_1_9_2_itemid_refs())
+    failures.extend(_check_itemid_event_reference_filter())
     _check_reserved_slots(tmp, node, failures, write)
 
 
-def _check_1_9_2_itemid_refs():
-    """C27/C35：真假事件引用与非标识符重名的运行时访问理由。"""
+def _check_itemid_event_reference_filter():
+    """js_reference_filter/nonidentifier_reference_reason：真假事件引用与非标识符重名的运行时访问理由。"""
     fail = []
 
     def _obj(event):
@@ -320,7 +320,7 @@ def _check_1_9_2_itemid_refs():
         rep = xwl.audit_itemids(_obj(event))
         group = next(g for g in rep["groups"] if g["name"] == "btn")
         if group["level"] != "benign":
-            fail.append("C27 伪引用 %r 应判 benign，实得 %s"
+            fail.append("js_reference_filter 伪引用 %r 应判 benign，实得 %s"
                         % (event, group["level"]))
 
     true_events = (
@@ -333,7 +333,7 @@ def _check_1_9_2_itemid_refs():
         rep = xwl.audit_itemids(_obj(event))
         group = next(g for g in rep["groups"] if g["name"] == "btn")
         if group["level"] != "error":
-            fail.append("C27 真引用 %r 应判 error，实得 %s"
+            fail.append("js_reference_filter 真引用 %r 应判 error，实得 %s"
                         % (event, group["level"]))
 
     obj_cn = {
@@ -350,15 +350,15 @@ def _check_1_9_2_itemid_refs():
     group_cn = next(g for g in rep_cn["groups"] if g["name"] == "检查")
     reason = group_cn["reason"] + "\n" + "\n".join(group_cn.get("errors") or [])
     if group_cn["level"] != "error":
-        fail.append("C35 非标识符重名经 app.get('检查') 引用时必须判 error")
+        fail.append("nonidentifier_reference_reason 非标识符重名经 app.get('检查') 引用时必须判 error")
     if "app.检查" in reason:
-        fail.append("C35 非标识符重名理由不得再写不成立的 app.检查")
+        fail.append("nonidentifier_reference_reason 非标识符重名理由不得再写不成立的 app.检查")
     if "app.get('检查')" not in reason and "app['检查']" not in reason:
-        fail.append("C35 非标识符重名理由必须给出可成立的 get/方括号访问形式")
+        fail.append("nonidentifier_reference_reason 非标识符重名理由必须给出可成立的 get/方括号访问形式")
 
     if fail:
         return fail
-    print("[ok]  C27/C35：字符串/模板/注释伪引用 benign、点号/get/方括号真引用 error，"
+    print("[ok]  js_reference_filter/nonidentifier_reference_reason：字符串/模板/注释伪引用 benign、点号/get/方括号真引用 error，"
           "非标识符理由使用可成立的访问形式")
     return []
 

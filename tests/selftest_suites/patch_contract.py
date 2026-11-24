@@ -383,7 +383,7 @@ def _check_patch_contract(tmp, node, failures, write) -> None:
         f12.append("多行源 diff 段落行数 = %d（应 >1 = 逐行 diff）" % n12m)
     _ok("5-12", f12, "单行源打一行摘要、多行源仍逐行 diff（判据 = diff 段落行数）")
 
-    # ---- `#54`：`--dry-run` **不再按 40 行截断** ⇒ 大 diff 也全量（无「（略）」、段落 >40 行）----
+    # ---- `full_diff_preview`：`--dry-run` **不再按 40 行截断** ⇒ 大 diff 也全量（无「（略）」、段落 >40 行）----
     _big = [{"configs": {"itemId": "bb%d" % i, "text": "x"}, "type": "button",
              "expanded": False, "children": []} for i in range(30)]
     _big2 = [{"configs": {"itemId": "bb%d" % i, "text": "y"}, "type": "button",
@@ -392,7 +392,7 @@ def _check_patch_contract(tmp, node, failures, write) -> None:
     rc12b, o12b = _patch(p12b, "pc_5_12b_ops.json",
                          [{"op": "set", "path": ["children"], "value": _big2}], dry_run=True)
     _n12b = sum(1 for ln in o12b.splitlines() if ln.startswith("  "))
-    # `#54`：**行宽也不静默截断** —— 超长单行须**整行**出现在 diff 里（原 `line[:200]` 会砍）。
+    # `full_diff_preview`：**行宽也不静默截断** —— 超长单行须**整行**出现在 diff 里（原 `line[:200]` 会砍）。
     _long54 = "L" * 300
     p12c = write("pc_5_12c.xwl", _page())
     rc12c, o12c = _patch(p12c, "pc_5_12c_ops.json",
@@ -401,13 +401,13 @@ def _check_patch_contract(tmp, node, failures, write) -> None:
     if rc12b != 0:
         f12b.append("大 diff 的 --dry-run rc=%d（应 0）" % rc12b)
     if "（略）" in o12b:
-        f12b.append("`--dry-run` 仍截断 diff（出现「（略）」）—— `#54` 未生效")
+        f12b.append("`--dry-run` 仍截断 diff（出现「（略）」）—— `full_diff_preview` 未生效")
     if _n12b <= 40:
         f12b.append("大 diff 段落行数 = %d（应 >40 = 未截断）" % _n12b)
     if rc12c != 0:
         f12b.append("超长值 dry-run rc=%d（应 0）" % rc12c)
     if _long54 not in o12c:
-        f12b.append("`#54`：超长单行（%d 字符）未整行出现 ⇒ 行宽被静默截断" % len(_long54))
+        f12b.append("`full_diff_preview`：超长单行（%d 字符）未整行出现 ⇒ 行宽被静默截断" % len(_long54))
     _ok("5-12b", f12b, "`--dry-run` 不截断：大 diff 全量（无「（略）」、段落 >40 行）＋ 超长单行整行出现")
 
     # ---- `set` 末段数组下标越界 ⇒ rc=2 ----
@@ -471,13 +471,13 @@ def _check_patch_contract(tmp, node, failures, write) -> None:
     _ok("5-14", f14,
         "expand/patch 数字形态=3：字符串、SQL/JS、转义及前导文本不计数；位置互换方向差=0")
 
-    pc_fail.extend(_check_1_9_2_configs_path_cases(tmp))
+    pc_fail.extend(_check_configs_path_guard(tmp))
     if pc_fail:
         failures.extend(pc_fail)
 
 
-def _check_1_9_2_configs_path_cases(tmp):
-    """C10：漏 `configs` 只在同名键已存在或显式放行新建时误写。"""
+def _check_configs_path_guard(tmp):
+    """configs_path_guard：漏 `configs` 只在同名键已存在或显式放行新建时误写。"""
     fail = []
 
     def _write(name, obj):
@@ -502,46 +502,46 @@ def _check_1_9_2_configs_path_cases(tmp):
             "sql": "ROOT_OLD",
         }],
     }
-    page = _write("v192_configs_path.xwl", obj)
-    target = _ops("v192_configs_path_ops.json", [{
+    page = _write("configs_path.xwl", obj)
+    target = _ops("configs_path_ops.json", [{
         "op": "set", "path": ["children", 0, "sql"], "value": "ROOT_NEW",
     }])
     rc, out = _run(xwl.cmd_patch, file=page, ops=target, indent=1, eol="auto",
                    dry_run=False, backup=True, node=None, no_js=True,
                    allow_new_key=False)
     if rc != 0:
-        fail.append("C10 同名错层写入应能执行以暴露风险，rc=%r\n%s" % (rc, out))
+        fail.append("configs_path_guard 同名错层写入应能执行以暴露风险，rc=%r\n%s" % (rc, out))
     _t, _b, got = xwl.load_xwl(page)
     node = got["children"][0]
     if node.get("sql") != "ROOT_NEW" or node["configs"].get("sql") != "CHILD_UNCHANGED":
-        fail.append("C10 同名错层反例没有写到节点根或污染了 configs.sql")
+        fail.append("configs_path_guard 同名错层反例没有写到节点根或污染了 configs.sql")
 
-    missing_page = _write("v192_configs_missing.xwl", obj)
+    missing_page = _write("configs_missing.xwl", obj)
     before = open(missing_page, "rb").read()
-    missing_ops = _ops("v192_configs_missing_ops.json", [{
+    missing_ops = _ops("configs_missing_ops.json", [{
         "op": "set", "path": ["children", 0, "configs", "newKey"], "value": "v",
     }])
     rc, out = _run(xwl.cmd_patch, file=missing_page, ops=missing_ops, indent=1,
                    eol="auto", dry_run=False, backup=False, node=None, no_js=True,
                    allow_new_key=False)
     if rc != 2 or open(missing_page, "rb").read() != before:
-        fail.append("C10 缺键且未显式放行必须 rc=2 且零写入，rc=%r\n%s"
+        fail.append("configs_path_guard 缺键且未显式放行必须 rc=2 且零写入，rc=%r\n%s"
                     % (rc, out))
 
-    allowed_page = _write("v192_configs_allowed.xwl", obj)
-    allowed_ops = _ops("v192_configs_allowed_ops.json", [{
+    allowed_page = _write("configs_allowed.xwl", obj)
+    allowed_ops = _ops("configs_allowed_ops.json", [{
         "op": "set", "path": ["children", 0, "newRoot"], "value": "v",
     }])
     rc, out = _run(xwl.cmd_patch, file=allowed_page, ops=allowed_ops, indent=1,
                    eol="auto", dry_run=False, backup=False, node=None, no_js=True,
                    allow_new_key=True)
     if rc != 0 or "[warn] --allow-new-key 已放行 1 个新建键" not in out:
-        fail.append("C10 --allow-new-key 显式放行新建键应 rc=0 且可见警告，rc=%r\n%s"
+        fail.append("configs_path_guard --allow-new-key 显式放行新建键应 rc=0 且可见警告，rc=%r\n%s"
                     % (rc, out))
 
     if fail:
         return fail
-    print("[ok]  C10 漏 configs：同名目标已存在时误写可见反例、缺键默认拒绝、"
+    print("[ok]  configs_path_guard 漏 configs：同名目标已存在时误写可见反例、缺键默认拒绝、"
           "显式 --allow-new-key 才放行")
     return []
 

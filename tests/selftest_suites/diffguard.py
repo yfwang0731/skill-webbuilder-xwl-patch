@@ -478,21 +478,21 @@ def _check_diffguard(tmp, node, failures, write) -> None:
         dg.append("R1：应报出合并后的真实工作区行号 1")
     _mk("dg.xwl", BASE)
 
-    # 1.9.2 C30：压平同时改内容的相似度正例（不能只靠人工 git diff）。
+    # 1.9.2 diffguard_similarity_boundary：压平同时改内容的相似度正例（不能只靠人工 git diff）。
     _sim_pos_base = "\r\n".join([
         "var alpha = '" + ("A" * 48) + BS,
         "B" * 48 + "';",
     ])
     _mk("dg.xwl", _sim_pos_base)
-    _git(*GIT_ID, "commit", "-q", "-am", "v192-sim-positive")
+    _git(*GIT_ID, "commit", "-q", "-am", "similarity-positive")
     BASE = _sim_pos_base
     _sim_pos_work = "var alpha = '" + ("A" * 47) + "Q" + ("B" * 47) + "R';"
     _mk("dg.xwl", _sim_pos_work)
     _rc, _out = _cli("diffguard", "dg.xwl", "--strict")
     if "[warn]" not in _out or "相似度命中" not in _out:
-        dg.append("C30 压平且同时改内容必须由相似度档命中：\n%s" % _out)
+        dg.append("diffguard_similarity_boundary 压平且同时改内容必须由相似度档命中：\n%s" % _out)
     if _rc != 1:
-        dg.append("C30 相似度正例 --strict 应 rc=1，实得 %s" % _rc)
+        dg.append("diffguard_similarity_boundary 相似度正例 --strict 应 rc=1，实得 %s" % _rc)
     _mk("dg.xwl", BASE)
 
     # ④q **XL 窄误报收口**：组内只改 1 个字符（ratio≈1）＋基线已有与拼接逐字相同的行 —— 旧口径

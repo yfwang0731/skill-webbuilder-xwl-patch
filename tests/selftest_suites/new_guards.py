@@ -57,23 +57,23 @@ def _store(iid, url):
     return {"configs": {"itemId": iid, "url": url}, "type": "store",
             "expanded": False, "children": []}
 
-_F05_CARRIER_OK = ('{"children":[{"type":"dataprovider","configs":'
+_DEPENDENCY_CARRIER_OK = ('{"children":[{"type":"dataprovider","configs":'
                    '{"itemId":"dp","sql":"select * from t where a={?p?}"}}]}')
 
-def _f05_proj(tmp, case):
-    r = os.path.join(tmp, "f05proj", case)
+def _dependency_project(tmp, case):
+    r = os.path.join(tmp, "dependency_cases", case)
     m = os.path.join(r, "modules")
     os.makedirs(m, exist_ok=True)
     return r, m
 
-def _f05_write_carrier(m, body=_F05_CARRIER_OK):
+def _write_dependency_carrier(m, body=_DEPENDENCY_CARRIER_OK):
     p = os.path.join(m, "demo", "carrier.xwl")
     os.makedirs(os.path.dirname(p), exist_ok=True)
     with open(p, "w", encoding="utf-8", newline="") as f:
         f.write(body)
     return p
 
-def _f05_make_page(m, *, provide=True, extra=()):
+def _make_dependency_page(m, *, provide=True, extra=()):
     s1 = _store("s1", "m?xwl=demo/carrier")
     if provide:
         s1["configs"]["params"] = "{p:1}"
@@ -81,12 +81,12 @@ def _f05_make_page(m, *, provide=True, extra=()):
           os.path.join(m, "demo", "page.xwl"))
     return os.path.join(m, "demo", "page.xwl")
 
-def _f05_run_params(page, m, strict=False, upstream=False):
+def _run_dependency_params(page, m, strict=False, upstream=False):
     return _run(xwl.cmd_params, file=page, module_root=m, controls=None,
                 list_fields=False, strict=strict, upstream=upstream)
 
-def _f05_dep_cases(tmp):
-    """F05 依赖读取面：`params` 的 SQL 载体 ＋ `_scan_upstream`（放在 `new_guards` 块）。
+def _dependency_read_cases(tmp):
+    """dependency_read_completeness 依赖读取面：`params` 的 SQL 载体 ＋ `_scan_upstream`（放在 `new_guards` 块）。
 
     判据：读失败 **默认与 `--strict` 均 rc=2**（"没检查完"），逐条点名路径与原因；
     `--strict` 下若另有**已确认内容失败**（确缺参／确悬空）⇒ 汇总 rc=1 并**同时列出**读取失败；
@@ -97,64 +97,64 @@ def _f05_dep_cases(tmp):
     fail: list = []
 
     # ① 全依赖失败（载体读不动）⇒ 默认/strict 均 rc=2，逐条点名（旧树：静默 continue ⇒ rc=0）
-    r, m = _f05_proj(tmp, "carrier_bad")
-    page = _f05_make_page(m)
-    _f05_write_carrier(m, "{ 坏掉的 json")
+    r, m = _dependency_project(tmp, "carrier_bad")
+    page = _make_dependency_page(m)
+    _write_dependency_carrier(m, "{ 坏掉的 json")
     for _strict in (False, True):
-        rc, out = _f05_run_params(page, m, strict=_strict)
+        rc, out = _run_dependency_params(page, m, strict=_strict)
         if rc != 2:
-            fail.append("F05：SQL 载体读不动（strict=%s）应 rc=2，实得 %s\n%s"
+            fail.append("dependency_read_completeness：SQL 载体读不动（strict=%s）应 rc=2，实得 %s\n%s"
                         % (_strict, rc, out))
         if "读取失败" not in out or "未完成" not in out:
-            fail.append("F05：SQL 载体读不动（strict=%s）没留缺口（缺「读取失败/未完成」）：\n%s"
+            fail.append("dependency_read_completeness：SQL 载体读不动（strict=%s）没留缺口（缺「读取失败/未完成」）：\n%s"
                         % (_strict, out))
 
     # ② 部分失败：一个载体成功 **不抵消** 一个失败 ⇒ 仍 rc=2，且成功那份的 SQL 侧照常打印
-    r, m = _f05_proj(tmp, "carrier_partial")
-    page = _f05_make_page(m)
-    _f05_write_carrier(m)                       # 成功：demo/carrier.xwl
+    r, m = _dependency_project(tmp, "carrier_partial")
+    page = _make_dependency_page(m)
+    _write_dependency_carrier(m)                       # 成功：demo/carrier.xwl
     with open(os.path.join(m, "demo", "bad2.xwl"), "w", encoding="utf-8", newline="") as f:
         f.write("{ 另一个坏载体")
     s1 = _store("s2", "m?xwl=demo/bad2")
     _dump({"title": "p", "children": [_store("s1", "m?xwl=demo/carrier"), s1]},
           os.path.join(m, "demo", "page.xwl"))
-    rc, out = _f05_run_params(page, m)
+    rc, out = _run_dependency_params(page, m)
     if rc != 2:
-        fail.append("F05：部分失败（一成功一失败）应 rc=2（成功不抵消失败），实得 %s\n%s"
+        fail.append("dependency_read_completeness：部分失败（一成功一失败）应 rc=2（成功不抵消失败），实得 %s\n%s"
                     % (rc, out))
     if "SQL 侧: demo/carrier.xwl" not in out:
-        fail.append("F05：部分失败时成功载体的 SQL 侧未照常打印（过早上抛）：\n%s" % out)
+        fail.append("dependency_read_completeness：部分失败时成功载体的 SQL 侧未照常打印（过早上抛）：\n%s" % out)
 
     # ③ 宽容写法（单引号键）载体：公共加载入口应正确解析并报缺（⛔ 不计读取失败）
-    r, m = _f05_proj(tmp, "carrier_tolerant")
-    page = _f05_make_page(m, provide=False)
-    _f05_write_carrier(m, "{'children':[{'type':'dataprovider','configs':{'itemId':'dp',"
+    r, m = _dependency_project(tmp, "carrier_tolerant")
+    page = _make_dependency_page(m, provide=False)
+    _write_dependency_carrier(m, "{'children':[{'type':'dataprovider','configs':{'itemId':'dp',"
                           "'sql':'select * from t where a={?p?}'}}]}")
-    rc, out = _f05_run_params(page, m)
+    rc, out = _run_dependency_params(page, m)
     if rc != 0:
-        fail.append("F05：宽容写法载体（单引号键）默认档应 rc=0（仅告警缺参），实得 %s\n%s"
+        fail.append("dependency_read_completeness：宽容写法载体（单引号键）默认档应 rc=0（仅告警缺参），实得 %s\n%s"
                     % (rc, out))
     if "SQL 侧: demo/carrier.xwl" not in out or "读取失败" in out:
-        fail.append("F05：宽容写法载体（单引号键）未被公共加载入口解析（仍按读失败）：\n%s" % out)
+        fail.append("dependency_read_completeness：宽容写法载体（单引号键）未被公共加载入口解析（仍按读失败）：\n%s" % out)
     if "缺参" not in out:
-        fail.append("F05：宽容写法载体被解析后应报出确缺参：\n%s" % out)
-    rc, out = _f05_run_params(page, m, strict=True)
+        fail.append("dependency_read_completeness：宽容写法载体被解析后应报出确缺参：\n%s" % out)
+    rc, out = _run_dependency_params(page, m, strict=True)
     if rc != 1 or "缺参" not in out:
-        fail.append("F05：宽容写法载体 strict 下应因确缺参 rc=1，实得 %s\n%s" % (rc, out))
+        fail.append("dependency_read_completeness：宽容写法载体 strict 下应因确缺参 rc=1，实得 %s\n%s" % (rc, out))
 
     # ④ 读失败 ＋ 已确认悬空（strict）⇒ 汇总 rc=1 且**同时列出**读取失败；默认档读失败仍 2
-    r, m = _f05_proj(tmp, "carrier_bad_dangling")
-    page = _f05_make_page(m, extra=[_store("s2", "m?xwl=demo/missing")])
-    _f05_write_carrier(m, "{ 坏掉的 json")
-    rc1, out1 = _f05_run_params(page, m, strict=True)
+    r, m = _dependency_project(tmp, "carrier_bad_dangling")
+    page = _make_dependency_page(m, extra=[_store("s2", "m?xwl=demo/missing")])
+    _write_dependency_carrier(m, "{ 坏掉的 json")
+    rc1, out1 = _run_dependency_params(page, m, strict=True)
     if rc1 != 1:
-        fail.append("F05：strict 下「读失败＋已确认悬空」应 rc=1（内容失败优先），实得 %s\n%s"
+        fail.append("dependency_read_completeness：strict 下「读失败＋已确认悬空」应 rc=1（内容失败优先），实得 %s\n%s"
                     % (rc1, out1))
     if "读取失败" not in out1:
-        fail.append("F05：strict 内容失败时未同时列出读取失败：\n%s" % out1)
-    rc0, out0 = _f05_run_params(page, m)
+        fail.append("dependency_read_completeness：strict 内容失败时未同时列出读取失败：\n%s" % out1)
+    rc0, out0 = _run_dependency_params(page, m)
     if rc0 != 2:
-        fail.append("F05：默认档「读失败＋悬空」应 rc=2（读失败本身升级），实得 %s\n%s"
+        fail.append("dependency_read_completeness：默认档「读失败＋悬空」应 rc=2（读失败本身升级），实得 %s\n%s"
                     % (rc0, out0))
 
     # ⑤ 反查扫描读取失败 ⇒ 两个汇总出口直接消费 `_scan_upstream.failed` 的原始相对路径。
@@ -163,25 +163,25 @@ def _f05_dep_cases(tmp):
     _upstream_paths = ("caller.xwl", "sub/caller.xwl", "double/name.xwl.xwl")
 
     def _exercise_upstream_failure_paths(case, carrier_body):
-        _r5, _m5 = _f05_proj(tmp, case)
-        _page5 = _f05_make_page(_m5)
-        _f05_write_carrier(_m5, carrier_body)
+        _r5, _m5 = _dependency_project(tmp, case)
+        _page5 = _make_dependency_page(_m5)
+        _write_dependency_carrier(_m5, carrier_body)
         for _rel5 in _upstream_paths:
             _bad5 = os.path.join(_m5, *(_rel5.split("/")))
             os.makedirs(os.path.dirname(_bad5), exist_ok=True)
             with open(_bad5, "w", encoding="utf-8", newline="") as _fh5:
                 _fh5.write("{ 坏掉的 caller")
         for _strict in (False, True):
-            _rc5, _out5 = _f05_run_params(_page5, _m5, strict=_strict, upstream=True)
+            _rc5, _out5 = _run_dependency_params(_page5, _m5, strict=_strict, upstream=True)
             _where5 = "%s strict=%s" % (case, _strict)
             if _rc5 != 2:
-                fail.append("F05：反查扫描读失败（%s）应 rc=2，实得 %s\n%s"
+                fail.append("dependency_read_completeness：反查扫描读失败（%s）应 rc=2，实得 %s\n%s"
                             % (_where5, _rc5, _out5))
             if "扫描范围：本根" not in _out5 or "读取失败 3" not in _out5:
-                fail.append("F05：反查未给「扫描范围/读取失败 3 处分桶」（%s）：\n%s"
+                fail.append("dependency_read_completeness：反查未给「扫描范围/读取失败 3 处分桶」（%s）：\n%s"
                             % (_where5, _out5))
             if "反查覆盖" not in _out5 or "未完成" not in _out5:
-                fail.append("F05：反查有失败时未标「反查覆盖未完成」（%s）：\n%s"
+                fail.append("dependency_read_completeness：反查有失败时未标「反查覆盖未完成」（%s）：\n%s"
                             % (_where5, _out5))
             _listed5 = []
             for _line5 in _out5.splitlines():
@@ -189,83 +189,83 @@ def _f05_dep_cases(tmp):
                 if _m5path:
                     _listed5.append(_m5path.group(1))
             if set(_upstream_paths) - set(_listed5):
-                fail.append("F05：反查失败清单未按真实相对路径逐字列出（%s）：%r\n%s"
+                fail.append("dependency_read_completeness：反查失败清单未按真实相对路径逐字列出（%s）：%r\n%s"
                             % (_where5, _listed5, _out5))
             for _wrong5 in ("caller.xwl.xwl", "sub/caller.xwl.xwl",
                             "double/name.xwl.xwl.xwl"):
                 if _wrong5 in _out5:
-                    fail.append("F05：反查失败路径被重复追加 `.xwl`（%s，出现 %r）：\n%s"
+                    fail.append("dependency_read_completeness：反查失败路径被重复追加 `.xwl`（%s，出现 %r）：\n%s"
                                 % (_where5, _wrong5, _out5))
             if "[FAIL] 依赖读取失败 3 处" not in _out5:
-                fail.append("F05：汇总失败行未准确保留 3 个反查读取失败（%s）：\n%s"
+                fail.append("dependency_read_completeness：汇总失败行未准确保留 3 个反查读取失败（%s）：\n%s"
                             % (_where5, _out5))
 
     _exercise_upstream_failure_paths(
         "upstream_bad_early", '{"children":[{"type":"dataprovider","configs":'
                              '{"itemId":"dp","sql":"select 1 from dual"}}]}')
-    _exercise_upstream_failure_paths("upstream_bad_final", _F05_CARRIER_OK)
+    _exercise_upstream_failure_paths("upstream_bad_final", _DEPENDENCY_CARRIER_OK)
 
     # ⑥ 早返出口的「strict 悬空 ＋ 反查读取失败」仍是 rc=1，并同列读取失败。
-    r, m = _f05_proj(tmp, "upstream_bad_early_dangling")
+    r, m = _dependency_project(tmp, "upstream_bad_early_dangling")
     page = os.path.join(m, "demo", "page.xwl")
     _dump({"title": "p", "children": [_store("s1", "m?xwl=demo/missing")]}, page)
     with open(os.path.join(m, "bad_caller.xwl"), "w", encoding="utf-8", newline="") as f:
         f.write("{ 坏掉的 caller")
     for _strict, _want in ((False, 2), (True, 1)):
-        rc, out = _f05_run_params(page, m, strict=_strict, upstream=True)
+        rc, out = _run_dependency_params(page, m, strict=_strict, upstream=True)
         if rc != _want:
-            fail.append("F05：早返「悬空＋反查读失败」strict=%s 应 rc=%s，实得 %s\n%s"
+            fail.append("dependency_read_completeness：早返「悬空＋反查读失败」strict=%s 应 rc=%s，实得 %s\n%s"
                         % (_strict, _want, rc, out))
         if "反查覆盖" not in out or "读取失败" not in out:
-            fail.append("F05：早返「悬空＋反查读失败」strict=%s 未同列读取失败：\n%s"
+            fail.append("dependency_read_completeness：早返「悬空＋反查读失败」strict=%s 未同列读取失败：\n%s"
                         % (_strict, out))
-        if _strict and not any(l.strip().startswith("[warn]") and "#36" in l
+        if _strict and not any(l.strip().startswith("[warn]") and "取数 url" in l
                                for l in out.splitlines()):
-            fail.append("F05：早返 strict 未报告 >0 处悬空：\n%s" % out)
+            fail.append("dependency_read_completeness：早返 strict 未报告 >0 处悬空：\n%s" % out)
 
     # ⑦ 上游候选不加入 `provided`；关闭 --upstream 的既有诊断保持。
-    r, m = _f05_proj(tmp, "upstream_candidate")
-    page = _f05_make_page(m, provide=False)
-    _f05_write_carrier(m)
+    r, m = _dependency_project(tmp, "upstream_candidate")
+    page = _make_dependency_page(m, provide=False)
+    _write_dependency_carrier(m)
     _dump({"title": "caller", "children": [{
         "type": "button", "configs": {"itemId": "open"},
         "expanded": False, "children": [],
         "events": {"click": "Wb.open({url:'m?xwl=demo/page', params:{p:1}});"},
     }]}, os.path.join(m, "caller.xwl"))
-    rc, out = _f05_run_params(page, m, strict=True, upstream=True)
+    rc, out = _run_dependency_params(page, m, strict=True, upstream=True)
     if rc != 1 or "外部可传入" not in out or "确缺参" not in out or "p" not in out:
-        fail.append("F05：上游候选不得抵消本页确缺参（应 rc=1 且同时出现候选与缺参）：\n%s" % out)
-    rc_off, out_off = _f05_run_params(page, m)
+        fail.append("dependency_read_completeness：上游候选不得抵消本页确缺参（应 rc=1 且同时出现候选与缺参）：\n%s" % out)
+    rc_off, out_off = _run_dependency_params(page, m)
     if (rc_off != 0 or "确缺参" not in out_off or "外部可传入" in out_off
             or "扫描范围：本根" in out_off):
-        fail.append("F05：关闭 --upstream 的既有 params 输出发生漂移：rc=%s\n%s"
+        fail.append("dependency_read_completeness：关闭 --upstream 的既有 params 输出发生漂移：rc=%s\n%s"
                     % (rc_off, out_off))
 
     # ⑧ 未定位模块根必须明确提示跳过，不能把未执行反查说成成功。
-    _r8 = os.path.join(tmp, "f05proj", "upstream_no_root")
+    _r8 = os.path.join(tmp, "dependency_cases", "upstream_no_root")
     _p8 = os.path.join(_r8, "page.xwl")
     _dump({"title": "no-root", "children": []}, _p8)
-    rc8, out8 = _f05_run_params(_p8, None, upstream=True)
+    rc8, out8 = _run_dependency_params(_p8, None, upstream=True)
     if (rc8 != 0 or "未找到模块根" not in out8 or "跳过跨页反查" not in out8
             or "反查成功" in out8):
-        fail.append("F05：未定位模块根未明确跳过（rc=%s）：\n%s" % (rc8, out8))
+        fail.append("dependency_read_completeness：未定位模块根未明确跳过（rc=%s）：\n%s" % (rc8, out8))
 
     if fail:
         return fail
-    print("[ok]  F05 依赖读取面：SQL 载体/反查扫描 读失败默认与 strict 均留缺口（2）；"
+    print("[ok]  dependency_read_completeness 依赖读取面：SQL 载体/反查扫描 读失败默认与 strict 均留缺口（2）；"
           "反查早返/末行出口均保留普通及双后缀文件的真实相对路径；"
           "早返悬空与读取失败按 2/1 汇总；上游候选不抵消缺参；"
           "未定位模块根明确跳过；部分失败不抵消；宽容写法载体可解析并报缺")
     return []
 
-_AV03_REG = [
+_REGISTRY_SINGLE_LOAD_FIXTURE = [
     {"id": "onlyinreg", "general": {"type": "Ext.form.field.text"},
      "configs": {"normalName": "x", "itemId": {"type": "str"}}},
     {"id": "onlynormal", "configs": {"normalName": "y"}},
 ]
 
-def _av03_proj(tmp):
-    r = os.path.join(tmp, "av03proj")
+def _registry_project(tmp):
+    r = os.path.join(tmp, "registry_cases")
     ctrl = os.path.join(r, "wb", "system", "controls.json")
     page = os.path.join(r, "wb", "modules", "page.xwl")
     os.makedirs(os.path.dirname(ctrl), exist_ok=True)
@@ -273,81 +273,81 @@ def _av03_proj(tmp):
     _dump({"title": "t", "children": [{"type": "panel", "configs": {"itemId": "p"}}]}, page)
     return r, ctrl, page
 
-def _av03_write(ctrl, body):
+def _write_registry_fixture(ctrl, body):
     with open(ctrl, "w", encoding="utf-8", newline="") as f:
         f.write(body)
 
-def _av03_run_check(ctrl, page):
+def _run_check_registry_single_load(ctrl, page):
     return _run(xwl.cmd_check, files=[page], node=None, no_js=True,
                 no_itemid=False, no_cfgtype=False, controls=ctrl)
 
-def _av03_run_itemids(ctrl, page):
+def _run_itemids_registry_single_load(ctrl, page):
     return _run(xwl.cmd_itemids, file=page, controls=ctrl, name=None,
                 dups_only=False, suggest=False, fix="auto", json=False)
 
-def _av03_run_params(ctrl, page, **kw):
+def _run_params_registry_single_load(ctrl, page, **kw):
     kw.setdefault("module_root", None)
     kw.setdefault("list_fields", False)
     kw.setdefault("upstream", False)
     kw.setdefault("strict", False)
     return _run(xwl.cmd_params, file=page, controls=ctrl, **kw)
 
-def _av03_registry_cases(tmp):
-    """AV-03：注册表**一次命令上下文只加载一次**（强身份键）＋来源/身份/降级记录＋union 不回退。
+def _registry_single_load_cases(tmp):
+    """registry_single_load：注册表**一次命令上下文只加载一次**（强身份键）＋来源/身份/降级记录＋union 不回退。
 
-    落 `new_guards` 块（含 `check --controls` / `itemids` 两面）；`params` 面另见 `_av03_params_cases`。
+    落 `new_guards` 块（含 `check --controls` / `itemids` 两面）；`params` 面另见 `_params_registry_single_load_cases`。
     返回失败文案列表（空 = 通过）；通过时单独打一行 `[ok]`。
     """
     fail: list = []
-    r, ctrl, page = _av03_proj(tmp)
-    reg_json = json.dumps(_AV03_REG, ensure_ascii=False)
+    r, ctrl, page = _registry_project(tmp)
+    reg_json = json.dumps(_REGISTRY_SINGLE_LOAD_FIXTURE, ensure_ascii=False)
 
     def _one(nm):
         n0 = xwl._REG_LOADS
         if nm == "check":
-            rc, out = _av03_run_check(ctrl, page)
+            rc, out = _run_check_registry_single_load(ctrl, page)
         elif nm == "itemids":
-            rc, out = _av03_run_itemids(ctrl, page)
+            rc, out = _run_itemids_registry_single_load(ctrl, page)
         else:
-            rc, out = _av03_run_params(ctrl, page)
+            rc, out = _run_params_registry_single_load(ctrl, page)
         return rc, out, xwl._REG_LOADS - n0
 
     # ① 正常注册表：三命令各解析 **1 次**、基线码值不变、都打来源行
-    _av03_write(ctrl, reg_json)
+    _write_registry_fixture(ctrl, reg_json)
     for nm in ("check", "itemids", "params"):
         rc, out, n = _one(nm)
         if n != 1:
-            fail.append("AV-03：正常注册表下 `%s` 应解析 1 次，实得 %d" % (nm, n))
+            fail.append("registry_single_load：正常注册表下 `%s` 应解析 1 次，实得 %d" % (nm, n))
         if rc != 0:
-            fail.append("AV-03：正常注册表下 `%s` 应 rc=0，实得 %s\n%s" % (nm, rc, out))
+            fail.append("registry_single_load：正常注册表下 `%s` 应 rc=0，实得 %s\n%s" % (nm, rc, out))
         if "读注册表失败" in out:
-            fail.append("AV-03：正常注册表下 `%s` 误报读失败：\n%s" % (nm, out))
+            fail.append("registry_single_load：正常注册表下 `%s` 误报读失败：\n%s" % (nm, out))
         if "控件注册表:" not in out:
-            fail.append("AV-03：`%s` 未打「控件注册表:」来源行：\n%s" % (nm, out))
+            fail.append("registry_single_load：`%s` 未打「控件注册表:」来源行：\n%s" % (nm, out))
 
     # ② 坏注册表：三命令**都看得到不可用＋降级**，各自解析 1 次；码值差异按**改前基线**（2/0/0）
-    _av03_write(ctrl, "{ not json")
+    _write_registry_fixture(ctrl, "{ not json")
     expect = {"check": 2, "itemids": 0, "params": 0}
     for nm in ("check", "itemids", "params"):
         rc, out, n = _one(nm)
         if n != 1:
-            fail.append("AV-03：坏注册表下 `%s` 应解析 1 次（不反复解析），实得 %d" % (nm, n))
+            fail.append("registry_single_load：坏注册表下 `%s` 应解析 1 次（不反复解析），实得 %d" % (nm, n))
         if rc != expect[nm]:
-            fail.append("AV-03：坏注册表下 `%s` 的 rc 应保持改前基线 %s，实得 %s\n%s"
+            fail.append("registry_single_load：坏注册表下 `%s` 的 rc 应保持改前基线 %s，实得 %s\n%s"
                         % (nm, expect[nm], rc, out))
         if nm == "check":
             if "取不到控件注册表" not in out:
-                fail.append("AV-03：`check` 未说明「取不到控件注册表」（资源不可用）：\n%s" % out)
+                fail.append("registry_single_load：`check` 未说明「取不到控件注册表」（资源不可用）：\n%s" % out)
         else:
             if "[warn] 读注册表失败：" not in out:
-                fail.append("AV-03：`%s` 未打「读注册表失败」：\n%s" % (nm, out))
+                fail.append("registry_single_load：`%s` 未打「读注册表失败」：\n%s" % (nm, out))
             if "已回退内置兜底" not in out:
-                fail.append("AV-03：`%s` 未说明**据此降级**（已回退内置兜底）：\n%s" % (nm, out))
+                fail.append("registry_single_load：`%s` 未说明**据此降级**（已回退内置兜底）：\n%s" % (nm, out))
     st = xwl._registry_state(ctrl)
     if st["state"] != "failed" or not st["why"] or st["identity"] is None:
-        fail.append("AV-03：坏注册表未记录「来源＋身份＋失败原因」：%r" % (st,))
+        fail.append("registry_single_load：坏注册表未记录「来源＋身份＋失败原因」：%r" % (st,))
     if st["path"] != os.path.abspath(ctrl):
-        fail.append("AV-03：读取记录的来源路径不对：%r" % (st.get("path"),))
+        fail.append("registry_single_load：读取记录的来源路径不对：%r" % (st.get("path"),))
 
     # ③ 一次上下文内多次取用 ⇒ 只解析 1 次；第二次 `_registry_load` 不是新解析
     xwl._registry_reset()
@@ -359,24 +359,24 @@ def _av03_registry_cases(tmp):
     xwl.normalname_types(ctrl)
     r2 = xwl._registry_load(ctrl)
     if xwl._REG_LOADS - n0 != 1:
-        fail.append("AV-03：同一上下文内多入口取用应只解析 1 次，实得 %d"
+        fail.append("registry_single_load：同一上下文内多入口取用应只解析 1 次，实得 %d"
                     % (xwl._REG_LOADS - n0))
     if r1_loaded is not True or r2["loaded_now"] is not False:
-        fail.append("AV-03：`_registry_load` 的 loaded_now 语义不对：r1=%r r2=%r"
+        fail.append("registry_single_load：`_registry_load` 的 loaded_now 语义不对：r1=%r r2=%r"
                     % (r1_loaded, r2.get("loaded_now")))
 
     # ④ 文件被改（身份变更）⇒ 新上下文重读，不沿用旧缓存
     old_ident = st["identity"]
-    _av03_write(ctrl, json.dumps(_AV03_REG + [{"id": "onlynew2", "configs": {"normalName": "z"}}],
+    _write_registry_fixture(ctrl, json.dumps(_REGISTRY_SINGLE_LOAD_FIXTURE + [{"id": "onlynew2", "configs": {"normalName": "z"}}],
                                  ensure_ascii=False))
     rc, out, n = _one("itemids")
     if n != 1:
-        fail.append("AV-03：注册表被改后新上下文应重读 1 次，实得 %d" % n)
+        fail.append("registry_single_load：注册表被改后新上下文应重读 1 次，实得 %d" % n)
     if "onlynew2" not in xwl.field_types(ctrl) and "onlynew2" not in xwl.normalname_types(ctrl):
-        fail.append("AV-03：注册表被改后的新内容未被读到（onlynew2 缺失）")
+        fail.append("registry_single_load：注册表被改后的新内容未被读到（onlynew2 缺失）")
     st2 = xwl._registry_state(ctrl)
     if st2["identity"] == old_ident:
-        fail.append("AV-03：注册表被改后身份键未变化（mtime_ns/size 未进键）：%r" % (st2,))
+        fail.append("registry_single_load：注册表被改后身份键未变化（mtime_ns/size 未进键）：%r" % (st2,))
 
     # ⑤ 跨命令不复用旧缓存：连续两次 `itemids` 各解析 1 次（入口 reset）
     d = []
@@ -384,26 +384,26 @@ def _av03_registry_cases(tmp):
         _rc, _out, _n = _one("itemids")
         d.append(_n)
     if d != [1, 1]:
-        fail.append("AV-03：连续两命令应各解析 1 次（不跨命令复用），实得 %r" % (d,))
+        fail.append("registry_single_load：连续两命令应各解析 1 次（不跨命令复用），实得 %r" % (d,))
 
     # ⑥ union 回归：注册表里没有任何 Ext.form.field.* 时，`field_types` 仍含**全部内置兜底**；
     #    `normalname_types` 同理（只取注册表会整类丢 → 假阳 miss）。
-    _av03_write(ctrl, json.dumps([{"id": "onlynormal", "configs": {"normalName": "y"}}],
+    _write_registry_fixture(ctrl, json.dumps([{"id": "onlynormal", "configs": {"normalName": "y"}}],
                                  ensure_ascii=False))
     ft = set(xwl.field_types(ctrl))
     nt = set(xwl.normalname_types(ctrl))
     if not set(xwl._FIELD_FALLBACK) <= ft:
-        fail.append("AV-03：`field_types` 丢了内置兜底（union 被破坏）：缺 %r"
+        fail.append("registry_single_load：`field_types` 丢了内置兜底（union 被破坏）：缺 %r"
                     % sorted(set(xwl._FIELD_FALLBACK) - ft)[:5])
     if not set(xwl._NORMALNAME_FALLBACK) <= nt:
-        fail.append("AV-03：`normalname_types` 丢了内置兜底（union 被破坏）：缺 %r"
+        fail.append("registry_single_load：`normalname_types` 丢了内置兜底（union 被破坏）：缺 %r"
                     % sorted(set(xwl._NORMALNAME_FALLBACK) - nt)[:5])
     if "onlynormal" not in nt:
-        fail.append("AV-03：`normalname_types` 未并进注册表里的 `onlynormal`")
+        fail.append("registry_single_load：`normalname_types` 未并进注册表里的 `onlynormal`")
 
     if fail:
         return fail
-    print("[ok]  AV-03 注册表一次加载：三命令各解析 1 次、坏注册表三处可见「不可用＋降级」"
+    print("[ok]  registry_single_load 注册表一次加载：三命令各解析 1 次、坏注册表三处可见「不可用＋降级」"
           "（rc 基线 2/0/0）、身份变更重读、一次上下文多入口共用、field_types/normalname union 未丢")
     return []
 
@@ -420,29 +420,29 @@ def _check_new_guards(tmp, node, failures, write) -> None:
     _ng_write_overwrite(tmp, node, failures, write)
     _ng_params_defaults(tmp, node, failures, write)
     _ng_platform(tmp, node, failures, write)
-    # F05：读依赖失败不得被吞（依赖面：SQL 载体／反查扫描；`var.json` 三态在 params_paths 块）
-    failures.extend(_f05_dep_cases(tmp))
-    # AV-03：注册表事实源一次加载（check --controls／itemids 两面；params 面在 params_paths 块）
-    failures.extend(_av03_registry_cases(tmp))
-    # ITEM-1229 序1：四类请求身份的 default/strict 真实 rc 与 stdout
+    # dependency_read_completeness：读依赖失败不得被吞（依赖面：SQL 载体／反查扫描；`var.json` 三态在 params_paths 块）
+    failures.extend(_dependency_read_cases(tmp))
+    # registry_single_load：注册表事实源一次加载（check --controls／itemids 两面；params 面在 params_paths 块）
+    failures.extend(_registry_single_load_cases(tmp))
+    # parameter_request_identity 序1：四类请求身份的 default/strict 真实 rc 与 stdout
     failures.extend(_request_identity_matrix(tmp))
     failures.extend(_request_identity_shape_cases(tmp))
-    # ITEM-1230 序2：直属 beforeload 后的有效键（含与序1身份隔离的组合）
+    # beforeload_effective_keys 序2：直属 beforeload 后的有效键（含与序1身份隔离的组合）
     failures.extend(_beforeload_matrix(tmp))
-    # ITEM-1230 同请求多键：确定缺参与未知并存 / 仅未知
+    # beforeload_effective_keys 同请求多键：确定缺参与未知并存 / 仅未知
     failures.extend(_beforeload_perkey_regression(tmp))
-    # F1–F5 返修：请求目标/供给边界与 beforeload 未知不得假绿
+    # request_supply_boundary_regressions 返修：请求目标/供给边界与 beforeload 未知不得假绿
     failures.extend(_repair_regression_cases(tmp))
     # 请求完成状态：目标未知即使需求集为空也不得打印请求级 ok，并进入 strict 码值
     failures.extend(_request_completion_cases(tmp))
-    # 1.9.2 C15：folders 检查目标/传入目录与其直接父索引的链接
-    failures.extend(_check_1_9_2_folders_parent(tmp))
+    # 1.9.2 folders_parent_index：folders 检查目标/传入目录与其直接父索引的链接
+    failures.extend(_check_folders_direct_parent_index(tmp))
 
 
-def _check_1_9_2_folders_parent(tmp):
-    """C15：直接父索引、缺索引 note、读不动/坏结构、祖先不继续上探。"""
+def _check_folders_direct_parent_index(tmp):
+    """folders_parent_index：直接父索引、缺索引 note、读不动/坏结构、祖先不继续上探。"""
     fail = []
-    root = os.path.join(tmp, "v192_folders")
+    root = os.path.join(tmp, "folders_index")
     base = os.path.join(root, "managed")
     child = os.path.join(base, "child")
     grand = os.path.join(child, "grand")
@@ -466,31 +466,31 @@ def _check_1_9_2_folders_parent(tmp):
     _folder(grand, ["a.xwl"])
     rc, out = _run_folder_check(child)
     if rc != 0 or "未登记" not in out or "child" not in out:
-        fail.append("C15 目标目录未登记于直接父索引应可见且 rc=0，rc=%r\n%s"
+        fail.append("folders_parent_index 目标目录未登记于直接父索引应可见且 rc=0，rc=%r\n%s"
                     % (rc, out))
     _folder(base, ["child"])
     rc, out = _run_folder_check(child)
     if rc != 0 or "[未登记] managed/" in out and "child" in out:
-        fail.append("C15 补齐直接父索引后该未登记结论应消失，rc=%r\n%s"
+        fail.append("folders_parent_index 补齐直接父索引后该未登记结论应消失，rc=%r\n%s"
                     % (rc, out))
 
     # 不沿祖先链：中间索引正常时，远端祖先 base 不应再影响目标 child。
     _folder(base, [])
     rc, out = _run_folder_check(grand)
     if rc != 0 or "managed" in out and "未登记" in out:
-        fail.append("C15 检查 grand 时不得继续上探 base 的索引，rc=%r\n%s"
+        fail.append("folders_parent_index 检查 grand 时不得继续上探 base 的索引，rc=%r\n%s"
                     % (rc, out))
 
     os.remove(os.path.join(base, "folder.json"))
     rc, out = _run_folder_check(child)
     if rc != 0 or "[note] 直接父 folder.json 不存在，本次未执行父索引检查" not in out:
-        fail.append("C15 直接父索引不存在应固定 note 且 rc=0，rc=%r\n%s"
+        fail.append("folders_parent_index 直接父索引不存在应固定 note 且 rc=0，rc=%r\n%s"
                     % (rc, out))
 
     os.makedirs(os.path.join(base, "folder.json"))
     rc, out = _run_folder_check(child)
     if rc != 2:
-        fail.append("C15 直接父索引读不动应 rc=2，实得 %r\n%s" % (rc, out))
+        fail.append("folders_parent_index 直接父索引读不动应 rc=2，实得 %r\n%s" % (rc, out))
     os.rmdir(os.path.join(base, "folder.json"))
 
     with open(os.path.join(base, "folder.json"), "w",
@@ -498,11 +498,11 @@ def _check_1_9_2_folders_parent(tmp):
         fh.write('{"hidden":false,"index":{},"title":"t"}')
     rc, out = _run_folder_check(child)
     if rc != 1:
-        fail.append("C15 直接父索引结构坏应 rc=1，实得 %r\n%s" % (rc, out))
+        fail.append("folders_parent_index 直接父索引结构坏应 rc=1，实得 %r\n%s" % (rc, out))
 
     if fail:
         return fail
-    print("[ok]  C15 folders 直接父索引：未登记可见、补名消失、缺索引固定 note＋rc0、"
+    print("[ok]  folders_parent_index folders 直接父索引：未登记可见、补名消失、缺索引固定 note＋rc0、"
           "读不动 2、结构坏 1，且不沿祖先链上探")
     return []
 
@@ -595,27 +595,27 @@ def _request_identity_matrix(tmp):
                 expected_rc = 0 if not strict else 1
             label = "%s/%s strict=%s" % (family, variant, strict)
             if rc != expected_rc:
-                failures.append("ITEM-1229 %s：rc 应 %s，实得 %s\n%s"
+                failures.append("parameter_request_identity %s：rc 应 %s，实得 %s\n%s"
                                 % (label, expected_rc, rc, out))
             if out.count("=== SQL 侧: demo/carrier.xwl") != 1:
-                failures.append("ITEM-1229 %s：SQL 侧需求段应恰打印一次\n%s" % (label, out))
+                failures.append("parameter_request_identity %s：SQL 侧需求段应恰打印一次\n%s" % (label, out))
             if family == "stores" and "（同载体 ×2）" not in out:
-                failures.append("ITEM-1229 %s：同载体引用计数丢失\n%s" % (label, out))
+                failures.append("parameter_request_identity %s：同载体引用计数丢失\n%s" % (label, out))
             if out.count("· store[") < 2 if family == "stores" else out.count("→ 请求:") < 2:
-                failures.append("ITEM-1229 %s：未按请求位置分开输出\n%s" % (label, out))
+                failures.append("parameter_request_identity %s：未按请求位置分开输出\n%s" % (label, out))
             if positive_like:
                 if "SQL 需要的参数在页面侧都能找到来源" not in out or "[缺参]" in out:
-                    failures.append("ITEM-1229 %s：确定正例应逐请求齐全\n%s" % (label, out))
+                    failures.append("parameter_request_identity %s：确定正例应逐请求齐全\n%s" % (label, out))
             elif "[ok]   SQL 需要的参数在页面侧都能找到来源" in out:
-                failures.append("ITEM-1229 %s：页面整体不得报齐全\n%s" % (label, out))
+                failures.append("parameter_request_identity %s：页面整体不得报齐全\n%s" % (label, out))
             if variant == "ambiguous" and "[未核对]" not in out:
-                failures.append("ITEM-1229 %s：歧义/未知未落到输出\n%s" % (label, out))
+                failures.append("parameter_request_identity %s：歧义/未知未落到输出\n%s" % (label, out))
             if (strict and not positive_like and family != "initial" and rc != 1):
-                failures.append("ITEM-1229 %s：单请求确缺参须优先于未知判 rc=1\n%s"
+                failures.append("parameter_request_identity %s：单请求确缺参须优先于未知判 rc=1\n%s"
                                 % (label, out))
     if failures:
         return failures
-    print("[ok]  ITEM-1229 请求身份矩阵：双 store／双 Wb.request／同 store 多 load／"
+    print("[ok]  parameter_request_identity 请求身份矩阵：双 store／双 Wb.request／同 store 多 load／"
           "初始化与后续 load 的正例、单请求缺参、歧义未知均按请求分开")
     return []
 
@@ -667,17 +667,17 @@ def _request_identity_shape_cases(tmp):
                        controls=None, list_fields=False, upstream=False,
                        strict=True)
         if rc != expected_rc:
-            failures.append("ITEM-1229 %s：strict rc 应 %s，实得 %s\n%s"
+            failures.append("parameter_request_identity %s：strict rc 应 %s，实得 %s\n%s"
                             % (name, expected_rc, rc, out))
         for token in required:
             if token not in out:
-                failures.append("ITEM-1229 %s：输出缺少 %r\n%s" % (name, token, out))
+                failures.append("parameter_request_identity %s：输出缺少 %r\n%s" % (name, token, out))
         for token in forbidden:
             if token in out:
-                failures.append("ITEM-1229 %s：输出不应含 %r\n%s" % (name, token, out))
+                failures.append("parameter_request_identity %s：输出不应含 %r\n%s" % (name, token, out))
     if failures:
         return failures
-    print("[ok]  ITEM-1229 请求身份形态：同调用 out+params 归一、空参建身份、"
+    print("[ok]  parameter_request_identity 请求身份形态：同调用 out+params 归一、空参建身份、"
           "嵌套伪供给不附着、嵌套真实调用独立、条件 store 不被无关请求跳过")
     return []
 
@@ -746,7 +746,7 @@ def _beforeload_matrix(tmp):
             rc, out = _run(xwl.cmd_params, file=page, module_root=module_root,
                            controls=None, list_fields=False, upstream=False,
                            strict=strict)
-            label = "ITEM-1230 %s strict=%s" % (name, strict)
+            label = "beforeload_effective_keys %s strict=%s" % (name, strict)
             if rc != expected:
                 failures.append("%s：rc 应 %s，实得 %s\n%s" % (label, expected, rc, out))
             for token in required:
@@ -757,7 +757,7 @@ def _beforeload_matrix(tmp):
                     failures.append("%s：输出不应含 %r\n%s" % (label, token, out))
     if failures:
         return failures
-    print("[ok]  ITEM-1230 直属 beforeload：静态保留／整体覆盖删除／追加恢复／"
+    print("[ok]  beforeload_effective_keys 直属 beforeload：静态保留／整体覆盖删除／追加恢复／"
           "Ext.apply 与 Wb.apply 合并／先追加后覆盖／条件与动态未知／双请求身份隔离")
     return []
 
@@ -796,7 +796,7 @@ def _beforeload_perkey_regression(tmp):
             rc, out = _run(xwl.cmd_params, file=page, module_root=module_root,
                            controls=None, list_fields=False, upstream=False,
                            strict=strict)
-            label = "ITEM-1230 多键 %s strict=%s" % (name, strict)
+            label = "beforeload_effective_keys 多键 %s strict=%s" % (name, strict)
             if rc != expected:
                 failures.append("%s：rc 应 %s，实得 %s\n%s"
                                 % (label, expected, rc, out))
@@ -808,12 +808,12 @@ def _beforeload_perkey_regression(tmp):
                     failures.append("%s：输出不应含 %r\n%s" % (label, token, out))
     if failures:
         return failures
-    print("[ok]  ITEM-1230 同请求多键：确定缺参与未知并列 strict=1，仅未知 strict=2")
+    print("[ok]  beforeload_effective_keys 同请求多键：确定缺参与未知并列 strict=1，仅未知 strict=2")
     return []
 
 
 def _repair_regression_cases(tmp):
-    """F1–F5：请求目标/供给边界与 beforeload 未知不得假绿（默认/strict 双跑）。"""
+    """request_supply_boundary_regressions：请求目标/供给边界与 beforeload 未知不得假绿（默认/strict 双跑）。"""
     failures = []
 
     def _carrier(root, name, need):
@@ -937,7 +937,7 @@ def _repair_regression_cases(tmp):
             rc, out = _run(xwl.cmd_params, file=page, module_root=module_root,
                            controls=None, list_fields=False, upstream=False,
                            strict=strict)
-            label = "F1–F5 %s strict=%s" % (name, strict)
+            label = "request_supply_boundary_regressions %s strict=%s" % (name, strict)
             if rc != expected:
                 failures.append("%s：rc 应 %s，实得 %s\n%s" % (label, expected, rc, out))
             for token in required:
@@ -951,7 +951,7 @@ def _repair_regression_cases(tmp):
                                 % (label, out))
     if failures:
         return failures
-    print("[ok]  F1–F5 返修：autoLoad+显式 load 合并 store params／调用级 url 优先／"
+    print("[ok]  request_supply_boundary_regressions 返修：autoLoad+显式 load 合并 store params／调用级 url 优先／"
           "字符串伪调用不建请求／beforeload 未知不被供给遮蔽／括号·别名·IIFE 不假绿")
     return []
 
@@ -1224,14 +1224,14 @@ def _ng_check_controls(tmp, node, failures, write) -> None:
     （从 `_check_new_guards` 原样搬出，判据一行未改。）
     """
     # ---- ④ `check --controls`：⑨ 校 configs 键合法性（`[warn]`）＋ ⑥ 扩到 configs 内联 `[js]`（`[FAIL]`）----
-    # 起因（`#48`/`#49` 落地后**整条无覆盖**）：`check` 的 ⑨/⑥-ext **只在显式给 `--controls` 时才跑**，
+    # 起因（`controls_key_validation`/`configs_inline_js_validation` 落地后**整条无覆盖**）：`check` 的 ⑨/⑥-ext **只在显式给 `--controls` 时才跑**，
     #   而本文件**没有一条断言**碰 `--controls`（`_run_check` 的 NS 根本没有 `controls` 字段）⇒
     #   两个新能力"绿但空"：把 `_check_registry_dims` 整段删掉、或把 ⑨ 误改成 `[FAIL]`、或把 ⑥-ext
     #   退回只校 events，**自检都不动**。故**双向钉**：真阳性（非法键 ⇒ ⑨ 报出；`[js]` 语法错 ⇒ ⑥ 进 rc）
     #   ＋ 假阳性守卫（合法键 ⇒ 不进 `[warn]`；不给 `--controls` ⇒ 默认面一行不出现）。
     # ⚠️ 夹具用**自造 mini 注册表**（同 §16 的 `mini_controls.json` 手法）：不依赖工程 `wb/system/controls.json`，
     #   故 CI 里照跑；`[js]` 语法错**必须真跑 node** ⇒ 无 node 时该半条跳过（非默认面，跳过要出声）。
-    # ⚠️ ⑨ 取 `[warn]` 而非 `[FAIL]` 是**有意**（`#48` 的裁定，理由见 `_check_registry_dims` docstring）⇒
+    # ⚠️ ⑨ 取 `[warn]` 而非 `[FAIL]` 是**有意**（`controls_key_validation` 的裁定，理由见 `_check_registry_dims` docstring）⇒
     #   本段的 `⑨` 断言**只判"warn 里出现、rc 仍 0"**，不判"进 rc"。
     reg_fail: list[str] = []
     reg4 = os.path.join(tmp, "mini_controls_reg.json")
@@ -1280,17 +1280,17 @@ def _ng_check_controls(tmp, node, failures, write) -> None:
     # ④-2 假阳性守卫（⑨）：只含注册表内合法键 ⇒ 应打 `[ok] ⑨ … 0 个非法键`、不进 warn
     if "[warn]" in _o9 and "⑨" in _o9:
         reg_fail.append("④ ⑨ 假阳性：全合法键的文件仍被 warn：\n%s" % _o9)
-    # ④-2b（`#76`·⑨`[ok]` 量纲）`#76` 的**第二半**在 ⑨ 的 `[ok]` 明细行（`0 个非法键`）——
+    # ④-2b（`illegal_config_key_unit`·⑨`[ok]` 量纲）`illegal_config_key_unit` 的**第二半**在 ⑨ 的 `[ok]` 明细行（`0 个非法键`）——
     #   既有断言只锚了运行级汇总行「N 个节点」；把这里的 `个` 改回 `处` **三块仍全绿**（复核实测）
     #   ⇒ 补钉该量纲词（与汇总行同一立意：**统一量纲为「个」**）。
     _ok9 = [l.strip() for l in _o9.splitlines() if "⑨ configs 键合法性" in l]
     if not _ok9:
-        reg_fail.append("④ ⑨（`#76`）全合法键时未见 `[ok] ⑨ configs 键合法性` 行：\n%s" % _o9)
+        reg_fail.append("④ ⑨（`illegal_config_key_unit`）全合法键时未见 `[ok] ⑨ configs 键合法性` 行：\n%s" % _o9)
     else:
         if "个非法键" not in _ok9[0]:
-            reg_fail.append("④ ⑨（`#76`）`[ok]` 行未用量纲词「个非法键」：%s" % _ok9[0])
+            reg_fail.append("④ ⑨（`illegal_config_key_unit`）`[ok]` 行未用量纲词「个非法键」：%s" % _ok9[0])
         if "处非法键" in _ok9[0]:
-            reg_fail.append("④ ⑨（`#76`）`[ok]` 行仍用「处非法键」：%s" % _ok9[0])
+            reg_fail.append("④ ⑨（`illegal_config_key_unit`）`[ok]` 行仍用「处非法键」：%s" % _ok9[0])
     # ④-3 真阳性（⑥-ext）：`configs.renderer`（注册表标 `[js]`）写入语法错 ⇒ 应 `[FAIL]` 且 rc≠0
     if node is not None:
         _rcj, _oj = _run_check_ctl([_mkreg("badjs", {"itemId": "l1",
@@ -1299,15 +1299,15 @@ def _ng_check_controls(tmp, node, failures, write) -> None:
             reg_fail.append("④ ⑥-ext 真阳性：`configs.renderer` 语法错没被 ⑥ 报出：\n%s" % _oj)
         if _rcj == 0:
             reg_fail.append("④ ⑥-ext 是 `[FAIL]` 级（进 rc），语法错时 rc 仍 0")
-        # ④-3b（`#78`）⑥-ext 报错正文须是**真诊断**（含 `Error`），⛔ 不是「已删除的临时文件路径」死链。
+        # ④-3b（`js_diagnostic_head`）⑥-ext 报错正文须是**真诊断**（含 `Error`），⛔ 不是「已删除的临时文件路径」死链。
         _fl8 = [l.strip() for l in _oj.splitlines() if l.strip().startswith("[FAIL] ⑥ configs.")]
         if not _fl8:
-            reg_fail.append("④ ⑥-ext（`#78`）未找到 `[FAIL] ⑥ configs.` 行：\n%s" % _oj)
+            reg_fail.append("④ ⑥-ext（`js_diagnostic_head`）未找到 `[FAIL] ⑥ configs.` 行：\n%s" % _oj)
         elif "Error" not in _fl8[0]:
-            reg_fail.append("④ ⑥-ext（`#78`）报错正文不含真诊断（`Error`）—— 疑似临时文件路径死链：\n%s" % _oj)
+            reg_fail.append("④ ⑥-ext（`js_diagnostic_head`）报错正文不含真诊断（`Error`）—— 疑似临时文件路径死链：\n%s" % _oj)
         if "xwl_ev_" in _oj:
-            reg_fail.append("④ ⑥-ext（`#78`）输出含随机临时文件名（`xwl_ev_`）—— 应只给真诊断：\n%s" % _oj)
-        # ④-3c（`#78`·⑥events 调用点）`_js_err_head` 有**两处调用点**：⑥-ext（`% (loc, _js_err_head(err))`，
+            reg_fail.append("④ ⑥-ext（`js_diagnostic_head`）输出含随机临时文件名（`xwl_ev_`）—— 应只给真诊断：\n%s" % _oj)
+        # ④-3c（`js_diagnostic_head`·⑥events 调用点）`_js_err_head` 有**两处调用点**：⑥-ext（`% (loc, _js_err_head(err))`，
         #   `p78` 的 `find` 只锚这处）与 ⑥ **events**（`head = _js_err_head(err)`）。把 events 那处退回
         #   `err.splitlines()[0]`（＝临时文件路径死链）**三块全绿**（复核实测）⇒ 补：事件 JS 语法错时，
         #   `[FAIL] ⑥ events.<名>` 的正文须含真诊断、⛔ 不含随机临时名。
@@ -1322,24 +1322,24 @@ def _ng_check_controls(tmp, node, failures, write) -> None:
         _rcev, _oev = _run_check_ctl([_pev], node)
         _fev = [l.strip() for l in _oev.splitlines() if l.strip().startswith("[FAIL] ⑥ events.")]
         if not _fev:
-            reg_fail.append("④ ⑥-events（`#78`）事件 JS 语法错没被 ⑥ 报出：\n%s" % _oev)
+            reg_fail.append("④ ⑥-events（`js_diagnostic_head`）事件 JS 语法错没被 ⑥ 报出：\n%s" % _oev)
         elif "Error" not in _fev[0]:
-            reg_fail.append("④ ⑥-events（`#78`）报错正文不含真诊断（`Error`）—— 疑似临时文件路径死链：\n%s" % _oev)
+            reg_fail.append("④ ⑥-events（`js_diagnostic_head`）报错正文不含真诊断（`Error`）—— 疑似临时文件路径死链：\n%s" % _oev)
         if "xwl_ev_" in _oev:
-            reg_fail.append("④ ⑥-events（`#78`）输出含随机临时文件名（`xwl_ev_`）—— 应只给真诊断：\n%s" % _oev)
+            reg_fail.append("④ ⑥-events（`js_diagnostic_head`）输出含随机临时文件名（`xwl_ev_`）—— 应只给真诊断：\n%s" % _oev)
     # ④-4 默认面（承重墙）：不给 `--controls` ⇒ ⑨/⑥-ext 一行都不出现
     _rc0, _o0 = _run_check([_mkreg("def", {"itemId": "g1", "flex": "1"})], node)
     if "⑨" in _o0 or "configs 内联" in _o0:
         reg_fail.append("④ 默认面：不给 `--controls` 时仍打了 ⑨/⑥-ext 的行（承重墙破）：\n%s" % _o0)
-    # ④-5（`#76`）⑨ 运行级汇总的**量纲**须与明细一致 —— 用「N 个节点」而非「N 处」
+    # ④-5（`illegal_config_key_unit`）⑨ 运行级汇总的**量纲**须与明细一致 —— 用「N 个节点」而非「N 处」
     #   （明细是"按节点一行、列该节点**全部**非法键" ⇒ 汇总若按"处"数会与明细的键数对不上：
     #    一节点 3 非法键时明细 3 键、汇总却报"1 处"）。
     _rc9c, _o9c = _run_check_ctl([_mkreg("threebad", {"itemId": "m1", "aaa": "1",
                                                       "bbb": "2", "ccc": "3"})], node)
     if "个节点（涉及" not in _o9c:
-        reg_fail.append("④ ⑨（`#76`）运行级汇总未用「N 个节点（涉及 M 个文件）」量纲：\n%s" % _o9c)
+        reg_fail.append("④ ⑨（`illegal_config_key_unit`）运行级汇总未用「N 个节点（涉及 M 个文件）」量纲：\n%s" % _o9c)
     if _rc9c != 0:
-        reg_fail.append("④ ⑨（`#76`）量纲修正不应改 rc，实得 rc=%s" % _rc9c)
+        reg_fail.append("④ ⑨（`illegal_config_key_unit`）量纲修正不应改 rc，实得 rc=%s" % _rc9c)
     def _run_check_nc(files, node_, **extra):
         """同 `_run_check`，但可加**额外属性**（本段只用 `no_cfgtype=True` / `controls=…`）。
 
@@ -1544,7 +1544,7 @@ def _ng_check_controls(tmp, node, failures, write) -> None:
               " ＋ ⑩ 射程（patch/expand 不判 ⑩、只留 `[warn]` 预告）＋ ⑩ 聚合量纲"
               "（节点去重 / 处数 / 文件数三个数）＋ 拒写归因四类点名（含数量）")
 
-    # ---- ⑤ `#71`（插队）：`check --controls` 的 ⑥-ext **行序确定**（与 seed 无关）----
+    # ---- ⑤ `deterministic_sorted_iteration`（插队）：`check --controls` 的 ⑥-ext **行序确定**（与 seed 无关）----
     #   起因（按守卫维护纪律，不这么做会漏什么）：`_scan_configs_js` 迭代 `reg_types[t]["js"]`，而它是
     #     **`set`** ⇒ 同一节点 **≥2 个坏 `[js]` 键**时，`[FAIL]` 行的**顺序随 `PYTHONHASHSEED` 变**。
     #     CPython 默认开 str hash 随机化 ⇒ 同一命令跑两次都可能不同 ⇒ **破坏本仓「确定 / 可 diff」命门**
@@ -1553,7 +1553,7 @@ def _ng_check_controls(tmp, node, failures, write) -> None:
     #     **规范化后**输出必须**逐字节一致**。
     #     ⚠️ 「规范化」= 把 ⑥ 报错里的临时文件名 `xwl_ev_<随机>.js` 换成 `<TMP>`（`_TMP_EV_RE`）——
     #       该名由 `tempfile` 逐次随机、**与本条无关**。
-    #       ⚠️ `#78` 后 ⑥-ext 报错正文已**不再含临时名**（改取真 `SyntaxError` 行）⇒ 该 `sub`
+    #       ⚠️ `js_diagnostic_head` 后 ⑥-ext 报错正文已**不再含临时名**（改取真 `SyntaxError` 行）⇒ 该 `sub`
     #       现为 **no-op**（保留不删：防将来又引入随机名；届时它仍是必需的归一化）。
     #   触发面 narrow（如实记）：需"注册表**同类型**声明 ≥2 个 `js` 键"且"**同节点 ≥2 个都坏**"
     #     ⇒ 只声明 1 个 `js` 键时**复现不出来**（故夹具**必须** ≥2 个）。
@@ -1579,9 +1579,9 @@ def _ng_check_controls(tmp, node, failures, write) -> None:
                  "type": "label71", "expanded": False, "children": []}]},
             1, CRLF))
     if node is None:
-        print("[note] ⑤ `#71` 行序确定：无 node ⇒ 跳过（⑥-ext 需真跑 node；`--only` 不自动找 node ⇒ 加 `--node`）")
+        print("[note] ⑤ `deterministic_sorted_iteration` 行序确定：无 node ⇒ 跳过（⑥-ext 需真跑 node；`--only` 不自动找 node ⇒ 加 `--node`）")
         if REQUIRE_ALL:
-            _mark_sub(_SUBCHECKS, "js.71", "未完成", "未找到 node，#71 JS 档未跑")
+            _mark_sub(_SUBCHECKS, "js.71", "未完成", "未找到 node，deterministic_sorted_iteration JS 档未跑")
     else:
         _o71 = []
         for _sd in ("0", "1", "2", "3", "4"):
@@ -1592,17 +1592,17 @@ def _ng_check_controls(tmp, node, failures, write) -> None:
         # 非空判据：夹具**必须**真产出 ≥2 条 ⑥-ext FAIL，否则本臂是"绿但空"。
         _nf71 = sum(1 for _l in _o71[0].splitlines() if "[FAIL] ⑥ configs." in _l)
         if _nf71 < 2:
-            hash_fail.append("⑤ `#71` 前置失败：夹具应产出 ≥2 条 ⑥-ext FAIL，实得 %d 条：\n%s"
+            hash_fail.append("⑤ `deterministic_sorted_iteration` 前置失败：夹具应产出 ≥2 条 ⑥-ext FAIL，实得 %d 条：\n%s"
                              % (_nf71, _o71[0]))
         elif len(set(_o71)) != 1:
-            hash_fail.append("⑤ `#71` ⑥-ext 行序随 `PYTHONHASHSEED` 变（应规范化后逐字节一致）：\n"
+            hash_fail.append("⑤ `deterministic_sorted_iteration` ⑥-ext 行序随 `PYTHONHASHSEED` 变（应规范化后逐字节一致）：\n"
                              + "\n".join("  seed=%s:\n%s" % (i, o) for i, o in enumerate(_o71)))
         if hash_fail:
             failures.extend(hash_fail)
         else:
-            print("[ok]  ⑤ `#71` ⑥-ext：同节点 ≥2 个坏 `[js]` 键时，换 5 个 `PYTHONHASHSEED` 输出规范化后逐字节一致")
+            print("[ok]  ⑤ `deterministic_sorted_iteration` ⑥-ext：同节点 ≥2 个坏 `[js]` 键时，换 5 个 `PYTHONHASHSEED` 输出规范化后逐字节一致")
         if REQUIRE_ALL:
-            _mark_sub(_SUBCHECKS, "js.71", "通过", "#71 JS 档已执行")
+            _mark_sub(_SUBCHECKS, "js.71", "通过", "deterministic_sorted_iteration JS 档已执行")
 
 @_cap
 def _ng_contract_and_unit(tmp, node, failures, write) -> None:
@@ -1610,7 +1610,7 @@ def _ng_contract_and_unit(tmp, node, failures, write) -> None:
 
     （从 `_check_new_guards` 原样搬出，判据一行未改。）
     """
-    # ---- ⑬ `#77`：op 清单**逐处**都须对齐写死的权威清单 `_OPS_AUTH`（不只是「两侧互恰」）----
+    # ---- ⑬ `patch_op_list`：op 清单**逐处**都须对齐写死的权威清单 `_OPS_AUTH`（不只是「两侧互恰」）----
     #   起因（按守卫维护纪律，不这么做会漏什么）：`insertKey` 落地后 5 处 op 清单各自漂移；首版判据只比
     #     「epilog 计数 vs `--ops` help 清单」⇒ **两侧同改（都退成 4 个）仍绿**（互恰 ≠ 符实），
     #     且只覆盖第 1 处。现改为对**权威清单**（含顺序）逐处比对：
@@ -1641,12 +1641,12 @@ def _ng_contract_and_unit(tmp, node, failures, write) -> None:
         _ml = re.search(r"[A-Za-z]+(?:/[A-Za-z]+)+", _oh)
         _help_ops = _ml.group(0).split("/") if _ml else []
         if _help_ops != _OPS_AUTH:
-            _c5_fail.append("⑬ `#77`「① `--ops` help」清单 %s != 权威 %s" % (_help_ops, _OPS_AUTH))
+            _c5_fail.append("⑬ `patch_op_list`「① `--ops` help」清单 %s != 权威 %s" % (_help_ops, _OPS_AUTH))
         # ② epilog 的「<N> 种 op」计数
         _mw = re.search(r"([一二三四五六七八九十]+)\s*种\s*op", _epi)
         _n_w = _CN.get(_mw.group(1)) if _mw else None
         if _n_w != len(_OPS_AUTH):
-            _c5_fail.append("⑬ `#77`「② epilog」的「%s种 op」!= 权威长度 %d"
+            _c5_fail.append("⑬ `patch_op_list`「② epilog」的「%s种 op」!= 权威长度 %d"
                             % (_mw.group(1) if _mw else "<缺计数词>", len(_OPS_AUTH)))
         # ③ 文档侧：每处清单都须 == 权威；处数下限＝**本仓实测**（`README.md` 1 处／`SKILL.md` **2 处**——「N 种 op（…）」示例 ＋ 「写 ops.json（…）」步骤／`references/sql-fragments.md` 1 处）。⚠️ 这 3 个数是**魔法数**：改本仓文档结构（如把 `SKILL.md` 两处合并成一处）时**必须同步这里**，否则 ⑬ 对合法合并会**假阳性**。
         for _rel, _min in (("README.md", 1), ("SKILL.md", 2), ("references/sql-fragments.md", 1)):
@@ -1654,19 +1654,19 @@ def _ng_contract_and_unit(tmp, node, failures, write) -> None:
             _txt = io.open(_fp, encoding="utf-8", newline="").read()
             _ls = _ops_lists(_txt)
             if len(_ls) < _min:
-                _c5_fail.append("⑬ `#77`「③ %s」op 清单处数 %d < %d" % (_rel, len(_ls), _min))
+                _c5_fail.append("⑬ `patch_op_list`「③ %s」op 清单处数 %d < %d" % (_rel, len(_ls), _min))
             for _lst in _ls:
                 if _lst != _OPS_AUTH:
-                    _c5_fail.append("⑬ `#77`「③ %s」op 清单 %s != 权威 %s" % (_rel, _lst, _OPS_AUTH))
+                    _c5_fail.append("⑬ `patch_op_list`「③ %s」op 清单 %s != 权威 %s" % (_rel, _lst, _OPS_AUTH))
     except Exception as _e:  # noqa: BLE001
-        _c5_fail.append("⑬ `#77` 机械一致性检查自身出错：%r" % _e)
+        _c5_fail.append("⑬ `patch_op_list` 机械一致性检查自身出错：%r" % _e)
     if _c5_fail:
         failures.extend(_c5_fail)
     else:
-        print("[ok]  ⑬ `#77`：`--ops` help ＋ epilog 计数 ＋ README／SKILL×2／sql-fragments 的 op 清单均 == 权威（%s）"
+        print("[ok]  ⑬ `patch_op_list`：`--ops` help ＋ epilog 计数 ＋ README／SKILL×2／sql-fragments 的 op 清单均 == 权威（%s）"
               % "/".join(_OPS_AUTH))
 
-    # ---- ⑭ `#78`：`_js_err_head` 的**内部判据**（路径行 vs 真诊断）单元级 ----
+    # ---- ⑭ `js_diagnostic_head`：`_js_err_head` 的**内部判据**（路径行 vs 真诊断）单元级 ----
     #   起因（按守卫维护纪律，不这么做会漏什么）：`p78` 的 `find` 锚的是**调用点**（`% (loc, _js_err_head(err))`）
     #     ⇒ 它只守「必须经 `_js_err_head`」；把函数**内部**第一臂退回「含 `Error`」（**路径**含 `Error`
     #     的行被误当诊断），`p78` **仍绿** ⇒ 防路径误判的核心价值无守卫。故补**单元级**断言。
@@ -1681,26 +1681,26 @@ def _ng_contract_and_unit(tmp, node, failures, write) -> None:
     ):
         _got = xwl._js_err_head(_in)
         if _got != _want:
-            _j78_fail.append("⑭ `#78` %s：`_js_err_head(%r)` = %r（应 %r）" % (_why, _in, _got, _want))
+            _j78_fail.append("⑭ `js_diagnostic_head` %s：`_js_err_head(%r)` = %r（应 %r）" % (_why, _in, _got, _want))
     if _j78_fail:
         failures.extend(_j78_fail)
     else:
-        print("[ok]  ⑭ `#78`：`_js_err_head` 单元级 —— 路径含 Error 时取真诊断、无诊断／空输入退化正确")
+        print("[ok]  ⑭ `js_diagnostic_head`：`_js_err_head` 单元级 —— 路径含 Error 时取真诊断、无诊断／空输入退化正确")
 
 @_cap
 def _ng_write_overwrite(tmp, node, failures, write) -> None:
-    """⑥ `#72`：`patch` 覆盖**已存在的容器键**且新值是标量 ⇒ 必须打 `[warn]`（rc 不变）。
+    """⑥ `container_overwrite_guard`：`patch` 覆盖**已存在的容器键**且新值是标量 ⇒ 必须打 `[warn]`（rc 不变）。
 
     （从 `_check_new_guards` 原样搬出，判据一行未改。）
     """
-    # ---- ⑥ `#72`（插队）：`patch` 覆盖**已存在的容器键**（dict/list）且新值是标量 ⇒ 必须可见 ----
+    # ---- ⑥ `container_overwrite_guard`（插队）：`patch` 覆盖**已存在的容器键**（dict/list）且新值是标量 ⇒ 必须可见 ----
     #   起因（按守卫维护纪律）：`set`/`insertKey` 的 path 末段命中一个**已存在的容器键**（`configs`／`children`）
     #     且新值为**标量**时，现行为是**静默把整个容器替换成标量** ⇒ **结构损坏**，却 rc=0、无任何 `[warn]`
     #     （两组独立复测发现、lead 已复现）。修法 ＝ 该 op **打一条 `[warn]`**（⛔ **不改默认拒绝语义** ——
     #     "覆盖已存在的键"不是"新建键"，既有 `create`／`--allow-new-key` 闸门一律不碰）。
     #   判据（先红后绿）：覆盖容器键的 op ⇒ 输出**必须含 `[warn]`**、rc **仍 0**；而"标量→标量"的普通改键
     #     ⇒ **不得**出现该 `[warn]`（默认面其余行为逐字节不变）。夹具取自 `dumps_designer` 的**规范多行**形态
-    #     ⇒ 不会混入"紧凑单行"那条与 `#72` 无关的 `[warn]`。
+    #     ⇒ 不会混入"紧凑单行"那条与 `container_overwrite_guard` 无关的 `[warn]`。
     ov_fail: list[str] = []
     _ov_base = xwl.dumps_designer(
         {"title": "t", "roles": {}, "children": [
@@ -1726,35 +1726,35 @@ def _ng_write_overwrite(tmp, node, failures, write) -> None:
     ):
         _rc, _o = _patch72(_tag, _op)
         if _rc != 0:
-            ov_fail.append("⑥ `#72` %s：覆盖容器键后 rc=%s（应 0 —— 只加信号、不改默认语义）\n%s"
+            ov_fail.append("⑥ `container_overwrite_guard` %s：覆盖容器键后 rc=%s（应 0 —— 只加信号、不改默认语义）\n%s"
                            % (_tag, _rc, _o))
         if "[warn]" not in _o:
-            ov_fail.append("⑥ `#72` %s：覆盖容器键**无 `[warn]`**（静默数据损坏）\n%s" % (_tag, _o))
+            ov_fail.append("⑥ `container_overwrite_guard` %s：覆盖容器键**无 `[warn]`**（静默数据损坏）\n%s" % (_tag, _o))
     # D = 反面：标量 → 标量（普通改键）⇒ **不得**出现该 `[warn]`（默认面其余行为不变）。
     _rc, _o = _patch72("scalar", {"op": "set", "path": ["children", 0, "configs", "url"], "value": "u2"})
     if _rc != 0:
-        ov_fail.append("⑥ `#72` scalar：普通改键 rc=%s（应 0）\n%s" % (_rc, _o))
+        ov_fail.append("⑥ `container_overwrite_guard` scalar：普通改键 rc=%s（应 0）\n%s" % (_rc, _o))
     if "[warn]" in _o:
-        ov_fail.append("⑥ `#72` scalar：普通的『标量→标量』改键**误报 `[warn]`**（应静默）\n%s" % _o)
+        ov_fail.append("⑥ `container_overwrite_guard` scalar：普通的『标量→标量』改键**误报 `[warn]`**（应静默）\n%s" % _o)
     # E = 反面（质询 O7）：**容器 → 容器**（dict→dict）⇒ **不得**出现 `[warn]`（防"过度报警"）。
     _rc, _o = _patch72("cont2cont", {"op": "set", "path": ["children", 0, "configs"], "value": {"url": "u3"}})
     if _rc != 0:
-        ov_fail.append("⑥ `#72` cont2cont：容器→容器 rc=%s（应 0）\n%s" % (_rc, _o))
+        ov_fail.append("⑥ `container_overwrite_guard` cont2cont：容器→容器 rc=%s（应 0）\n%s" % (_rc, _o))
     if "[warn]" in _o:
-        ov_fail.append("⑥ `#72` cont2cont：『容器→容器』改键**误报 `[warn]`**"
+        ov_fail.append("⑥ `container_overwrite_guard` cont2cont：『容器→容器』改键**误报 `[warn]`**"
                        "（应静默 —— 过度报警不被挡）\n%s" % _o)
     # F = 正面（本批补的 list 分支）：**list 分支**下标命中已存在的容器元素、新值为标量 ⇒ 须 `[warn]`
-    #   （list 分支若漏收 `overwrites` ⇒ `#72` 只修了一半）。
+    #   （list 分支若漏收 `overwrites` ⇒ `container_overwrite_guard` 只修了一半）。
     _rc, _o = _patch72("list_idx", {"op": "set", "path": ["children", 0], "value": "z"})
     if _rc != 0:
-        ov_fail.append("⑥ `#72` list_idx：数组元素覆盖 rc=%s（应 0）\n%s" % (_rc, _o))
+        ov_fail.append("⑥ `container_overwrite_guard` list_idx：数组元素覆盖 rc=%s（应 0）\n%s" % (_rc, _o))
     if "[warn]" not in _o:
-        ov_fail.append("⑥ `#72` list_idx：**list 分支**下标命中容器元素、新值为标量**无 `[warn]`**"
-                       "（A1：#72 list 分支漏收 ⇒ 结构损坏静默）\n%s" % _o)
+        ov_fail.append("⑥ `container_overwrite_guard` list_idx：**list 分支**下标命中容器元素、新值为标量**无 `[warn]`**"
+                       "（A1：container_overwrite_guard list 分支漏收 ⇒ 结构损坏静默）\n%s" % _o)
     if ov_fail:
         failures.extend(ov_fail)
     else:
-        print("[ok]  ⑥ `#72` 覆盖容器键（dict/list/insertKey 三形态）⇒ `[warn]` 可见且 rc 仍 0；"
+        print("[ok]  ⑥ `container_overwrite_guard` 覆盖容器键（dict/list/insertKey 三形态）⇒ `[warn]` 可见且 rc 仍 0；"
               "标量→标量 与 容器→容器改键均静默")
 
 @_cap
@@ -1763,7 +1763,7 @@ def _ng_params_defaults(tmp, node, failures, write) -> None:
 
     （从 `_check_new_guards` 原样搬出，判据一行未改。）
     """
-    # ---- ⑦ `#50`（本段序 1）：`params` 需求侧提取 `{?名?}` **前剥注释**（与来源侧同口径）----
+    # ---- ⑦ `sql_comment_stripping`（本段序 1）：`params` 需求侧提取 `{?名?}` **前剥注释**（与来源侧同口径）----
     #   起因（按守卫维护纪律）：需求侧（`module.serverScript` ＋ `dataprovider.sql/totalSql`）提取 `{?名?}` 时**不剥注释**
     #     ⇒ 注释里的占位符也计入 ⇒ **假阳性**（来源侧已剥、需求侧未剥 ⇒ 同工具内两套口径）。
     #   判据（先红后绿）：JS 注释（`//`）与 SQL 行注释（`--`）里的 `{?名?}` **不计入**；代码里的**仍计入**；
@@ -1787,35 +1787,35 @@ def _ng_params_defaults(tmp, node, failures, write) -> None:
     _rc50, _o50 = _run(xwl.cmd_params, file=_p50, module_root=_r50, controls=None,
                        list_fields=False, upstream=False)
     if _rc50 != 0:
-        p50_fail.append("⑦ `#50`：params rc=%s（应 0）\n%s" % (_rc50, _o50))
+        p50_fail.append("⑦ `sql_comment_stripping`：params rc=%s（应 0）\n%s" % (_rc50, _o50))
     if "ghost" in _o50:
-        p50_fail.append("⑦ `#50`：注释里的 `{?名?}` 仍被计入（需求侧未剥注释 ⇒ 假阳性）\n%s" % _o50)
+        p50_fail.append("⑦ `sql_comment_stripping`：注释里的 `{?名?}` 仍被计入（需求侧未剥注释 ⇒ 假阳性）\n%s" % _o50)
     if "real" not in _o50:
-        p50_fail.append("⑦ `#50`：代码里的 `{?名?}` 被误删（应保留）\n%s" % _o50)
-    # `#50`（Q1/Q2/O2）：SQL **块注释** `/* … */` 也要剥 —— ⑦ 只测 `--` 行注释 ⇒ 块注释防线是空的
+        p50_fail.append("⑦ `sql_comment_stripping`：代码里的 `{?名?}` 被误删（应保留）\n%s" % _o50)
+    # `sql_comment_stripping`（Q1/Q2/O2）：SQL **块注释** `/* … */` 也要剥 —— ⑦ 只测 `--` 行注释 ⇒ 块注释防线是空的
     #   （注入"块注释不剥" ⑦ 仍绿）。本条把该臂钉死。
     if "blk" in _o50:
-        p50_fail.append("⑦ `#50`：SQL **块注释** `/* … */` 里的 `{?名?}` 仍被计入"
+        p50_fail.append("⑦ `sql_comment_stripping`：SQL **块注释** `/* … */` 里的 `{?名?}` 仍被计入"
                         "（`strip_sql_comments` 未剥块注释 ⇒ 假阳性）\n%s" % _o50)
-    # `#50`（P3）：SQL **`#` 行注释**（MySQL）也要剥 —— 不剥 `#` ⇒ 被注释掉的引用计入 ⇒ 假阳性。
+    # `sql_comment_stripping`（sql_hash_comment_stripping）：SQL **`#` 行注释**（MySQL）也要剥 —— 不剥 `#` ⇒ 被注释掉的引用计入 ⇒ 假阳性。
     if "hsh" in _o50:
-        p50_fail.append("⑦ `#50`：SQL **`#` 行注释**（MySQL）里的 `{?名?}` 仍被计入"
+        p50_fail.append("⑦ `sql_comment_stripping`：SQL **`#` 行注释**（MySQL）里的 `{?名?}` 仍被计入"
                         "（未剥 `#` ⇒ 假阳性）\n%s" % _o50)
     if "real3" not in _o50:
-        p50_fail.append("⑦ `#50`：`/* */` / `#` 之后的代码里 `{?real3?}` 被误删（应保留）\n%s" % _o50)
-    # `#83`：平台 SQL 的 `{#…#}` 是**模板定界符**（不是注释）—— **同行** `{#…#}` 之后紧跟的
+        p50_fail.append("⑦ `sql_comment_stripping`：`/* */` / `#` 之后的代码里 `{?real3?}` 被误删（应保留）\n%s" % _o50)
+    # `sql_template_delimiter_protection`：平台 SQL 的 `{#…#}` 是**模板定界符**（不是注释）—— **同行** `{#…#}` 之后紧跟的
     #   `{?名?}` **必须仍被识别**。⛔ 旧剥离器把 `#` 无条件当行注释 ⇒ 吞掉同行其后的 `{?名?}`
     #   ⇒ 假阴性（⑦ 原夹具把 `# {?hsh?}` 放**行尾**、`{?real3?}` 放**下一行** ⇒ 恰好绕开该形态）。
     if "real4" not in _o50:
-        p50_fail.append("⑦ `#83`：**同行** `{#…#}` 之后的 `{?real4?}` 被吞"
+        p50_fail.append("⑦ `sql_template_delimiter_protection`：**同行** `{#…#}` 之后的 `{?real4?}` 被吞"
                         "（`{#…#}` 是模板定界符、非注释）\n%s" % _o50)
     if p50_fail:
         failures.extend(p50_fail)
     else:
-        print("[ok]  ⑦ `#50` 需求侧剥注释：`//` / `--` / `#` / `/* */` 注释里的 `{?名?}` 不计、"
+        print("[ok]  ⑦ `sql_comment_stripping` 需求侧剥注释：`//` / `--` / `#` / `/* */` 注释里的 `{?名?}` 不计、"
               "代码里的仍计；`'http://…'` 的 `//` 不误切")
 
-    # ---- ⑧ `#58`（本段序 2）：`params` 「0 个 store」与「有 store 但 SQL 侧无参」**分两句文案** ----
+    # ---- ⑧ `empty_store_vs_no_parameter`（本段序 2）：`params` 「0 个 store」与「有 store 但 SQL 侧无参」**分两句文案** ----
     #   起因（按守卫维护纪律）：两种**不同处境**（页面压根没有 store ／ 有 store 但 SQL 侧无 `{?名?}`）共用**同一句**
     #     `（SQL 侧没有 {?…?} / app.get，跳过交叉核对）` ⇒ 易读成"已核对完成"。⚠️ **落点核对已做**：该行在
     #     `if not needed:` 分支、**不给任何 flag 即达** ⇒ 属**默认面输出变更** ⇒ 已列入本段声明的
@@ -1837,25 +1837,25 @@ def _ng_params_defaults(tmp, node, failures, write) -> None:
     _la58 = [ln for ln in _oa58.splitlines() if "跳过交叉核对" in ln]
     _lb58 = [ln for ln in _ob58.splitlines() if "跳过交叉核对" in ln]
     if _rca58 != 0 or _rcb58 != 0:
-        p58_fail.append("⑧ `#58`：rc 应为 0/0，实得 %s/%s" % (_rca58, _rcb58))
+        p58_fail.append("⑧ `empty_store_vs_no_parameter`：rc 应为 0/0，实得 %s/%s" % (_rca58, _rcb58))
     if len(_la58) != 1 or len(_lb58) != 1:
-        p58_fail.append("⑧ `#58`：应各恰一行「跳过交叉核对」，0 store 得 %d、有 store 得 %d"
+        p58_fail.append("⑧ `empty_store_vs_no_parameter`：应各恰一行「跳过交叉核对」，0 store 得 %d、有 store 得 %d"
                         % (len(_la58), len(_lb58)))
     elif _la58 == _lb58:
-        p58_fail.append("⑧ `#58`：0 store 与 有 store（SQL 侧无参）**共用同一句**（应拆两句）\n"
+        p58_fail.append("⑧ `empty_store_vs_no_parameter`：0 store 与 有 store（SQL 侧无参）**共用同一句**（应拆两句）\n"
                         "  0 store: %s\n  有 store: %s" % (_la58[0], _lb58[0]))
     if "未发现 store" not in _oa58:
-        p58_fail.append("⑧ `#58`：0 store 时未给「未发现 store」文案\n%s" % _oa58)
-    # `#58`/O6（与 ⑩ 同族）：0-store 的「跳过」行既要有「未发现 store」、也要带 `[warn] ` 前缀。
+        p58_fail.append("⑧ `empty_store_vs_no_parameter`：0 store 时未给「未发现 store」文案\n%s" % _oa58)
+    # `empty_store_vs_no_parameter`/O6（与 ⑩ 同族）：0-store 的「跳过」行既要有「未发现 store」、也要带 `[warn] ` 前缀。
     if not _la58 or "[warn]" not in _la58[0]:
-        p58_fail.append("⑧ `#58`：0-store 的「跳过」行未带 `[warn] ` 前缀（可见性信号缺失）：%s" % _la58)
+        p58_fail.append("⑧ `empty_store_vs_no_parameter`：0-store 的「跳过」行未带 `[warn] ` 前缀（可见性信号缺失）：%s" % _la58)
     if p58_fail:
         failures.extend(p58_fail)
     else:
-        print("[ok]  ⑧ `#58`：0 store 与「有 store 但 SQL 侧无参」**分两句**"
+        print("[ok]  ⑧ `empty_store_vs_no_parameter`：0 store 与「有 store 但 SQL 侧无参」**分两句**"
               "（前者含「未发现 store」且带 `[warn] ` 前缀）")
 
-    # ---- ⑨ `#56`（本段序 3）：同载体多 store ⇒ 合并同段输出 ＋ **保留引用计数**（⛔ 不裸去重）----
+    # ---- ⑨ `sql_carrier_deduplication`（本段序 3）：同载体多 store ⇒ 合并同段输出 ＋ **保留引用计数**（⛔ 不裸去重）----
     #   起因（按守卫维护纪律）：`sql_files` 由 store 循环逐个 append ⇒ **同一载体被多 store 引用**时，
     #     下游「`=== SQL 侧: xxx.xwl ===`」段重复打印同一段 N 次（噪音）。本段要求的口径：
     #     **合并 ＋ 保留引用计数**（`（同载体 ×N）`），⛔ **不裸去重** —— 裸去重会把"被 N 处引用"
@@ -1875,20 +1875,20 @@ def _ng_params_defaults(tmp, node, failures, write) -> None:
                        list_fields=False, upstream=False)
     _h56 = [ln for ln in _o56.splitlines() if "=== SQL 侧:" in ln]
     if _rc56 != 0:
-        p56_fail.append("⑨ `#56`：rc=%s（应 0）" % _rc56)
+        p56_fail.append("⑨ `sql_carrier_deduplication`：rc=%s（应 0）" % _rc56)
     if len(_h56) != 1:
-        p56_fail.append("⑨ `#56`：同载体（3 store）的「SQL 侧」段应合并为 1 次，实得 %d 次\n%s"
+        p56_fail.append("⑨ `sql_carrier_deduplication`：同载体（3 store）的「SQL 侧」段应合并为 1 次，实得 %d 次\n%s"
                         % (len(_h56), _o56))
     if _h56 and "×3" not in _h56[0]:
-        p56_fail.append("⑨ `#56`：合并后未保留引用计数（应含「同载体 ×3」）：%s" % _h56[0])
+        p56_fail.append("⑨ `sql_carrier_deduplication`：合并后未保留引用计数（应含「同载体 ×3」）：%s" % _h56[0])
     if p56_fail:
         failures.extend(p56_fail)
     else:
-        print("[ok]  ⑨ `#56`：同载体多 store ⇒ 「SQL 侧」段**合并为 1 次**并**保留引用计数**（同载体 ×3）")
+        print("[ok]  ⑨ `sql_carrier_deduplication`：同载体多 store ⇒ 「SQL 侧」段**合并为 1 次**并**保留引用计数**（同载体 ×3）")
 
-    # ---- ⑩ `#51`（本段序 4）：`params`「跳过交叉核对」默认面目带 `[warn] ` 前缀 ＋ `--upstream` 不扰动 off-mode ----
-    #   起因（按守卫维护纪律）：该行原**无级别前缀** ⇒ 与"已核对完成"肉眼难分（与 `#58` 同族）；且它是 `M5`
-    #     「静默跳过」的读数点（`M5` 跑**默认面**、首分支就判 `"[warn]" in out`）。本条**无条件**把
+    # ---- ⑩ `warning_severity_prefix`（本段序 4）：`params`「跳过交叉核对」默认面目带 `[warn] ` 前缀 ＋ `--upstream` 不扰动 off-mode ----
+    #   起因（按守卫维护纪律）：该行原**无级别前缀** ⇒ 与"已核对完成"肉眼难分（与 `empty_store_vs_no_parameter` 同族）；且它是 `default_surface_probe`
+    #     「静默跳过」的读数点（`default_surface_probe` 跑**默认面**、首分支就判 `"[warn]" in out`）。本条**无条件**把
     #     `[warn] ` 前置到「跳过交叉核对」那两句上；⚠️ `rc` **不变**（该分支恒 `return 0`）。
     #   判据（先红后绿）：
     #     ① 有 store、SQL 侧无参页的**默认面**输出，该行**含 `[warn] `**（`rc` 仍 0）；
@@ -1909,13 +1909,13 @@ def _ng_params_defaults(tmp, node, failures, write) -> None:
     _sa51 = [ln for ln in _o_a51.splitlines() if "跳过交叉核对" in ln]
     _sb51 = [ln for ln in _o_b51.splitlines() if "跳过交叉核对" in ln]
     if _rc_a51 != 0:
-        p51_fail.append("⑩ `#51`：默认面 rc=%s（应 0）" % _rc_a51)
+        p51_fail.append("⑩ `warning_severity_prefix`：默认面 rc=%s（应 0）" % _rc_a51)
     if len(_sa51) != 1 or "[warn]" not in _sa51[0]:
-        p51_fail.append("⑩ `#51`：默认面「跳过」行未带 `[warn] `：%s" % _sa51)
+        p51_fail.append("⑩ `warning_severity_prefix`：默认面「跳过」行未带 `[warn] `：%s" % _sa51)
     if _sa51 != _sb51:
-        p51_fail.append("⑩ `#51`：`--upstream` 扰动了 off-mode 的「跳过」行：\n  关:%s\n  开:%s"
+        p51_fail.append("⑩ `warning_severity_prefix`：`--upstream` 扰动了 off-mode 的「跳过」行：\n  关:%s\n  开:%s"
                         % (_sa51, _sb51))
-    # `#51`/O6：**0-store 行**（`未发现 store`）也要带 `[warn] ` 前缀（⑩ 只测 1-store 行）。
+    # `warning_severity_prefix`/O6：**0-store 行**（`未发现 store`）也要带 `[warn] ` 前缀（⑩ 只测 1-store 行）。
     _r51z = os.path.join(tmp, "pm_p51z")
     _p51z = os.path.join(_r51z, "p51z.xwl")
     _dump({"title": "p51z", "children": [                                 # 0 个 store
@@ -1925,16 +1925,16 @@ def _ng_params_defaults(tmp, node, failures, write) -> None:
                            list_fields=False, upstream=False)
     _sz51 = [ln for ln in _o_z51.splitlines() if "跳过交叉核对" in ln]
     if _rc_z51 != 0:
-        p51_fail.append("⑩ `#51`：0-store 页 rc=%s（应 0）" % _rc_z51)
+        p51_fail.append("⑩ `warning_severity_prefix`：0-store 页 rc=%s（应 0）" % _rc_z51)
     if len(_sz51) != 1 or "[warn]" not in _sz51[0] or "未发现 store" not in _sz51[0]:
-        p51_fail.append("⑩ `#51`：0-store 页「跳过」行未带 `[warn] ` 或未用「未发现 store」文案：%s" % _sz51)
+        p51_fail.append("⑩ `warning_severity_prefix`：0-store 页「跳过」行未带 `[warn] ` 或未用「未发现 store」文案：%s" % _sz51)
     if p51_fail:
         failures.extend(p51_fail)
     else:
-        print("[ok]  ⑩ `#51`：「跳过」行默认面带 `[warn] `（1-store 与 0-store 两行都测）、rc 仍 0；"
+        print("[ok]  ⑩ `warning_severity_prefix`：「跳过」行默认面带 `[warn] `（1-store 与 0-store 两行都测）、rc 仍 0；"
               "`--upstream` 不扰动该行")
 
-    # ---- ⑪ `#53`（本段序 5）：`params --upstream` 目标键**参数化** ⇒ 目标为 **SQL 载体** 时文案分场景 ----
+    # ---- ⑪ `upstream_target_context`（本段序 5）：`params --upstream` 目标键**参数化** ⇒ 目标为 **SQL 载体** 时文案分场景 ----
     #   起因（按守卫维护纪律）：`_scan_upstream` 只反查"谁调用本页"，**载体**被谁引用**无反向引用能力**
     #     ⇒ 孤儿载体静默（`check` / `sqlrefs` 均无根，故落 `params --upstream`）。本条把目标键参数化
     #     （默认 ＝ 本文件键）：目标为 **页面**时输出**逐字节不变**（承重墙），目标为 **载体**时给
@@ -1953,157 +1953,157 @@ def _ng_params_defaults(tmp, node, failures, write) -> None:
     _rc53p, _o53p = _run(xwl.cmd_params, file=_p53page, module_root=_r53, controls=None,
                          list_fields=False, upstream=True)
     if _rc53c != 0 or _rc53p != 0:
-        p53_fail.append("⑪ `#53`：rc 应为 0/0，实得 %s/%s" % (_rc53c, _rc53p))
+        p53_fail.append("⑪ `upstream_target_context`：rc 应为 0/0，实得 %s/%s" % (_rc53c, _rc53p))
     if "引用本载体的页面" not in _o53c:
-        p53_fail.append("⑪ `#53`：载体目标的 `--upstream` 未给「引用本载体的页面」段\n%s" % _o53c)
+        p53_fail.append("⑪ `upstream_target_context`：载体目标的 `--upstream` 未给「引用本载体的页面」段\n%s" % _o53c)
     if "p53.xwl" not in _o53c:
-        p53_fail.append("⑪ `#53`：载体目标未列出引用方页面（p53.xwl）\n%s" % _o53c)
+        p53_fail.append("⑪ `upstream_target_context`：载体目标未列出引用方页面（p53.xwl）\n%s" % _o53c)
     if "引用本载体" in _o53p:
-        p53_fail.append("⑪ `#53`：页面目标误用了载体文案（应「外部可传入」）\n%s" % _o53p)
+        p53_fail.append("⑪ `upstream_target_context`：页面目标误用了载体文案（应「外部可传入」）\n%s" % _o53p)
     if "外部可传入" not in _o53p:
-        p53_fail.append("⑪ `#53`：页面目标的 `--upstream` 丢了既有「外部可传入」段\n%s" % _o53p)
+        p53_fail.append("⑪ `upstream_target_context`：页面目标的 `--upstream` 丢了既有「外部可传入」段\n%s" % _o53p)
     if p53_fail:
         failures.extend(p53_fail)
     else:
-        print("[ok]  ⑪ `#53`：`--upstream` 目标为**载体** ⇒ 「引用本载体的页面」并列出引用方；"
+        print("[ok]  ⑪ `upstream_target_context`：`--upstream` 目标为**载体** ⇒ 「引用本载体的页面」并列出引用方；"
               "目标为**页面** ⇒ 仍「外部可传入」（文案分场景）")
 
-    # ---- ⑫ `#36`（本段序 4）：`params --strict` 下「真·悬空」取数 url **判失败（rc=1）**；显式占位只 `[note]` ----
+    # ---- ⑫ `取数 url`（本段序 4）：`params --strict` 下「真·悬空」取数 url **判失败（rc=1）**；显式占位只 `[note]` ----
     #   起因（按守卫维护纪律）：`params` 对「取数 url 指向的文件不存在」不给信号（加 `--strict` 仍 rc=0）⇒ 与
     #     「SQL 缺来源判 rc=1」判据不对称。⭐ **本段"翻脸"**：真·悬空 ⇒ `--strict` 下**单列为失败项**；
     #     显式占位（`<…>` / `…` / `__MODULE__`）识别为**有意待定** ⇒ **永不判红**（否则批量页面对占位写法即大规模误判）。
     #   ⭐ **两条出口都要承载**：末行判定 ＋ **早返出口**（"悬空-only"页走的正是早返）——
-    #     下面 ①（`p36dang`，悬空-only ⇒ 早返）与 ④（`p36final`，有 needed ⇒ 末行）**各钉一条**，⛔ 缺一即漏。
-    #   判据（先红后绿）：① 悬空页 `--strict` ⇒ 含 `[warn]` ＋ `#36`、`rc` **＝ 1**；
-    #     ② 占位页 `--strict` ⇒ 含 `[note]` ＋ `#36`、**无** `#36` 的 `[warn]`、`rc` 仍 0；
-    #     ③ 悬空页**不给** `--strict` ⇒ **无** `#36` 行 ＋ `rc` **仍 0**（**默认面不动**）；
+    #     下面 ①（`mxwl_target_dangling`，悬空-only ⇒ 早返）与 ④（`mxwl_target_final_path`，有 needed ⇒ 末行）**各钉一条**，⛔ 缺一即漏。
+    #   判据（先红后绿）：① 悬空页 `--strict` ⇒ 含 `[warn]` ＋ `取数 url`、`rc` **＝ 1**；
+    #     ② 占位页 `--strict` ⇒ 含 `[note]` ＋ `取数 url`、**无** `取数 url` 的 `[warn]`、`rc` 仍 0；
+    #     ③ 悬空页**不给** `--strict` ⇒ **无** `取数 url` 行 ＋ `rc` **仍 0**（**默认面不动**）；
     #     ④ 有 needed ＋ 悬空（走末行）⇒ `[warn]` ＋ `rc` **＝ 1**。
-    p36_fail: list[str] = []
-    _r36 = os.path.join(tmp, "pm_p36")
-    _p36d = os.path.join(_r36, "p36dang.xwl")
-    _dump({"title": "p36dang", "children": [                               # 悬空（载体不存在）
+    _mxwl_target_failures: list[str] = []
+    _mxwl_target_root = os.path.join(tmp, "pm_p36")
+    _dangling_page = os.path.join(_mxwl_target_root, "mxwl_target_dangling.xwl")
+    _dump({"title": "mxwl_target_dangling", "children": [                               # 悬空（载体不存在）
         {"configs": {"itemId": "viewport"}, "type": "viewport", "expanded": False,
-         "children": [_store("st36d", "m?xwl=sub/nope36")]}]}, _p36d)
-    _p36p = os.path.join(_r36, "p36ph.xwl")
-    _dump({"title": "p36ph", "children": [                                 # 显式占位
+         "children": [_store("danglingStore", "m?xwl=sub/nope36")]}]}, _dangling_page)
+    _placeholder_page = os.path.join(_mxwl_target_root, "mxwl_target_placeholder.xwl")
+    _dump({"title": "mxwl_target_placeholder", "children": [                                 # 显式占位
         {"configs": {"itemId": "viewport"}, "type": "viewport", "expanded": False,
-         "children": [_store("st36p", "m?xwl=<待定>/querySql")]}]}, _p36p)
-    _rc36d, _o36d = _run(xwl.cmd_params, file=_p36d, module_root=_r36, controls=None,
+         "children": [_store("placeholderStore", "m?xwl=<待定>/querySql")]}]}, _placeholder_page)
+    _dangling_rc, _dangling_output = _run(xwl.cmd_params, file=_dangling_page, module_root=_mxwl_target_root, controls=None,
                          list_fields=False, upstream=False, strict=True)
-    _rc36p, _o36p = _run(xwl.cmd_params, file=_p36p, module_root=_r36, controls=None,
+    _placeholder_rc, _placeholder_output = _run(xwl.cmd_params, file=_placeholder_page, module_root=_mxwl_target_root, controls=None,
                          list_fields=False, upstream=False, strict=True)
-    _rc36n, _o36n = _run(xwl.cmd_params, file=_p36d, module_root=_r36, controls=None,
+    _default_rc, _default_output = _run(xwl.cmd_params, file=_dangling_page, module_root=_mxwl_target_root, controls=None,
                          list_fields=False, upstream=False, strict=False)
-    if _rc36d != 1:
-        p36_fail.append("⑫ `#36`：悬空页 `--strict` rc=%s（应 1：真·悬空按 `--strict` 判失败）" % _rc36d)
-    if not any(l.strip().startswith("[warn]") and "#36" in l for l in _o36d.splitlines()):
-        p36_fail.append("⑫ `#36`：悬空页 `--strict` 未打 `[warn]`（`#36` 失败信号）\n%s" % _o36d)
-    if _rc36p != 0:
-        p36_fail.append("⑫ `#36`：占位页 `--strict` rc=%s（应 0）" % _rc36p)
-    if not any(l.strip().startswith("[note]") and "#36" in l for l in _o36p.splitlines()):
-        p36_fail.append("⑫ `#36`：占位页 `--strict` 未打 `[note]`（豁免未生效）\n%s" % _o36p)
-    if any(l.strip().startswith("[warn]") and "#36" in l for l in _o36p.splitlines()):
-        p36_fail.append("⑫ `#36`：显式占位被误判红（应只 `[note]`）\n%s" % _o36p)
-    if "#36" in _o36n:
-        p36_fail.append("⑫ `#36`：不给 `--strict` 时仍出现 `#36` 行（默认面被动）\n%s" % _o36n)
-    if _rc36n != 0:
-        p36_fail.append("⑫ `#36`：悬空页**不给 `--strict`** 时 rc=%s（应 0 —— 翻脸只发生在 `--strict` 下，"
-                        "**默认面必须不动**）" % _rc36n)
-    # `#36`/O3：**最终返回路径**（有 `needed` ⇒ 不走早返分支）也要打 `[warn]` 预告 —— ⑫ 只走早返
-    #   ⇒ 撤最终路径那处 `_emit_36` 无人报红（盲点）。夹具须让 SQL 侧有 `{?名?}`（needed 非空 ⇒ 走最终返回）。
-    _p36f = os.path.join(_r36, "p36final.xwl")
-    _car36 = xwl.skeleton_sql("c36final")
-    _car36["children"][0]["children"][0]["configs"]["sql"] = "select a from t where a={?x?}"
-    _dump(_car36, os.path.join(_r36, "sub", "sel36.xwl"))
-    _dump({"title": "p36final", "children": [
+    if _dangling_rc != 1:
+        _mxwl_target_failures.append("⑫ `取数 url`：悬空页 `--strict` rc=%s（应 1：真·悬空按 `--strict` 判失败）" % _dangling_rc)
+    if not any(l.strip().startswith("[warn]") and "取数 url" in l for l in _dangling_output.splitlines()):
+        _mxwl_target_failures.append("⑫ `取数 url`：悬空页 `--strict` 未打 `[warn]`（`取数 url` 失败信号）\n%s" % _dangling_output)
+    if _placeholder_rc != 0:
+        _mxwl_target_failures.append("⑫ `取数 url`：占位页 `--strict` rc=%s（应 0）" % _placeholder_rc)
+    if not any(l.strip().startswith("[note]") and "取数 url" in l for l in _placeholder_output.splitlines()):
+        _mxwl_target_failures.append("⑫ `取数 url`：占位页 `--strict` 未打 `[note]`（豁免未生效）\n%s" % _placeholder_output)
+    if any(l.strip().startswith("[warn]") and "取数 url" in l for l in _placeholder_output.splitlines()):
+        _mxwl_target_failures.append("⑫ `取数 url`：显式占位被误判红（应只 `[note]`）\n%s" % _placeholder_output)
+    if "取数 url" in _default_output:
+        _mxwl_target_failures.append("⑫ `取数 url`：不给 `--strict` 时仍出现 `取数 url` 行（默认面被动）\n%s" % _default_output)
+    if _default_rc != 0:
+        _mxwl_target_failures.append("⑫ `取数 url`：悬空页**不给 `--strict`** 时 rc=%s（应 0 —— 翻脸只发生在 `--strict` 下，"
+                        "**默认面必须不动**）" % _default_rc)
+    # `取数 url`/O3：**最终返回路径**（有 `needed` ⇒ 不走早返分支）也要打 `[warn]` 预告 —— ⑫ 只走早返
+    #   ⇒ 撤最终路径那处 `_emit_mxwl_target_notes` 无人报红（盲点）。夹具须让 SQL 侧有 `{?名?}`（needed 非空 ⇒ 走最终返回）。
+    _final_path_page = os.path.join(_mxwl_target_root, "mxwl_target_final_path.xwl")
+    _final_path_carrier = xwl.skeleton_sql("mxwl_target_carrier_body")
+    _final_path_carrier["children"][0]["children"][0]["configs"]["sql"] = "select a from t where a={?x?}"
+    _dump(_final_path_carrier, os.path.join(_mxwl_target_root, "sub", "mxwl_target_carrier.xwl"))
+    _dump({"title": "mxwl_target_final_path", "children": [
         {"configs": {"itemId": "viewport"}, "type": "viewport", "expanded": False,
          # ⭐ 末行出口的判据必须**只由 dangling 决定** ⇒ 该 store 用**字符串**形态的 `params`
          #   （`xwl.py:5666`：只认字符串）把 SQL 侧的 `x` **给出来** ⇒ `miss` 为空。
          #   ⛔ 不给来源的话 `miss` 也会把 rc 顶到 1，那样"取消 dangling 判定"**测不出来**。
-         "children": [{"configs": {"itemId": "st36v", "url": "m?xwl=sub/sel36",
+         "children": [{"configs": {"itemId": "providedStore", "url": "m?xwl=sub/mxwl_target_carrier",
                                    "params": "{x: 1}"},
                        "type": "store", "expanded": False, "children": []},
-                      _store("st36f", "m?xwl=sub/nope36")]}]}, _p36f)   # 悬空
-    _rc36f, _o36f = _run(xwl.cmd_params, file=_p36f, module_root=_r36, controls=None,
+                      _store("missingStore", "m?xwl=sub/nope36")]}]}, _final_path_page)   # 悬空
+    _final_path_rc, _final_path_output = _run(xwl.cmd_params, file=_final_path_page, module_root=_mxwl_target_root, controls=None,
                          list_fields=False, upstream=False, strict=True)
-    if not any(l.strip().startswith("[warn]") and "#36" in l for l in _o36f.splitlines()):
-        p36_fail.append("⑫ `#36`：**最终返回路径**（有 needed）未打 `[warn]`"
-                        "（撤最终路径那处 `_emit_36` 无人报红 ⇒ 盲点）\n%s" % _o36f)
-    if _rc36f != 1:
-        p36_fail.append("⑫ `#36`：**最终返回路径**（有 needed ＋ 悬空）`--strict` rc=%s"
-                        "（应 1 —— 末行判定必须把 `dangling36` 一并计入）" % _rc36f)
-    # `#36`/O4：`common/` **框架端点**豁免 ⇒ 不打任何 `#36` 行（改成判 dangling 则本条红）。
-    _p36c = os.path.join(_r36, "p36common.xwl")
-    _dump({"title": "p36common", "children": [
+    if not any(l.strip().startswith("[warn]") and "取数 url" in l for l in _final_path_output.splitlines()):
+        _mxwl_target_failures.append("⑫ `取数 url`：**最终返回路径**（有 needed）未打 `[warn]`"
+                        "（撤最终路径那处 `_emit_mxwl_target_notes` 无人报红 ⇒ 盲点）\n%s" % _final_path_output)
+    if _final_path_rc != 1:
+        _mxwl_target_failures.append("⑫ `取数 url`：**最终返回路径**（有 needed ＋ 悬空）`--strict` rc=%s"
+                        "（应 1 —— 末行判定必须把 `dangling_targets` 一并计入）" % _final_path_rc)
+    # `取数 url`/O4：`common/` **框架端点**豁免 ⇒ 不打任何 `取数 url` 行（改成判 dangling 则本条红）。
+    _framework_page = os.path.join(_mxwl_target_root, "mxwl_target_framework.xwl")
+    _dump({"title": "mxwl_target_framework", "children": [
         {"configs": {"itemId": "viewport"}, "type": "viewport", "expanded": False,
-         "children": [_store("st36c", "m?xwl=common/nope36")]}]}, _p36c)
-    _rc36c, _o36c = _run(xwl.cmd_params, file=_p36c, module_root=_r36, controls=None,
+         "children": [_store("frameworkStore", "m?xwl=common/nope36")]}]}, _framework_page)
+    _framework_rc, _framework_output = _run(xwl.cmd_params, file=_framework_page, module_root=_mxwl_target_root, controls=None,
                          list_fields=False, upstream=False, strict=True)
-    if "#36" in _o36c:
-        p36_fail.append("⑫ `#36`：`common/` 框架端点**未被豁免**（不该出任何 `#36` 行）\n%s" % _o36c)
-    # `#36`/`__MODULE__` **三态覆盖**（本块补齐：`__MODULE__` 在本块**零覆盖** —— 占位 / 真悬空 /
-    #   真存在三态一条断言都没有 ⇒ 把 `_mod36_state` 改坏也没人报红）。
+    if "取数 url" in _framework_output:
+        _mxwl_target_failures.append("⑫ `取数 url`：`common/` 框架端点**未被豁免**（不该出任何 `取数 url` 行）\n%s" % _framework_output)
+    # `取数 url`/`__MODULE__` **三态覆盖**（本块补齐：`__MODULE__` 在本块**零覆盖** —— 占位 / 真悬空 /
+    #   真存在三态一条断言都没有 ⇒ 把 `_resolve_module_placeholder` 改坏也没人报红）。
     #   ⭐ 起因（先红后绿）：`__MODULE__/<abc>` 原走 `resolved` ⇒ Windows 下 `<`/`>` 是**非法文件名字符**
-    #     ⇒ `os.path.exists` 恒 `False` ⇒ 必进 `dangling36` ⇒ `--strict` 把"有意待定"**确定性判红**；
-    #     而 `<abc>` 按 `_ref_kind36` 的语义本该永不判红 ⇒ 判据在"两段判"处漏了"**段内占位**"这一面。
-    #   ① 纯函数直接判 `_mod36_state`（⛔ 不跑子进程、不依赖现网语料）：占位 / 真悬空 / 真存在三态；
-    #   ② 端到端两条：占位页 `--strict` ⇒ `rc=0` ＋ `[note]`（⛔ 无 `#36` 的 `[warn]`）；
+    #     ⇒ `os.path.exists` 恒 `False` ⇒ 必进 `dangling_targets` ⇒ `--strict` 把"有意待定"**确定性判红**；
+    #     而 `<abc>` 按 `_classify_mxwl_target` 的语义本该永不判红 ⇒ 判据在"两段判"处漏了"**段内占位**"这一面。
+    #   ① 纯函数直接判 `_resolve_module_placeholder`（⛔ 不跑子进程、不依赖现网语料）：占位 / 真悬空 / 真存在三态；
+    #   ② 端到端两条：占位页 `--strict` ⇒ `rc=0` ＋ `[note]`（⛔ 无 `取数 url` 的 `[warn]`）；
     #      **反向对照**（⛔ 不能省，否则等于用"放宽占位"换掉"真悬空"）：真悬空页 `--strict` ⇒ 仍 `rc=1`。
-    _p36mod = os.path.join(_r36, "p36mod.xwl")
-    _dump({"title": "p36mod", "children": [
+    _module_placeholder_page = os.path.join(_mxwl_target_root, "mxwl_target_module_placeholder.xwl")
+    _dump({"title": "mxwl_target_module_placeholder", "children": [
         {"configs": {"itemId": "viewport"}, "type": "viewport", "expanded": False,
-         "children": [_store("st36m", "m?xwl=__MODULE__/<abc>")]}]}, _p36mod)
-    _p36modx = os.path.join(_r36, "p36modx.xwl")
-    _dump({"title": "p36modx", "children": [
+         "children": [_store("modulePlaceholderStore", "m?xwl=__MODULE__/<abc>")]}]}, _module_placeholder_page)
+    _module_missing_page = os.path.join(_mxwl_target_root, "mxwl_target_module_missing.xwl")
+    _dump({"title": "mxwl_target_module_missing", "children": [
         {"configs": {"itemId": "viewport"}, "type": "viewport", "expanded": False,
-         "children": [_store("st36x", "m?xwl=__MODULE__/missing")]}]}, _p36modx)
-    _dump({"title": "here", "children": []}, os.path.join(_r36, "here.xwl"))   # ③ 的"真存在"靶
+         "children": [_store("moduleMissingStore", "m?xwl=__MODULE__/missing")]}]}, _module_missing_page)
+    _dump({"title": "here", "children": []}, os.path.join(_mxwl_target_root, "here.xwl"))   # ③ 的"真存在"靶
     # ① 纯函数三态：`(state, fp, why)` —— **why 的关键字**才是判据（`unresolved` 另有别的原因，
     #   只看状态会把"没给根 / 根不像根"误当成"占位放过"）。
-    _s36a = xwl._mod36_state(_r36, _p36mod, "__MODULE__/<abc>", "ok")
-    if _s36a[0] != "unresolved" or _s36a[1] is not None or "显式占位" not in (_s36a[2] or ""):
-        p36_fail.append("⑫ `#36`：`__MODULE__/<abc>` 应**按显式占位放过**"
-                        "（`unresolved` ＋ `fp is None` ＋ why 含「显式占位」），实得 %r" % (_s36a,))
-    _s36b = xwl._mod36_state(_r36, _p36mod, "__MODULE__/missing", "ok")
-    if _s36b[0] != "resolved" or not _s36b[1] or os.path.exists(_s36b[1]):
-        p36_fail.append("⑫ `#36`：`__MODULE__/missing` 应**仍判真悬空**（`resolved` ＋ 指向不存在的文件），"
-                        "实得 %r" % (_s36b,))
-    _s36c = xwl._mod36_state(_r36, _p36mod, "__MODULE__/here", "ok")
-    if _s36c[0] != "resolved" or not _s36c[1] or not os.path.exists(_s36c[1]):
-        p36_fail.append("⑫ `#36`：`__MODULE__/here`（文件真存在）应 `resolved` ＋ `exists`，实得 %r" % (_s36c,))
+    _module_placeholder_state = xwl._resolve_module_placeholder(_mxwl_target_root, _module_placeholder_page, "__MODULE__/<abc>", "ok")
+    if _module_placeholder_state[0] != "unresolved" or _module_placeholder_state[1] is not None or "显式占位" not in (_module_placeholder_state[2] or ""):
+        _mxwl_target_failures.append("⑫ `取数 url`：`__MODULE__/<abc>` 应**按显式占位放过**"
+                        "（`unresolved` ＋ `fp is None` ＋ why 含「显式占位」），实得 %r" % (_module_placeholder_state,))
+    _module_missing_state = xwl._resolve_module_placeholder(_mxwl_target_root, _module_placeholder_page, "__MODULE__/missing", "ok")
+    if _module_missing_state[0] != "resolved" or not _module_missing_state[1] or os.path.exists(_module_missing_state[1]):
+        _mxwl_target_failures.append("⑫ `取数 url`：`__MODULE__/missing` 应**仍判真悬空**（`resolved` ＋ 指向不存在的文件），"
+                        "实得 %r" % (_module_missing_state,))
+    _module_present_state = xwl._resolve_module_placeholder(_mxwl_target_root, _module_placeholder_page, "__MODULE__/here", "ok")
+    if _module_present_state[0] != "resolved" or not _module_present_state[1] or not os.path.exists(_module_present_state[1]):
+        _mxwl_target_failures.append("⑫ `取数 url`：`__MODULE__/here`（文件真存在）应 `resolved` ＋ `exists`，实得 %r" % (_module_present_state,))
     # ② 端到端：占位页 `--strict` ⇒ rc=0、只有 `[note]`；反向对照真悬空页 ⇒ rc 仍 1 ＋ `[warn]`。
-    _rc36m, _o36m = _run(xwl.cmd_params, file=_p36mod, module_root=_r36, controls=None,
+    _module_placeholder_rc, _module_placeholder_output = _run(xwl.cmd_params, file=_module_placeholder_page, module_root=_mxwl_target_root, controls=None,
                          list_fields=False, upstream=False, strict=True)
-    if _rc36m != 0:
-        p36_fail.append("⑫ `#36`：`__MODULE__/<abc>`（显式占位）`--strict` rc=%s（应 0 —— "
-                        "占位不该被 `dangling36` 判红）\n%s" % (_rc36m, _o36m))
-    if not any(l.strip().startswith("[note]") and "#36" in l for l in _o36m.splitlines()):
-        p36_fail.append("⑫ `#36`：`__MODULE__/<abc>` 未打 `[note]`（占位未交代）\n%s" % _o36m)
-    if any(l.strip().startswith("[warn]") and "#36" in l for l in _o36m.splitlines()):
-        p36_fail.append("⑫ `#36`：`__MODULE__/<abc>` 被误判成**真悬空**（应只 `[note]`）\n%s" % _o36m)
-    _rc36x, _o36x = _run(xwl.cmd_params, file=_p36modx, module_root=_r36, controls=None,
+    if _module_placeholder_rc != 0:
+        _mxwl_target_failures.append("⑫ `取数 url`：`__MODULE__/<abc>`（显式占位）`--strict` rc=%s（应 0 —— "
+                        "占位不该被 `dangling_targets` 判红）\n%s" % (_module_placeholder_rc, _module_placeholder_output))
+    if not any(l.strip().startswith("[note]") and "取数 url" in l for l in _module_placeholder_output.splitlines()):
+        _mxwl_target_failures.append("⑫ `取数 url`：`__MODULE__/<abc>` 未打 `[note]`（占位未交代）\n%s" % _module_placeholder_output)
+    if any(l.strip().startswith("[warn]") and "取数 url" in l for l in _module_placeholder_output.splitlines()):
+        _mxwl_target_failures.append("⑫ `取数 url`：`__MODULE__/<abc>` 被误判成**真悬空**（应只 `[note]`）\n%s" % _module_placeholder_output)
+    _module_missing_rc, _module_missing_output = _run(xwl.cmd_params, file=_module_missing_page, module_root=_mxwl_target_root, controls=None,
                          list_fields=False, upstream=False, strict=True)
-    if _rc36x != 1:
-        p36_fail.append("⑫ `#36`：`__MODULE__/missing`（真悬空）`--strict` rc=%s（应 1 —— "
-                        "反向对照：放宽占位不得连真悬空一起放过）\n%s" % (_rc36x, _o36x))
-    if not any(l.strip().startswith("[warn]") and "#36" in l for l in _o36x.splitlines()):
-        p36_fail.append("⑫ `#36`：`__MODULE__/missing` 未打 `[warn]`（真悬空未判）\n%s" % _o36x)
-    if p36_fail:
-        failures.extend(p36_fail)
+    if _module_missing_rc != 1:
+        _mxwl_target_failures.append("⑫ `取数 url`：`__MODULE__/missing`（真悬空）`--strict` rc=%s（应 1 —— "
+                        "反向对照：放宽占位不得连真悬空一起放过）\n%s" % (_module_missing_rc, _module_missing_output))
+    if not any(l.strip().startswith("[warn]") and "取数 url" in l for l in _module_missing_output.splitlines()):
+        _mxwl_target_failures.append("⑫ `取数 url`：`__MODULE__/missing` 未打 `[warn]`（真悬空未判）\n%s" % _module_missing_output)
+    if _mxwl_target_failures:
+        failures.extend(_mxwl_target_failures)
     else:
-        print("[ok]  ⑫ `#36`：`--strict` 下真·悬空取数 url ⇒ `[warn]` ＋ **rc=1**"
+        print("[ok]  ⑫ `取数 url`：`--strict` 下真·悬空取数 url ⇒ `[warn]` ＋ **rc=1**"
               "（⭐ **早返 ＋ 末行两出口都承载**）；显式占位 ⇒ 只 `[note]`、rc 仍 0；"
-              "`common/` 端点 ⇒ 不出 `#36`；不给 `--strict` ⇒ 无 `#36` 行、**rc 仍 0（默认面不动）**；"
+              "`common/` 端点 ⇒ 不出 `取数 url`；不给 `--strict` ⇒ 无 `取数 url` 行、**rc 仍 0（默认面不动）**；"
               "`__MODULE__` 三态 ⇒ 段内占位按占位 `[note]`（rc 0）／真悬空仍 `[warn]`（rc 1）／真存在 `resolved`")
 
 @_cap
 def _ng_platform(tmp, node, failures, write) -> None:
-    """⑮ `#75` 模块根／⑯ `#74` 坏 `--controls`／⑰ `#80` 分组名 —— **平台面**（⑮ 的夹具被⑯⑰ 复用）。
+    """⑮ `module_root_validation` 模块根／⑯ `registry_load_visibility` 坏 `--controls`／⑰ `mxwl_reference_grouping` 分组名 —— **平台面**（⑮ 的夹具被⑯⑰ 复用）。
 
     （从 `_check_new_guards` 原样搬出，判据一行未改。）
     """
-    # ---- ⑮ `#75`（本段序）：模块根「**存在但不像模块根**」⇒ store 支 / direct 支**两站点**都改「未核对」----
-    #   起因（按守卫维护纪律）：`--module-root` 误指向（如 webapp 根而非 `…/wb/modules`）时，`#75` 判据随**目录规模**
+    # ---- ⑮ `module_root_validation`（本段序）：模块根「**存在但不像模块根**」⇒ store 支 / direct 支**两站点**都改「未核对」----
+    #   起因（按守卫维护纪律）：`--module-root` 误指向（如 webapp 根而非 `…/wb/modules`）时，`module_root_validation` 判据随**目录规模**
     #     变（实测：1 文件 ⇒ `suspect`；400 文件 ⇒ `suspect`；放 1 个 `.xwl` ⇒ 翻 `ok`）—— 若仍按
     #     `os.path.exists` 判 ⇒ 会**谎报「未找到」**（那是"载体悬空"的意思、`--strict` 下还冤枉判红）。
     #   ⭐ **两站点各一条**：store 支（`xwl.py:5563`）与 direct 支（`xwl.py:5612`）**独立** ⇒ 缺一即漏（故两处都造）。
@@ -2121,7 +2121,7 @@ def _ng_platform(tmp, node, failures, write) -> None:
     #   两站点断言全部落空却仍"绿"）⇒ 先断言该不变式、再谈行为断言。
     _x75 = [_f for _dp, _dn, _fs in os.walk(_r75bad) for _f in _fs if _f.endswith(".xwl")]
     if _x75:
-        p75_fail.append("⑮ `#75` 夹具不变式破坏：坏 root %s 下应**零 `.xwl`**（否则判据翻 `ok`），实得 %s"
+        p75_fail.append("⑮ `module_root_validation` 夹具不变式破坏：坏 root %s 下应**零 `.xwl`**（否则判据翻 `ok`），实得 %s"
                         % (_r75bad, _x75))
     _p75 = os.path.join(_r75, "p75.xwl")
     _dump({"title": "p75", "children": [
@@ -2135,20 +2135,20 @@ def _ng_platform(tmp, node, failures, write) -> None:
     #   （都是 `→ **未核对**（模块根不像模块根：`）⇒ 若 A 只用那段公共尾，撤 store 支后仍会被
     #   **direct 支那行**满足（假绿，与"先红后绿"要求冲突）。B 用 `sub/d1.xwl` 前缀，天然只命中 direct 支。
     if "url=sub/missing → **未核对**（模块根不像模块根：" not in _o75b:
-        p75_fail.append("⑮ `#75`：坏 root 下 **store 支**未改「未核对」（`xwl.py:5563` 支失效）\n%s" % _o75b)
+        p75_fail.append("⑮ `module_root_validation`：坏 root 下 **store 支**未改「未核对」（`xwl.py:5563` 支失效）\n%s" % _o75b)
     if "sub/d1.xwl → **未核对**（模块根不像模块根：" not in _o75b:
-        p75_fail.append("⑮ `#75`：坏 root 下 **direct 支**未改「未核对」（`xwl.py:5612` 支失效）\n%s" % _o75b)
+        p75_fail.append("⑮ `module_root_validation`：坏 root 下 **direct 支**未改「未核对」（`xwl.py:5612` 支失效）\n%s" % _o75b)
     _rc75g, _o75g = _run(xwl.cmd_params, file=_p75, module_root=_r75ok, controls=None,
                          list_fields=False, upstream=False)
     if "未核对" in _o75g:
-        p75_fail.append("⑮ `#75`：正确 `modules` 根下仍出现「未核对」（防「永远未核对」失效）\n%s" % _o75g)
+        p75_fail.append("⑮ `module_root_validation`：正确 `modules` 根下仍出现「未核对」（防「永远未核对」失效）\n%s" % _o75g)
     if p75_fail:
         failures.extend(p75_fail)
     else:
-        print("[ok]  ⑮ `#75`：模块根存在但不像模块根 ⇒ store / direct **两站点**都改「未核对」＋原因；"
+        print("[ok]  ⑮ `module_root_validation`：模块根存在但不像模块根 ⇒ store / direct **两站点**都改「未核对」＋原因；"
               "正确 `modules` 根 ⇒ 两处均无「未核对」；夹具自带「坏 root 零 `.xwl`」规模不变式")
 
-    # ---- ⑯ `#74`（本段序）：**坏 `--controls`** 的诚实化行为（两站点各一条）----
+    # ---- ⑯ `registry_load_visibility`（本段序）：**坏 `--controls`** 的诚实化行为（两站点各一条）----
     #   起因：给了 `--controls` 但**读不动（不是注册表）**时，`params` / `itemids` 曾把用户给的**坏路径**
     #     当"来源"打印（读起来像"真的读到了它"）、且是**静默回退** ⇒ 对齐 `check` 的诚实做法：
     #     先说读失败、来源按「**未找到**」。
@@ -2177,21 +2177,21 @@ def _ng_platform(tmp, node, failures, write) -> None:
                          fix="auto", json=False, dups_only=False)
     for _site74, _o74 in (("params", _o74p), ("itemids", _o74i)):
         if "[warn] 读注册表失败：" not in _o74:
-            p74_fail.append("⑯ `#74`（%s 站）：坏 `--controls` 未打 `[warn] 读注册表失败：`\n%s"
+            p74_fail.append("⑯ `registry_load_visibility`（%s 站）：坏 `--controls` 未打 `[warn] 读注册表失败：`\n%s"
                             % (_site74, _o74))
         _sl74 = _src74(_o74)
         if _sl74 != _REG_SRC_LINE_UNFOUND:
-            p74_fail.append("⑯ `#74`（%s 站）：来源行非**手写**「未找到」文案（应 %r，实 %r）"
+            p74_fail.append("⑯ `registry_load_visibility`（%s 站）：来源行非**手写**「未找到」文案（应 %r，实 %r）"
                             % (_site74, _REG_SRC_LINE_UNFOUND, _sl74))
         if _bad74 in (_sl74 or ""):
-            p74_fail.append("⑯ `#74`（%s 站）：来源行**仍打用户给的坏路径**：%r" % (_site74, _sl74))
+            p74_fail.append("⑯ `registry_load_visibility`（%s 站）：来源行**仍打用户给的坏路径**：%r" % (_site74, _sl74))
     if p74_fail:
         failures.extend(p74_fail)
     else:
-        print("[ok]  ⑯ `#74`：坏 `--controls` ⇒ `params` / `itemids` **两站点**都先给"
+        print("[ok]  ⑯ `registry_load_visibility`：坏 `--controls` ⇒ `params` / `itemids` **两站点**都先给"
               "`[warn] 读注册表失败：`、来源行按**手写**「未找到」文案、⛔ 不再打那个坏路径")
 
-    # ---- ⑰ `#80`（本段序）：**默认面**分组名不再误标「`Wb.request` 直接调用」（⛔ 不加任何开关）----
+    # ---- ⑰ `mxwl_reference_grouping`（本段序）：**默认面**分组名不再误标「`Wb.request` 直接调用」（⛔ 不加任何开关）----
     #   起因：该清单由 `_REQ_URL_RE`（只看 `url:` ＋ `m?xwl=`）喂，里面 `Wb.request` / `Wb.open` /
     #     `store.load` **都有** ⇒ 旧组名「`Wb.request` 直接调用的 m?xwl」**以偏概全**（来源标签失真）。
     #   ⭐ 判据＝**默认面**（⛔ 不加 `--strict` / `--upstream` 等任何开关）输出含**手写**新组名逐字串。
@@ -2200,11 +2200,11 @@ def _ng_platform(tmp, node, failures, write) -> None:
                        list_fields=False, upstream=False)
     _want80 = "=== `url:'m?xwl=…'` 引用的 m?xwl（1 个；**不区分调用方**）==="
     if _want80 not in _o80:
-        p80_fail.append("⑰ `#80`：默认面未出现**手写**新组名 %r\n%s" % (_want80, _o80))
+        p80_fail.append("⑰ `mxwl_reference_grouping`：默认面未出现**手写**新组名 %r\n%s" % (_want80, _o80))
     if p80_fail:
         failures.extend(p80_fail)
     else:
-        print("[ok]  ⑰ `#80`：默认面 `params` 的 `m?xwl` 分组名 = **手写**"
+        print("[ok]  ⑰ `mxwl_reference_grouping`：默认面 `params` 的 `m?xwl` 分组名 = **手写**"
               "「`url:'m?xwl=…'` 引用的 m?xwl（1 个；**不区分调用方**）」（⛔ 不加任何开关）")
 
 _REG_SRC_LINE_UNFOUND = "控件注册表: 未找到（normalName 白名单 = 注册表 ∪ 内置兜底）"

@@ -1,9 +1,9 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
-"""M3 统一契约扫描器双向回归（整块 --require-all 硬判据，B 组）。
+"""contract_scan_regression 统一契约扫描器双向回归（整块 --require-all 硬判据，B 组）。
 
 证明（B 组双向回归）：
-  A. 旧守卫现存负例集：把旧 17i 逐句式字面量改错（FAQ 25→24、清单 30→29），
+  A. 旧守卫现存负例集：把旧 docs.claims.declared_counts_match 逐句式字面量改错（FAQ 25→24、清单 30→29），
      跑**整块** `--require-all --profile package`，须 rc≠0。
   B. 新写法/未绑定注入集：改到与重算不符的「新写法」声明（SKILL FAQ 25→99）、
      或注入「未登记/未绑定」的声明形状（加粗 `**99 项**清单`），
@@ -34,7 +34,7 @@ def copy_tree(dst):
         s = os.path.join(REAL_ROOT, sub)
         if os.path.isdir(s):
             if sub == "skill":
-                # skill/.git 必须一并复制：`--require-all` 的 git 臂（编年守卫 / 17r 分发面）
+                # skill/.git 必须一并复制：`--require-all` 的 git 臂（编年守卫 / docs.distribution.self_contained 分发面）
                 # 依赖 `git ls-files`；无 .git 时这两臂记「未完成」⇒ 整块 rc=2，干净基线会假红。
                 shutil.copytree(s, os.path.join(dst, sub),
                                 ignore=shutil.ignore_patterns("__pycache__"))
@@ -105,37 +105,37 @@ def _(root):
     io.open(p, "w", encoding="utf-8", newline="\n").write(t)
 
 
-# ===== B1 合流（W3）：17l / 17r / 17b / 17j-4 四守卫体的旧负例仍红 ＋ 新写法必红 =====
+# ===== guard_logic_consolidation 合流（missing_file_reason_once）：docs.chronology.no_process_narrative / docs.distribution.self_contained / docs.tables.no_duplicate_rows / docs.limits.document_sizes 四守卫体的旧负例仍红 ＋ 新写法必红 =====
 # 每个守卫体各一条「旧负例」（破坏该守卫所守形态）＋（适用时）一条「新写法」
 # （用该守卫的另一种句法形态注入，证明通用实现覆盖多种形态，不只认旧写法）。
 
-@case("B1-17l 旧负例-注入编年事件词(原先)")
+@case("guard_logic_consolidation-docs.chronology.no_process_narrative 旧负例-注入编年事件词(原先)")
 def _(root):
     _edit(os.path.join(root, "skill/webbuilder-xwl-patch/references/generation.md"),
           "# ", "# 原先的做法是本文件旧版里的")
 
 
-@case("B1-17l 新写法-注入发版号形态(x.y.z)")
+@case("guard_logic_consolidation-docs.chronology.no_process_narrative 新写法-注入发版号形态(x.y.z)")
 def _(root):
-    # 17l 第三臂：正文出现发版号 x.y.z（非 frontmatter 的 version:、非依据层文件）
+    # guard: docs.chronology.no_process_narrative 第三臂：正文出现发版号 x.y.z（非 frontmatter 的 version:、非依据层文件）
     _edit(os.path.join(root, "skill/webbuilder-xwl-patch/references/value-mapping.md"),
           "# ", "# 1.8.3 起本文口径如下")
 
 
-@case("B1-17r 旧负例-注入包外指针《落地清单》")
+@case("guard_logic_consolidation-docs.distribution.self_contained 旧负例-注入包外指针《落地清单》")
 def _(root):
     _edit(os.path.join(root, "skill/webbuilder-xwl-patch/references/value-mapping.md"),
           "# ", "# 见《落地清单》")
 
 
-@case("B1-17r 新写法-注入前置过程角色编号(PRE12)")
+@case("guard_logic_consolidation-docs.distribution.self_contained 新写法-注入前置过程角色编号(PRE12)")
 def _(root):
-    # 17r 另一形态：施工单/过程角色编号（PRE 形态）出现在分发面
+    # guard: docs.distribution.self_contained 另一形态：施工单/过程角色编号（PRE 形态）出现在分发面
     _edit(os.path.join(root, "skill/webbuilder-xwl-patch/references/generation.md"),
           "# ", "# 见 PRE12 记录")
 
 
-@case("B1-17b 旧负例-跨文档复制表格行")
+@case("guard_logic_consolidation-docs.tables.no_duplicate_rows 旧负例-跨文档复制表格行")
 def _(root):
     cp = os.path.join(root, "skill/webbuilder-xwl-patch/references/checklist.md")
     rows = [l for l in io.open(cp, encoding="utf-8").read().splitlines()
@@ -146,7 +146,7 @@ def _(root):
     io.open(lp, "w", encoding="utf-8", newline="\n").write(rows[0] + "\n" + t)
 
 
-@case("B1-17j-4 旧负例-SKILL 超篇幅硬上限")
+@case("guard_logic_consolidation-docs.limits.document_sizes 旧负例-SKILL 超篇幅硬上限")
 def _(root):
     p = os.path.join(root, "skill/webbuilder-xwl-patch/SKILL.md")
     t = io.open(p, encoding="utf-8", newline="").read()
@@ -156,10 +156,10 @@ def _(root):
 
 
 def main():
-    print("== M3 契约扫描器双向回归（整块 --require-all 硬判据）==")
+    print("== contract_scan_regression 契约扫描器双向回归（整块 --require-all 硬判据）==")
     all_ok = True
     # C. 干净基线
-    tmp = tempfile.mkdtemp(prefix="m3reg-clean-")
+    tmp = tempfile.mkdtemp(prefix="contract-clean-")
     try:
         copy_tree(tmp)
         rc, _ = run_requireall(tmp)
@@ -171,7 +171,7 @@ def main():
         shutil.rmtree(tmp, ignore_errors=True)
     # A/B. 注入集（须 rc≠0）
     for name, mut in CASES:
-        tmp = tempfile.mkdtemp(prefix="m3reg-")
+        tmp = tempfile.mkdtemp(prefix="contract-inject-")
         try:
             copy_tree(tmp)
             mut(tmp)

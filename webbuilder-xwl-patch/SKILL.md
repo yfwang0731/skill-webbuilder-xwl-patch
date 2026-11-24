@@ -2,7 +2,7 @@
 name: webbuilder-xwl-patch
 slug: skill-webbuilder-xwl-patch
 displayName: webbuilder-xwl-patch
-version: 1.9.2
+version: 1.9.3
 license: MIT
 metadata:
   category: development-tools

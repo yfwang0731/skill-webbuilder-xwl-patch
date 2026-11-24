@@ -530,7 +530,11 @@ def _check_bc_contract(tmp, node, failures, write) -> None:
                        fix="auto", json=True, dups_only=False)
     f12 = []
     try:
-        grps12 = json.loads(out12).get("groups") or []
+        payload12 = json.loads(out12)
+        grps12 = payload12.get("groups") or []
+        if not isinstance(payload12, dict) or set(payload12) != {
+                "errors", "groups", "js_refs", "n_benign", "nn_ty", "warns"}:
+            f12.append("itemids --json 顶层类型或字段集合变化：%r" % type(payload12).__name__)
     except Exception as exc:  # noqa: BLE001
         f12.append("itemids --json 输出不是 JSON：%s" % exc)
         grps12 = []
@@ -552,6 +556,27 @@ def _check_bc_contract(tmp, node, failures, write) -> None:
             f12.append("--name --json 的 node 项缺 itemId 字段")
     except Exception as exc:  # noqa: BLE001
         f12.append("--name --json 输出不是 JSON：%s" % exc)
+    schema_controls = write("bc12_controls.json", json.dumps({"children": [{
+        "id": "button", "general": {"design": True, "xtype": "button"},
+        "configs": {"itemId": {"type": "string"}, "text": {"type": "string"}},
+        "events": {"click": {"type": ""}},
+    }]}, ensure_ascii=False))
+    _rs, out_schema = _run(xwl.cmd_schema, type="button", controls=schema_controls,
+                           list=False, tree=False, skeleton=False, json=True)
+    _rl, out_schema_list = _run(xwl.cmd_schema, type=None, controls=schema_controls,
+                                list=True, tree=False, skeleton=False, json=True)
+    try:
+        schema_payload = json.loads(out_schema)
+        schema_list_payload = json.loads(out_schema_list)
+        if not isinstance(schema_payload, dict) or set(schema_payload) != {
+                "type", "lib", "libname", "xtype", "extClass", "container",
+                "inPanel", "configs", "events"}:
+            f12.append("schema --json 顶层类型或字段集合变化")
+        if not isinstance(schema_list_payload, list) or not all(
+                isinstance(item, str) for item in schema_list_payload):
+            f12.append("schema --list --json 顶层类型变化")
+    except Exception as exc:  # noqa: BLE001
+        f12.append("schema JSON 输出不是 JSON：%s" % exc)
     _ok("--json 组项含 itemIds/registryName 且 name=注册键；--name --json 的 node 项含 itemId", f12)
 
     # ---- patch / expand 的具体化提示（三类计数）----

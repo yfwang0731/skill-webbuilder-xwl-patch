@@ -1,9 +1,9 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
-"""统一契约校验器（M2 落地；M3 可集成进 selftest 整块）。
+"""统一契约校验器（contract_validation 落地；contract_scan_regression 可集成进 selftest 整块）。
 
 实现《根治方案》§4.7 十六条可失败判据，各判据带稳定判据 ID。本文件是独立脚本，
-既可直接命令行运行，也可被 M3 的 selftest 以函数方式导入（run_all()/check_<id>()）。
+既可直接命令行运行，也可被 contract_scan_regression 的 selftest 以函数方式导入（run_all()/check_<id>()）。
 
 设计原则（§3.2 独立性）：
   - 判据只从「真实源」（磁盘文件、SKILL.md、CHANGELOG、xwl.py、ledger 数据）现场重算；
@@ -102,9 +102,9 @@ def _vkey(v):
     return tuple(int(x) for x in m.groups()) if m else (0, 0, 0)
 
 def _blk_declared(name, txt):
-    """块名是否在给定文本里被**独立**提及（词边界；`17j` 不被 `17j-10` 顶替）。
+    """块名是否在给定文本里被**独立**提及（词边界；`docs.sections.index_contract` 不被 `docs.examples.schema_address` 顶替）。
 
-    起因（B4）：`k in 文本` 会把 `17j` 误判为已声明（`17j-10` 含该子串），
+    起因（exact_identifier_matching）：`k in 文本` 会把 `docs.sections.index_contract` 误判为已声明（`docs.examples.schema_address` 含该子串），
     声明类判据必须按独立词匹配。与 selftest.py `_blk_declared` 同一口径。
     """
     return re.search(r"(?<![0-9A-Za-z_-])" + re.escape(name) + r"(?![0-9A-Za-z_-])", txt) is not None
@@ -382,12 +382,12 @@ def check_contract_cross_ref(root, reg):
 
 def check_derive_source_drift(root, reg):
     """生成器 vs 判据独立重算分叉。
-    M2 现状无 build 期 derived-values 随包；若存在 derived-values.json，则对其每个绑定
+    contract_validation 现状无 build 期 derived-values 随包；若存在 derived-values.json，则对其每个绑定
     用本模块独立重算并与生成值比对，不等即红。不存在则 PASS（附 note：构建链接入后生效）。"""
     v = []
     dv_rel = "skill/contracts/derived-values.json"
     if not os.path.exists(_p(root, dv_rel)):
-        return v  # M2 无生成物；M6 构建链随包后启用比对
+        return v  # contract_validation 无生成物；derived_values_build_check 构建链随包后启用比对
     dv = _load(root, dv_rel)
     vals = dv.get("values") if isinstance(dv, dict) else None
     if not isinstance(vals, dict):
@@ -452,7 +452,7 @@ def check_test_prompts_coverage(root, reg):
 def check_baseline_deduction(root, reg):
     """doc_guard_blocks 份数不降 + 基线外新名须 CHANGELOG 独立提及。
 
-    判据（§4.7 / G3，与 selftest.py `_doc_guard_block_mismatch` 同口径）：
+    判据（§4.7 / baseline_name_deduction，与 selftest.py `_doc_guard_block_mismatch` 同口径）：
       ① 份数不降：doc_guard_blocks 条数须 >= registry 登记的基线（scale_ref，35）；
       ② 每名份数合法（int >= 1）；
       ③ 基线外新名：doc_guard_blocks 的键集 − registry `doc_guard_baseline_names` 冻结集合

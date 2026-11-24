@@ -3,7 +3,7 @@
   "name_en": "webbuilder-xwl-patch",
   "displayName": "webbuilder-xwl-patch",
   "author": "yfwang0731",
-  "version": "1.9.2",
+  "version": "1.9.3",
   "schema_version": "1.0",
   "description": "WebBuilder（wb）平台 .xwl 定义文件的处理与安全编辑：结构级 patch（只给值 / 子树，工具按设计器自己的算法重建整份文件）+ 格式校验 + 相对 git 基线的压平检测。",
   "core_capabilities": [
@@ -161,6 +161,11 @@
     "references/workflow-notes.md": "evidence"
   },
   "update_history": [
+    {
+      "version": "1.9.3",
+      "date": "2026-11-24",
+      "summary": "提交面内部编号清理（patch）：当前活跃源码、公开文档与测试身份改用行为名称；文档守卫改用语义点号 ID；新增单一防回流守卫，从四类版本事实动态派生版本化机器名，并保留业务控件值、技术名、用户寻址和历史记录。命令、参数、退出码、公开 JSON 形状与文件副作用不变。"
+    },
     {
       "version": "1.9.2",
       "date": "2026-11-23",

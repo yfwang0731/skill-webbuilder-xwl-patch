@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
-"""统一契约扫描器（M3）：形状白名单 + 绑定解析。
+"""统一契约扫描器（contract_scan_regression）：形状白名单 + 绑定解析。
 
 核心（根治方案 §3.4 / §4.6.5 / §4.7）：
   文档中每个**派生值出现**（形状白名单内的 count_unit / semver / explicit_key）都必须
@@ -351,21 +351,131 @@ def check_scan(root, reg):
     for h in s["unclassified"]:
         v.append("scan.unclassified: %s:%d 「%s」声明形状无登记（待登记）"
                  % (h["doc"], h["line"], h["text"]))
+    for x in guard_active_internal_ids(root):
+        v.append("scan.internal_id: " + x)
     return v
 
+
+def guard_active_internal_ids(root):
+    """拒绝活跃提交面重新出现施工身份、内部短号和版本化机器名。
+
+    版本别名从 `SKILL.md`、metadata 顶层版本与当前历史项、CHANGELOG 动态派生。
+    CHANGELOG 只扫首个版本段，metadata 只扫当前 `update_history[0]`；其他历史字节不扫。
+    """
+    workspace = os.path.abspath(root)
+    repo = workspace if os.path.exists(os.path.join(workspace, ".git")) else os.path.join(workspace, "skill")
+    files, why = _local_git_scan_scope(repo)
+    if files is None:
+        return ["内部编号守卫：取不到 git 提交面（%s）" % why]
+    existing = [rel for rel in files if os.path.isfile(os.path.join(repo, rel.replace("/", os.sep)))]
+    if not existing:
+        return ["内部编号守卫：提交面文件数为 0"]
+    source_paths = {
+        "skill": "webbuilder-xwl-patch/SKILL.md",
+        "metadata": "webbuilder-xwl-patch/metadata.json",
+        "changelog": "webbuilder-xwl-patch/CHANGELOG.md",
+    }
+    sources = {}
+    for name, rel in source_paths.items():
+        try:
+            with io.open(os.path.join(repo, rel.replace("/", os.sep)), encoding="utf-8", newline="") as handle:
+                sources[name] = handle.read()
+        except (OSError, UnicodeDecodeError) as exc:
+            return ["内部编号守卫：版本源 %s 缺失或不可读（%s）" % (rel, exc)]
+    versions = set()
+    skill_match = re.search(r"^version:\s*(\d+\.\d+\.\d+)\s*$", sources["skill"], re.M)
+    if skill_match is None:
+        return ["内部编号守卫：SKILL.md 版本字段缺失或不可解析"]
+    versions.add(skill_match.group(1))
+    try:
+        metadata = json.loads(sources["metadata"])
+    except (TypeError, ValueError) as exc:
+        return ["内部编号守卫：metadata.json 不可解析（%s）" % exc]
+    if isinstance(metadata.get("version"), str):
+        versions.add(metadata["version"])
+    history = metadata.get("update_history") if isinstance(metadata.get("update_history"), list) else []
+    versions.update(item.get("version") for item in history if isinstance(item, dict) and isinstance(item.get("version"), str))
+    versions.update(re.findall(r"^##\s*\[(\d+\.\d+\.\d+)\]", sources["changelog"], re.M))
+    if not versions:
+        return ["内部编号守卫：四种版本事实中没有可用版本"]
+    aliases = set()
+    for version in versions:
+        major, minor, patch = version.split(".")
+        aliases.update({"%s_%s_%s" % (major, minor, patch), "v%s%s%s" % (major, minor, patch)})
+    alias_rx = re.compile(
+        r"(?<![A-Za-z0-9])(?:%s)(?=[A-Za-z0-9_-])"
+        % "|".join(re.escape(alias) for alias in sorted(aliases, key=len, reverse=True))
+    )
+    patterns = [
+        re.compile(r"(?<![A-Za-z0-9_])ITEM-\d{3,5}(?![A-Za-z0-9_])"),
+        re.compile(r"(?<![A-Za-z0-9_])(?:QA-\d{2,3}|AV-\d{2,3})(?![A-Za-z0-9_])"),
+        re.compile(r"(?<![A-Za-z0-9_])(?:C\d{2}|M\d{1,2}|G\d{1,2}[a-z]?|P\d{1,2}|W\d{1,2})(?![A-Za-z0-9_])"),
+        re.compile(r"(?<![A-Za-z0-9_])(?:F\d{2}|F\d\s*[–-]\s*F\d)(?![A-Za-z0-9_])"),
+        re.compile(r"(?<![A-Za-z0-9_])17[a-z](?:-\d+)?(?![A-Za-z0-9_])"),
+        re.compile(r"(?<![A-Za-z0-9_])(?:round\d+|批\d+[a-z]?)(?![A-Za-z0-9_])"),
+    ]
+    short_case = re.compile(r"(?<![A-Za-z0-9_])(?:B[124]|C" r"1)(?![A-Za-z0-9_])")
+    control_value = re.compile(r'["\'](?:itemId|normalName)["\']\s*:\s*["\'][^"\']*["\']')
+    allowed_controls = {"B" + "1", "C" + "1"}
+    violations = []
+    for rel in existing:
+        if rel in {"webbuilder-xwl-patch/CHANGELOG.md", "webbuilder-xwl-patch/metadata.json"}:
+            continue
+        try:
+            with io.open(os.path.join(repo, rel.replace("/", os.sep)), encoding="utf-8", newline="") as handle:
+                text = handle.read()
+        except (OSError, UnicodeDecodeError) as exc:
+            violations.append("%s：读取失败（%s）" % (rel, exc))
+            continue
+        for line_number, line in enumerate(text.splitlines(), 1):
+            found = [match.group(0) for pattern in patterns for match in pattern.finditer(line)]
+            control_spans = [match.span() for match in control_value.finditer(line)]
+            for match in short_case.finditer(line):
+                if (match.group(0) in allowed_controls
+                        and any(start <= match.start() and match.end() <= end
+                                for start, end in control_spans)):
+                    continue
+                found.append(match.group(0))
+            if re.search(r"\[(?:warn|note|ok|FAIL)\]|print\(|\.append\(|\+=", line):
+                for match in re.finditer(r"#([1-9]\d*)", line):
+                    if int(match.group(1)) > 3 and not re.search(r'@[^\s"\'`]*$', line[:match.start()]):
+                        found.append(match.group(0))
+            found.extend(alias_rx.findall(line))
+            for token in sorted(set(found)):
+                violations.append("%s:%d 出现内部编号身份 %s" % (rel, line_number, token))
+    changelog_match = re.search(r"^##\s*\[", sources["changelog"], re.M)
+    active_changelog = ""
+    if changelog_match:
+        next_match = re.search(r"^##\s*\[", sources["changelog"][changelog_match.end():], re.M)
+        stop = changelog_match.end() + next_match.start() if next_match else len(sources["changelog"])
+        active_changelog = sources["changelog"][changelog_match.start():stop]
+    active_metadata = dict(metadata)
+    active_metadata["update_history"] = history[:1] if history else []
+    active_surfaces = [
+        ("webbuilder-xwl-patch/CHANGELOG.md", active_changelog),
+        ("webbuilder-xwl-patch/metadata.json", json.dumps(active_metadata, ensure_ascii=False)),
+    ]
+    for rel, text in active_surfaces:
+        for line_number, line in enumerate(text.splitlines(), 1):
+            found = [match.group(0) for pattern in patterns for match in pattern.finditer(line)]
+            found.extend(alias_rx.findall(line))
+            for token in sorted(set(found)):
+                violations.append("%s:%d 出现内部编号身份 %s" % (rel, line_number, token))
+    return violations[:20]
+
 # ======================================================================================
-# B1 迁入：文档守卫 17b / 17l / 17r / 17j-4 的判定逻辑（自 selftest.py 物理迁入）
+# guard_logic_consolidation 迁入：文档守卫 docs.tables.no_duplicate_rows / docs.chronology.no_process_narrative / docs.distribution.self_contained / docs.limits.document_sizes 的判定逻辑（自 selftest.py 物理迁入）
 # ======================================================================================
 # 背景：同类判定的实现散落在 selftest.py 各段函数体里，本身不规范。此处统一承接，**语义逐条
 #   等价**（旧负例仍红、新写法仍红）。四个调用点由 selftest 的本段函数（`_docs_xfile_consistency`
-#   / `_docs_layers_and_distribution` / `_docs_tail_scaffold`）调用，并保留各自 `# 17x` 块头注释。
+#   / `_docs_layers_and_distribution` / `_docs_tail_scaffold`）调用，并保留各自 `# docs.metadata.package_consistency` 块头注释。
 #   ⚠️ 这些判定原依赖 selftest 的若干模块级常量/助手（`_trows` / `_chron` / `_date_verb` /
-#     `_date_re` / `_ver_re` / `_chron_exempt` / `_git_scan_scope` / `_docs_git_arm` / `_b17r_*` /
+#     `_date_re` / `_ver_re` / `_chron_exempt` / `_git_scan_scope` / `_docs_git_arm` / `_self_contained_*` /
 #     `_mark_sub`）。为保持**单一真源、结果等价**，这里以 **default=None 注入**承接这些依赖：
 #     selftest 调用时显式传入其模块级同名对象，迁入代码在传入对象上与旧逻辑逐字一致；缺省时才
 #     退到本模块的**独立本地副本**（供独立运行/负例自证）。
 
-# ---- 17b：任意两份文档之间不得有逐字重复的表格行 ----
+# guard: docs.tables.no_duplicate_rows：任意两份文档之间不得有逐字重复的表格行 ----
 
 def _local_trows(ls):
     """`_trows` 的本地副本（仅在被 scan 独立调用、未注入 selftest `_trows` 时用；逐字等价）。"""
@@ -375,9 +485,9 @@ def _local_trows(ls):
 
 
 def guard_dup_table_rows(docs, trows=None):
-    """17b：`docs`（{文档名: 行列表}）里**任意两份**之间逐字重复的表格行 ⇒ 违规列表。
+    """docs.tables.no_duplicate_rows：`docs`（{文档名: 行列表}）里**任意两份**之间逐字重复的表格行 ⇒ 违规列表。
 
-    等价于旧 `_docs_xfile_consistency` 的 17b 块：排除 `CHANGELOG.md`，对名称对两两取表格行
+    等价于旧 `_docs_xfile_consistency` 的 docs.tables.no_duplicate_rows 块：排除 `CHANGELOG.md`，对名称对两两取表格行
     交集，非空即报（文案逐字保留）。`trows` = selftest 的模块级 `_trows`（注入以保单一真源）。
     """
     _tr = trows or _local_trows
@@ -392,7 +502,7 @@ def guard_dup_table_rows(docs, trows=None):
     return out
 
 
-# ---- 17l：编年纪律（三条臂）----
+# guard: docs.chronology.no_process_narrative：编年纪律（三条臂）----
 
 # 本地默认副本（仅在被独立调用、未注入 selftest 同名对象时用）。`_chron` 仍按**相邻字面量拼接**，
 #   与 selftest 模块级常量保持同一形态（整词直写会让本文件被这三条臂判红）。
@@ -407,9 +517,9 @@ _LOCAL_VER_RE = re.compile(r"\d+\.\d+\.\d+")
 def guard_chronology(root, doc_fail, nogit_arms, checks, arm, chron=None,
                      date_verb=None, date_re=None, ver_re=None,
                      chron_exempt=None, git_scan_scope=None, docs_git_arm=None):
-    """17l：编年纪律三条臂（事件词 / 施工日期 / 发版号）。
+    """docs.chronology.no_process_narrative：编年纪律三条臂（事件词 / 施工日期 / 发版号）。
 
-    等价于旧 `_docs_layers_and_distribution` 的 17l 块：
+    等价于旧 `_docs_layers_and_distribution` 的 docs.chronology.no_process_narrative 块：
       - 扫描面 = `_git_scan_scope(root)`（`git ls-files ∪ 磁盘新增`；取不到 git 走 `_docs_git_arm`
         判红或降级，两条分支语义不变）；
       - 豁免面 = `_chron_exempt(root)`（结构判据：CHANGELOG/archive/metadata ∪ 依据层文件）；
@@ -456,14 +566,14 @@ def guard_chronology(root, doc_fail, nogit_arms, checks, arm, chron=None,
                                 % (_rel, _i, _vm.group(0)))
 
 
-# ---- 17j-4：篇幅上限（SKILL.md 字符数硬/软、README.md 行数、CHANGELOG 文首行数）----
+# guard: docs.limits.document_sizes：篇幅上限（SKILL.md 字符数硬/软、README.md 行数、CHANGELOG 文首行数）----
 
 def guard_length_caps(root, docs, sk_hard=32000, sk_soft=28000, sk_goal=12000,
                       read_chars=None, gate_note=None):
-    """17j-4：篇幅上限族。返回 `(violations, notes)` —— `violations` 进 doc_fail（判红），
+    """docs.limits.document_sizes：篇幅上限族。返回 `(violations, notes)` —— `violations` 进 doc_fail（判红），
     `notes` 由调用方走 `_gate_note`（不进 rc）。
 
-    等价于旧 `_docs_layers_and_distribution` 的 17j-4 块：
+    等价于旧 `_docs_layers_and_distribution` 的 docs.limits.document_sizes 块：
       - `SKILL.md` 字符数：> 硬上限 ⇒ 一条红；软上限…硬上限之间 ⇒ 一条红；正常 ⇒ 一条 note。
       - `README.md` 行数 > 150 ⇒ 一条红。
       - `CHANGELOG.md` 文首区（首个 `## [` 之前）非空行 > 14 ⇒ 一条红。
@@ -512,22 +622,22 @@ def guard_length_caps(root, docs, sk_hard=32000, sk_soft=28000, sk_goal=12000,
     return v, notes
 
 
-# ---- 17r：分发面自包含（扫描面里不得出现指向 skill 包外的引用）----
+# guard: docs.distribution.self_contained：分发面自包含（扫描面里不得出现指向 skill 包外的引用）----
 
 # 本地默认副本（仅在被独立调用、未注入 selftest 同名对象时用；逐字等价）。
-_LOCAL_B17R_DOCS = ("《验收基线》", "《落地清单》", "施工索引", "施工单")
-_LOCAL_B17R_CODE = re.compile(
+_LOCAL_SELF_CONTAINED_DOCS = ("《验收基线》", "《落地清单》", "施工索引", "施工单")
+_LOCAL_SELF_CONTAINED_CODE_PATTERN = re.compile(
     r"(?<![A-Za-z0-9_])(?:[A-L]\d{1,2}|[A-Z]{1,3}-\d{1,2}|[A-L]-[a-z])(?![A-Za-z0-9_]|\.\w)"
     r"|(?<![A-Za-z0-9_])SITE\d(?![A-Za-z0-9_])")
-_LOCAL_B17R_CODE_OK = re.compile(
+_LOCAL_SELF_CONTAINED_CODE_ALLOW = re.compile(
     r"^(?:UTF-?8|UTF-?16|UTF-?32|UTF8|UTF16|UTF32|UCS-?[24]|ISO-8859-\d{1,2}"
     r"|GB\d{4}|GBK|GB18030|CP\d{3,5}|KOI8-[RU]|SHIFT_JIS|EUC-[A-Z]{2})$", re.I)
-_LOCAL_B17R_SEC = re.compile(r"§\d{1,3}-\d{1,2}")
-_LOCAL_B17R_PROC = re.compile(r"\bPRE\d+\b|\b(?:eng|qa|pm|arch|reg|tl)-\d{1,3}\b")
+_LOCAL_SELF_CONTAINED_SECTION_PATTERN = re.compile(r"§\d{1,3}-\d{1,2}")
+_LOCAL_SELF_CONTAINED_PROCESS_PATTERN = re.compile(r"\bPRE\d+\b|\b(?:eng|qa|pm|arch|reg|tl)-\d{1,3}\b")
 
 
-def _local_b17r_mask_strings(_text):
-    """`_b17r_mask_strings` 的本地副本（未注入时用；逐字等价）。"""
+def _local_mask_python_strings(_text):
+    """`_mask_python_strings` 的本地副本（未注入时用；逐字等价）。"""
     try:
         _toks = list(tokenize.generate_tokens(io.StringIO(_text).readline))
     except (tokenize.TokenError, IndentationError, SyntaxError):
@@ -548,8 +658,8 @@ def _local_b17r_mask_strings(_text):
     return "".join(_buf)
 
 
-def _local_b17r_history_skip(_rel, _text):
-    """`_b17r_history_skip` 的本地副本（未注入时用；逐字等价）。"""
+def _local_history_skip(_rel, _text):
+    """`_history_skip` 的本地副本（未注入时用；逐字等价）。"""
     if not _rel.endswith(".json"):
         return set()
     _k = _text.find('"update_history"')
@@ -589,68 +699,68 @@ def _local_b17r_history_skip(_rel, _text):
 
 
 def guard_dist_selfcontained(root, doc_fail, nogit_arms, checks, arm,
-                             b17r_docs=None, b17r_code=None, b17r_code_ok=None,
-                             b17r_sec=None, b17r_proc=None, mask_strings=None,
+                             self_contained_docs=None, self_contained_code_pattern=None, self_contained_code_allow=None,
+                             self_contained_section_pattern=None, self_contained_process_pattern=None, mask_strings=None,
                              history_skip=None, git_scan_scope=None, docs_git_arm=None,
                              ok_print=None):
-    """17r：分发面自包含。扫描面（`git ls-files ∪ 磁盘新增`）里不得出现指向 skill 包外的引用。
+    """docs.distribution.self_contained：分发面自包含。扫描面（`git ls-files ∪ 磁盘新增`）里不得出现指向 skill 包外的引用。
 
-    等价于旧 `_docs_tail_scaffold` 的 17r 块：四类判据（包外文档名 / 施工单条目代号 / §N-M 节号 /
+    等价于旧 `_docs_tail_scaffold` 的 docs.distribution.self_contained 块：四类判据（包外文档名 / 施工单条目代号 / §N-M 节号 /
     前置批次号与过程角色编号）；`.py` 只在字符串字面量之外判；`CHANGELOG*.md` 整体与 metadata 的
     `update_history` 段按语义跳过。`doc_fail` 追加违规（截前 12 条）；全绿时调 `ok_print` 打印
     `[ok]`（文案逐字保留）。依赖以注入承接 selftest 模块级同名对象；缺省退到本地副本。
     """
-    _docs_w = b17r_docs if b17r_docs is not None else _LOCAL_B17R_DOCS
-    _code = b17r_code or _LOCAL_B17R_CODE
-    _code_ok = b17r_code_ok or _LOCAL_B17R_CODE_OK
-    _sec = b17r_sec or _LOCAL_B17R_SEC
-    _proc = b17r_proc or _LOCAL_B17R_PROC
-    _mask = mask_strings or _local_b17r_mask_strings
-    _hskip = history_skip or _local_b17r_history_skip
+    _docs_w = self_contained_docs if self_contained_docs is not None else _LOCAL_SELF_CONTAINED_DOCS
+    _code = self_contained_code_pattern or _LOCAL_SELF_CONTAINED_CODE_PATTERN
+    _code_ok = self_contained_code_allow or _LOCAL_SELF_CONTAINED_CODE_ALLOW
+    _sec = self_contained_section_pattern or _LOCAL_SELF_CONTAINED_SECTION_PATTERN
+    _proc = self_contained_process_pattern or _LOCAL_SELF_CONTAINED_PROCESS_PATTERN
+    _mask = mask_strings or _local_mask_python_strings
+    _hskip = history_skip or _local_history_skip
     _git_scan_scope = git_scan_scope or _local_git_scan_scope
     _docs_git_arm = docs_git_arm or _local_docs_git_arm
     _files, _ = _git_scan_scope(root)
     if not _docs_git_arm(arm, _files, doc_fail, nogit_arms, checks, "git.dist"):
         return
-    _b17r_fail = []
-    for _rel17 in _files:
-        if not _rel17 or _rel17 in ("CHANGELOG.md", "CHANGELOG-archive.md"):
+    _self_contained_fail = []
+    for _self_contained_rel in _files:
+        if not _self_contained_rel or _self_contained_rel in ("CHANGELOG.md", "CHANGELOG-archive.md"):
             continue
-        _fp17 = os.path.join(root, _rel17.replace("/", os.sep))
-        if not os.path.exists(_fp17):
+        _self_contained_path = os.path.join(root, _self_contained_rel.replace("/", os.sep))
+        if not os.path.exists(_self_contained_path):
             continue
         try:
-            with io.open(_fp17, "r", encoding="utf-8", newline="") as _fh17:
-                _raw17 = _fh17.read()
-        except Exception as _exc17:  # noqa: BLE001
-            _b17r_fail.append("17r 分发面自包含：读不出 %s（%s）—— 报错，不算「没命中」" % (_rel17, _exc17))
+            with io.open(_self_contained_path, "r", encoding="utf-8", newline="") as _self_contained_fh:
+                _self_contained_raw = _self_contained_fh.read()
+        except Exception as _self_contained_exc:  # noqa: BLE001
+            _self_contained_fail.append("docs.distribution.self_contained 分发面自包含：读不出 %s（%s）—— 报错，不算「没命中」" % (_self_contained_rel, _self_contained_exc))
             continue
-        if _rel17.endswith(".py"):
-            _judge17 = _mask(_raw17)
-            if _judge17 is None:
-                _b17r_fail.append("17r 分发面自包含：%s 词法解析失败 ⇒ 不敢判（保守报错）" % _rel17)
+        if _self_contained_rel.endswith(".py"):
+            _self_contained_judge = _mask(_self_contained_raw)
+            if _self_contained_judge is None:
+                _self_contained_fail.append("docs.distribution.self_contained 分发面自包含：%s 词法解析失败 ⇒ 不敢判（保守报错）" % _self_contained_rel)
                 continue
         else:
-            _judge17 = _raw17
-        _skip17 = _hskip(_rel17, _judge17)
-        for _i17, _l17 in enumerate(_judge17.split("\n"), 1):
-            if _i17 in _skip17:
+            _self_contained_judge = _self_contained_raw
+        _self_contained_skip = _hskip(_self_contained_rel, _self_contained_judge)
+        for _self_contained_line_number, _self_contained_line in enumerate(_self_contained_judge.split("\n"), 1):
+            if _self_contained_line_number in _self_contained_skip:
                 continue
-            _hit17 = ([_m.group(0) for _m in _code.finditer(_l17)
+            _self_contained_hits = ([_m.group(0) for _m in _code.finditer(_self_contained_line)
                        if not _code_ok.match(_m.group(0))]
-                      + [_m.group(0) for _m in _sec.finditer(_l17)]
-                      + [_m.group(0) for _m in _proc.finditer(_l17)]
-                      + [_w for _w in _docs_w if _w in _l17])
-            if _hit17:
-                _b17r_fail.append("17r 分发面自包含：%s:%d 出现包外引用 %s —— 原文：%s"
-                                  % (_rel17, _i17, "/".join(sorted(set(_hit17))), _l17.strip()[:80]))
-    if _b17r_fail:
-        doc_fail.extend(_b17r_fail[:12])
+                      + [_m.group(0) for _m in _sec.finditer(_self_contained_line)]
+                      + [_m.group(0) for _m in _proc.finditer(_self_contained_line)]
+                      + [_w for _w in _docs_w if _w in _self_contained_line])
+            if _self_contained_hits:
+                _self_contained_fail.append("docs.distribution.self_contained 分发面自包含：%s:%d 出现包外引用 %s —— 原文：%s"
+                                  % (_self_contained_rel, _self_contained_line_number, "/".join(sorted(set(_self_contained_hits))), _self_contained_line.strip()[:80]))
+    if _self_contained_fail:
+        doc_fail.extend(_self_contained_fail[:12])
     else:
         if ok_print is not None:
             ok_print(_files)
         else:
-            print("[ok]  17r 分发面自包含：%d 个分发文件里无包外引用"
+            print("[ok]  docs.distribution.self_contained 分发面自包含：%d 个分发文件里无包外引用"
                   "（无《验收基线》/《落地清单》/施工索引/施工单、无施工单条目代号（**A–L 单字母**-数字 ／ 字母-短横-数字〔任意 1–3 个字母〕／ **A–L 单字母**-短横-小写字母 形态）、"
                   "无 §N-M 形式的节号指针、无前置批次号/过程角色编号；"
                   "`.py` 只判字符串字面量之外；CHANGELOG 整文件 ＋ 历史记录段 ＋ 编码名词形豁免）"

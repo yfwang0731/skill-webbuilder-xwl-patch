@@ -432,7 +432,7 @@ def _scan_files(root: str, files, patterns):
             #   语义：索引里有、盘上无（staged 删除／sparse-checkout）⇒ **没有内容可泄露**，
             #   扫描面并未残缺 ⇒ 第三桶，只打 `[note]`、**不计 rc**（判 2 是假红）。
             #   ⚠️ 原因串只留 **OS 原文**：外层 note 已经念过「索引里有、盘上无」，内层再念一遍
-            #   就成了「…（索引里有、盘上无（No such file…））」（`W3`）。
+            #   就成了「…（索引里有、盘上无（No such file…））」（`missing_file_reason_once`）。
             missing.append((rel, str(getattr(exc, "strerror", None) or exc)))
             continue
         except UnicodeDecodeError as exc:        # 坏编码：**不是** OSError，必须自己一支
@@ -568,17 +568,17 @@ def _run_selftest() -> int:
         ("L7 省略号在路径后", "p = " + _P + " \u2026 见上", True),
         ("L8 路径后跟 RUNNER", "p = " + _P + " RUNNER", True),
         ("L9 路径后跟尖括号", "x = " + _P + " <b>", True),
-        ("F2 正斜杠＋行尾注释", 'p = "' + _PU + '"  # 参考 <文档>', True),
+        ("comment_reference_boundary 正斜杠＋行尾注释", 'p = "' + _PU + '"  # 参考 <文档>', True),
         # 应放：占位段整段成立
         ("Q8 括号目录＋占位段", "C" + ":" + "\\" + "Program Files (x86)" + "\\" + "<user>"
                                 + "\\" + "proj", False),
-        ("F1-1 runner 短名", "C" + ":" + "\\" + "Users" + "\\" + "RUNNER~1" + "\\" + "proj", False),
-        ("F1-2 尖括号段", "C" + ":" + "\\" + "Users" + "\\" + "<user>" + "\\" + "proj", False),
-        ("F1-3 省略号段", "C" + ":" + "\\" + "Users" + "\\" + "\u2026" + "\\" + "proj", False),
-        ("F3-放 带空格目录＋占位段", '"' + "C" + ":" + "\\" + "Program Files" + "\\" + "<user>"
+        ("private_path_shape_runner_short_name runner 短名", "C" + ":" + "\\" + "Users" + "\\" + "RUNNER~1" + "\\" + "proj", False),
+        ("private_path_shape_angle_bracket 尖括号段", "C" + ":" + "\\" + "Users" + "\\" + "<user>" + "\\" + "proj", False),
+        ("private_path_shape_ellipsis 省略号段", "C" + ":" + "\\" + "Users" + "\\" + "\u2026" + "\\" + "proj", False),
+        ("spaced_path_shape_accepted 带空格目录＋占位段", '"' + "C" + ":" + "\\" + "Program Files" + "\\" + "<user>"
                                     + "\\" + "proj" + '"', False),
         # 应报：真实路径
-        ("F3-报 带空格目录＋真实名", '"' + "C" + ":" + "\\" + "Program Files" + "\\" + "zh"
+        ("spaced_path_shape_reported 带空格目录＋真实名", '"' + "C" + ":" + "\\" + "Program Files" + "\\" + "zh"
                                      + "ang" + "\\" + "proj" + '"', True),
         ("裸路径", _P, True),
         # 6 条压力例（定稿 §1.2）
@@ -959,9 +959,9 @@ def _run_selftest() -> int:
             fails.append("有 missing 时 rc=%r（应 0：该桶不计 rc）：%s" % (_rcm, _om))
         if "索引里有、盘上无" not in _om:
             fails.append("有 missing 时没打「索引里有、盘上无」那句 note：%s" % _om)
-        # `W3`：原因串只留 OS 原文 ⇒ 这句话整条输出里**只应出现一次**（外层 note 里）。
+        # `missing_file_reason_once`：原因串只留 OS 原文 ⇒ 这句话整条输出里**只应出现一次**（外层 note 里）。
         if _om.count("索引里有、盘上无") != 1:
-            fails.append("missing 的 note 把结论念了两遍（原因串该只留 OS 原文，W3）：%s" % _om)
+            fails.append("missing 的 note 把结论念了两遍（原因串该只留 OS 原文，missing_file_reason_once）：%s" % _om)
 
         # 第四格补测：**有正常文件可读、也有读不出、且无命中** ⇒ 仍须 2。
         #   原来只锚了 `scanned==0` 那个端点 ⇒ `if unreadable and scanned == 0:` 这种把缺陷
@@ -1070,11 +1070,11 @@ def _run_selftest() -> int:
             fails.append("零可扫文件时仍出现 `ALL OK`（与「扫了 N 个都干净」不可区分）：%s" % _o8)
         if "--root" not in _o8:
             fails.append("零可扫文件时没提示「`--root` 是否指错」：%s" % _o8)
-        # 措辞钉死（`W2`）：⛔ 不许用「清单为空」——那是 `--patterns` 空清单的报错文案，撞词会误导。
+        # 措辞钉死（`empty_scan_wording`）：⛔ 不许用「清单为空」——那是 `--patterns` 空清单的报错文案，撞词会误导。
         if "未发现可跟踪文件" not in _o8:
             fails.append("零可扫文件时的 note 文案不对（应含「未发现可跟踪文件」）：%s" % _o8)
         if "清单为空" in _o8:
-            fails.append("零可扫文件时用了「清单为空」——与 `--patterns` 的报错撞词（W2）：%s" % _o8)
+            fails.append("零可扫文件时用了「清单为空」——与 `--patterns` 的报错撞词（empty_scan_wording）：%s" % _o8)
     finally:
         _rmtree_tmp(_g2)
 
@@ -1166,7 +1166,7 @@ def main(argv=None) -> int:
         #   但末行**必须**与"扫了 N 个都干净"区分开 —— 用**替换**而不是新增一行：
         #   仓内三处按"末行"读的断言（见 `main` 的 `ALL OK` 判据与自检）都依赖"末行唯一"。
         #   ⚠️ 措辞别写「清单为空」：那句是 `--patterns` 给空清单时的报错文案，撞词会让人去查清单
-        #   而不是查 `--root`（`W2`）。
+        #   而不是查 `--root`（`empty_scan_wording`）。
         print("[note] 未发现可跟踪文件：本次没有可扫描对象 —— `--root` 是否指错？"
               "（也可能是本仓只有二进制，或文件全被 `.gitignore` 排除）")
         print("=== privacy_scan OK（未发现可扫描文件）")

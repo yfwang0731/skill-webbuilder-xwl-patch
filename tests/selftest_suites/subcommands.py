@@ -45,7 +45,7 @@ def _cap(fn):
     return fn
 
 @_cap
-def _s1s3_named_cases(tmp) -> list:
+def _check_request_identity_sqlrefs_and_empty_results(tmp) -> list:
     """序1-3 具名正反例（定向矩阵）：返回失败条目列表（空=全绿）。
 
     覆盖：序1 请求级 params 归属（A的load/自身params不为B背书、B自身params/out直调ok、动态仅未知、
@@ -237,7 +237,7 @@ def _check_subcommands(tmp, node, failures, write) -> None:
 
     # ---- 12c. 序1-3 具名正反例（请求级归属 / 真实供给识别 / 判空与逐项诊断）----
     #   定向负例：改坏判据即可被这些断言检出（旧全局 provided、裸 setAttribute 正则、空结果 rc）。
-    _s13_fail = _s1s3_named_cases(tmp)
+    _s13_fail = _check_request_identity_sqlrefs_and_empty_results(tmp)
     if _s13_fail:
         failures.extend(_s13_fail)
     else:
@@ -674,16 +674,16 @@ def _check_events_and_expand(tmp, failures) -> None:
     else:
         print("[ok]  events 的 `--outdir` 指到普通文件时走统一写盘出口（rc=2 ＋ 点名「导出目录」＋ 无 traceback）")
 
-    # ---- 尾部（13. new … 17v）：整段下沉为模块级 `_check_subcommands_tail` ----
+    # ---- 尾部（13. new … docs.examples.ops_smoke）：整段下沉为模块级 `_check_subcommands_tail` ----
     #   起因：本函数实测 387 行、`_FN_CAP` 上限 400，余量只剩 13 行；本批要往本函数里加三段
     #   **命令级**断言（越界落点／备份同文件／目录前置错误）⇒ 先把尾段整段下沉，腾出预算。
     #   ⚠️ 判据文本**逐字未改**，只换了宿主；⛔ 不调 `_FN_CAP`、⛔ 不从 `_CAP_FNS` 删名字。
-    failures.extend(_check_1_9_2_contract_cases(tmp))
-    failures.extend(_check_round3_contract_cases())
+    failures.extend(_check_document_and_cli_contracts(tmp))
+    failures.extend(_check_document_contract_phrase_set())
     _check_subcommands_tail(tmp, failures)
 
-def _folders_f12_cases(tmp):
-    """F12：`folders` 的**分层校验与应检枚举面**（挂在 subcommands 第 14 组同一块内）。
+def _check_folders_index_validation(tmp):
+    """folders_index_validation：`folders` 的**分层校验与应检枚举面**（挂在 subcommands 第 14 组同一块内）。
 
     覆盖：坏 JSON／`index` 结构不合法／读不动（＋同夹具正常路径阳性对照）／确认悬空／良性未登记／
     无 `folder.json` 只读／「只有 `folder.json`、没有 `.xwl`」的子目录必须被枚举／`--register` 前置失败。
@@ -715,9 +715,9 @@ def _folders_f12_cases(tmp):
     _mkxwl(os.path.join(d, "a.xwl"))
     _rc, _out = _run_folders(d)
     if _rc != 1:
-        fail.append("F12：folder.json 是坏 JSON 应 rc=1，实得 %s\n%s" % (_rc, _out))
+        fail.append("folders_index_validation：folder.json 是坏 JSON 应 rc=1，实得 %s\n%s" % (_rc, _out))
     if "folder.json 损坏" not in _out:
-        fail.append("F12：坏 JSON 未进「folder.json 损坏」明细：%s" % _out)
+        fail.append("folders_index_validation：坏 JSON 未进「folder.json 损坏」明细：%s" % _out)
 
     # ② index 结构不合法（非数组／元素非字符串／顶层非对象）⇒ rc=1
     for _tag, _body in (
@@ -732,9 +732,9 @@ def _folders_f12_cases(tmp):
         _mkxwl(os.path.join(d, "a.xwl"))
         _rc, _out = _run_folders(d)
         if _rc != 1:
-            fail.append("F12：结构不合法（%s）应 rc=1，实得 %s\n%s" % (_tag, _rc, _out))
+            fail.append("folders_index_validation：结构不合法（%s）应 rc=1，实得 %s\n%s" % (_tag, _rc, _out))
         if "folder.json 损坏" not in _out:
-            fail.append("F12：结构不合法（%s）未报「folder.json 损坏」：%s" % (_tag, _out))
+            fail.append("folders_index_validation：结构不合法（%s）未报「folder.json 损坏」：%s" % (_tag, _out))
 
     # ③ 读不动 ⇒ rc=2（**无法判断**，⛔ 不与「损坏」混同）；同一夹具换成正常索引 ⇒ rc=0（阳性对照）
     d = os.path.join(root, "unreadable")
@@ -742,16 +742,16 @@ def _folders_f12_cases(tmp):
     _mkxwl(os.path.join(d, "a.xwl"))
     _rc, _out = _run_folders(d)
     if _rc != 2:
-        fail.append("F12：索引读不动应 rc=2（无法判断），实得 %s\n%s" % (_rc, _out))
+        fail.append("folders_index_validation：索引读不动应 rc=2（无法判断），实得 %s\n%s" % (_rc, _out))
     if "读不动（无法判断）" not in _out:
-        fail.append("F12：读不动未单独标注（不得与「损坏」混同）：%s" % _out)
+        fail.append("folders_index_validation：读不动未单独标注（不得与「损坏」混同）：%s" % _out)
     if "读不动 0" in _out:
-        fail.append("F12：读不动数量未计入结论行：%s" % _out)
+        fail.append("folders_index_validation：读不动数量未计入结论行：%s" % _out)
     shutil.rmtree(os.path.join(d, "folder.json"))
     _mkfj(d, [])
     _rc, _out = _run_folders(d)
     if _rc != 0 or "未登记" not in _out:
-        fail.append("F12 阳性对照：同一夹具换成正常索引应 rc=0＋列出未登记，实得 %s\n%s"
+        fail.append("folders_index_validation 阳性对照：同一夹具换成正常索引应 rc=0＋列出未登记，实得 %s\n%s"
                     % (_rc, _out))
 
     # ④ 确认悬空（已登记、盘上无）⇒ rc=1，且与「读不动」分列
@@ -760,11 +760,11 @@ def _folders_f12_cases(tmp):
     _mkxwl(os.path.join(d, "x.xwl"))
     _rc, _out = _run_folders(d)
     if _rc != 1:
-        fail.append("F12：确认悬空应 rc=1，实得 %s\n%s" % (_rc, _out))
+        fail.append("folders_index_validation：确认悬空应 rc=1，实得 %s\n%s" % (_rc, _out))
     if "index 悬空（已登记、盘上无）" not in _out:
-        fail.append("F12：确认悬空未单独标注：%s" % _out)
+        fail.append("folders_index_validation：确认悬空未单独标注：%s" % _out)
     if "index 悬空项 1 个" not in _out or "读不动 0 个" not in _out:
-        fail.append("F12：结论行未把「确认悬空」与「读不动」分列：%s" % _out)
+        fail.append("folders_index_validation：结论行未把「确认悬空」与「读不动」分列：%s" % _out)
 
     # ⑤ 良性未登记（盘上有 .xwl、索引没登记）⇒ rc=0，只进明细、不宣称"一致"
     d = os.path.join(root, "benign")
@@ -772,20 +772,20 @@ def _folders_f12_cases(tmp):
     _mkxwl(os.path.join(d, "y.xwl"))
     _rc, _out = _run_folders(d)
     if _rc != 0:
-        fail.append("F12：良性未登记应 rc=0，实得 %s\n%s" % (_rc, _out))
+        fail.append("folders_index_validation：良性未登记应 rc=0，实得 %s\n%s" % (_rc, _out))
     if "未登记" not in _out or "index 与实际文件一致" in _out:
-        fail.append("F12：良性未登记应只进明细、且不得宣称「一致」：%s" % _out)
+        fail.append("folders_index_validation：良性未登记应只进明细、且不得宣称「一致」：%s" % _out)
 
     # ⑥ 无 folder.json（只读）⇒ rc=0 ＋ 明确的"未执行"note，⛔ 不宣称一致
     d = os.path.join(root, "nofj")
     _mkxwl(os.path.join(d, "c.xwl"))
     _rc, _out = _run_folders(os.path.join(d, "c.xwl"))
     if _rc != 0:
-        fail.append("F12：无 folder.json 的只读检查应 rc=0，实得 %s\n%s" % (_rc, _out))
+        fail.append("folders_index_validation：无 folder.json 的只读检查应 rc=0，实得 %s\n%s" % (_rc, _out))
     if "[note] 未发现 folder.json，本次未执行索引检查" not in _out:
-        fail.append("F12：无 folder.json 时缺「本次未执行索引检查」note：%s" % _out)
+        fail.append("folders_index_validation：无 folder.json 时缺「本次未执行索引检查」note：%s" % _out)
     if "index 与实际文件一致" in _out:
-        fail.append("F12：无 folder.json 时不得宣称「index 与实际文件一致」：%s" % _out)
+        fail.append("folders_index_validation：无 folder.json 时不得宣称「index 与实际文件一致」：%s" % _out)
 
     # ⑦ 应检枚举面：**只有 folder.json、没有 .xwl** 的子目录也必须被枚举（否则悬空永远看不见）
     p = os.path.join(root, "empty_sub")
@@ -794,13 +794,13 @@ def _folders_f12_cases(tmp):
     _mkfj(os.path.join(p, "leaf"), ["missing1.xwl", "missing2.xwl"])
     _rc, _out = _run_folders(p)
     if _rc != 1:
-        fail.append("F12：空子目录＋悬空应 rc=1（rc=0 即假绿），实得 %s\n%s" % (_rc, _out))
+        fail.append("folders_index_validation：空子目录＋悬空应 rc=1（rc=0 即假绿），实得 %s\n%s" % (_rc, _out))
     if "目录 3 个" not in _out or "leaf/" not in _out:
-        fail.append("F12：无 .xwl 的子目录或其直接父索引未被枚举（目录数/路径不对）：%s" % _out)
+        fail.append("folders_index_validation：无 .xwl 的子目录或其直接父索引未被枚举（目录数/路径不对）：%s" % _out)
     if "index 悬空项 2 个" not in _out:
-        fail.append("F12：子目录里的 2 个悬空项未计入结论：%s" % _out)
+        fail.append("folders_index_validation：子目录里的 2 个悬空项未计入结论：%s" % _out)
     if "index 与实际文件一致" in _out:
-        fail.append("F12：存在悬空时仍宣称「index 与实际文件一致」（假绿）：%s" % _out)
+        fail.append("folders_index_validation：存在悬空时仍宣称「index 与实际文件一致」（假绿）：%s" % _out)
 
     # ⑧ `--register` 写入前置：坏／结构不足／读不动 ⇒ rc=2 且**一个字节不动**；正常／幂等 ⇒ rc=0
     d = os.path.join(root, "reg_bad")
@@ -811,7 +811,7 @@ def _folders_f12_cases(tmp):
     _before = open(os.path.join(d, "folder.json"), "rb").read()
     _rc, _out = _run_folders(os.path.join(d, "a.xwl"), register="a.xwl")
     if _rc != 2 or open(os.path.join(d, "folder.json"), "rb").read() != _before:
-        fail.append("F12 --register：坏 JSON 应 rc=2 且不动文件，实得 %s\n%s" % (_rc, _out))
+        fail.append("folders_index_validation --register：坏 JSON 应 rc=2 且不动文件，实得 %s\n%s" % (_rc, _out))
     d = os.path.join(root, "reg_struct")
     _mkfj(d, [])
     _mkxwl(os.path.join(d, "a.xwl"))
@@ -821,31 +821,31 @@ def _folders_f12_cases(tmp):
     _before = open(os.path.join(d, "folder.json"), "rb").read()
     _rc, _out = _run_folders(os.path.join(d, "a.xwl"), register="a.xwl")
     if _rc != 2 or open(os.path.join(d, "folder.json"), "rb").read() != _before:
-        fail.append("F12 --register：index 结构不足应 rc=2 且不动文件，实得 %s\n%s"
+        fail.append("folders_index_validation --register：index 结构不足应 rc=2 且不动文件，实得 %s\n%s"
                     % (_rc, _out))
     d = os.path.join(root, "reg_unread")
     os.makedirs(os.path.join(d, "folder.json"))
     _mkxwl(os.path.join(d, "a.xwl"))
     _rc, _out = _run_folders(os.path.join(d, "a.xwl"), register="a.xwl")
     if _rc != 2:
-        fail.append("F12 --register：索引读不动应 rc=2，实得 %s\n%s" % (_rc, _out))
+        fail.append("folders_index_validation --register：索引读不动应 rc=2，实得 %s\n%s" % (_rc, _out))
     d = os.path.join(root, "reg_ok")
     _mkfj(d, [])
     _mkxwl(os.path.join(d, "a.xwl"))
     _rc, _out = _run_folders(os.path.join(d, "a.xwl"), register="a.xwl")
     if _rc != 0 or json.load(open(os.path.join(d, "folder.json"), encoding="utf-8"))["index"] != ["a.xwl"]:
-        fail.append("F12 --register：正常登记应 rc=0 且写入 index，实得 %s\n%s" % (_rc, _out))
+        fail.append("folders_index_validation --register：正常登记应 rc=0 且写入 index，实得 %s\n%s" % (_rc, _out))
     _snap = open(os.path.join(d, "folder.json"), "rb").read()
     _rc, _out = _run_folders(os.path.join(d, "a.xwl"), register="a.xwl")
     if _rc != 0 or open(os.path.join(d, "folder.json"), "rb").read() != _snap:
-        fail.append("F12 --register：重复登记应幂等 rc=0 且不改文件，实得 %s\n%s" % (_rc, _out))
+        fail.append("folders_index_validation --register：重复登记应幂等 rc=0 且不改文件，实得 %s\n%s" % (_rc, _out))
 
     if fail:
         return fail
-    print("[ok]  F12 `folders` 分层校验：读不动/结构损坏/确认悬空/良性未登记/无索引/空子目录枚举/register 前置 全部按码值分开")
+    print("[ok]  folders_index_validation `folders` 分层校验：读不动/结构损坏/确认悬空/良性未登记/无索引/空子目录枚举/register 前置 全部按码值分开")
     return []
 
-def _check_1_9_2_contract_cases(tmp):
+def _check_document_and_cli_contracts(tmp):
     """1.9.2 文档/CLI/示例的总契约定向判据（不新增自检块）。"""
     fail = []
     root = SKILL_ROOT
@@ -880,25 +880,25 @@ def _check_1_9_2_contract_cases(tmp):
             fail.append("1.9.2 旧口径仍存在：%r" % old)
 
     required = {
-        "C01 运行契约": (skill + faq, "文件级 BOM、缺失、不可读"),
-        "C03 解析分层": (skill + faq, "可安全整份重建"),
-        "C04 写入阶段": (skill + faq, "目标已写入但写后检查失败"),
-        "C05 传参优先级": (sql_fragments + js_api,
+        "exit_code_contract 运行契约": (skill + faq, "文件级 BOM、缺失、不可读"),
+        "parser_layers 解析分层": (skill + faq, "可安全整份重建"),
+        "write_failure_stages 写入阶段": (skill + faq, "目标已写入但写后检查失败"),
+        "parameter_merge_priority 传参优先级": (sql_fragments + js_api,
                            "params > out > store 静态 params"),
-        "C06 strict 归属": (faq, "不核取数链路"),
-        "C07 sqlrefs strict": (skill + faq, "sqlrefs 没有 --strict"),
-        "C08 backup 纪律": (skill + checklist, "真跑 `patch` 带 `--backup`"),
-        "C09 expect 契约": (faq + checklist, "核对期望次数"),
-        "C10 错层条件": (skill, "同名目标已存在"),
-        "C12 命令矩阵": (walkthrough + examples_readme, "events --outdir"),
-        "C22 new 成功语义": (walkthrough, "成功看 `rc=0`"),
-        "C24 页面交付": (walkthrough, "设计器打开"),
-        "C25 导航登记": (skill + walkthrough, "需要设计器导航树展示或打开编辑"),
-        "C28 strict 题17": (current_docs, "不改变逐请求的已证明/确缺/未核对归属"),
-        "C30 diffguard 边界": (skill + checklist + source, "精确、最长行、相似度三档"),
-        "C31 安装示例": (distribution, "xwl.py check <"),
-        "C32 controls 相对路径": (faq, "相对路径按当前工作目录"),
-        "C34 requestAg 固定 URL": (sql_fragments + js_api,
+        "check_strict_scope strict 归属": (faq, "不核取数链路"),
+        "sqlrefs_exit_contract sqlrefs strict": (skill + faq, "sqlrefs 没有 --strict"),
+        "backup_requirement backup 纪律": (skill + checklist, "真跑 `patch` 带 `--backup`"),
+        "expect_count expect 契约": (faq + checklist, "核对期望次数"),
+        "configs_path_guard 错层条件": (skill, "同名目标已存在"),
+        "command_capability_matrix 命令矩阵": (walkthrough + examples_readme, "events --outdir"),
+        "new_success_contract new 成功语义": (walkthrough, "成功看 `rc=0`"),
+        "page_delivery_gates 页面交付": (walkthrough, "设计器打开"),
+        "navigation_registration 导航登记": (skill + walkthrough, "需要设计器导航树展示或打开编辑"),
+        "params_strict_semantics strict 题17": (current_docs, "不改变逐请求的已证明/确缺/未核对归属"),
+        "diffguard_similarity_boundary diffguard 边界": (skill + checklist + source, "精确、最长行、相似度三档"),
+        "install_example_command 安装示例": (distribution, "xwl.py check <"),
+        "controls_relative_path controls 相对路径": (faq, "相对路径按当前工作目录"),
+        "requestag_fixed_url requestAg 固定 URL": (sql_fragments + js_api,
                                     "m?xwl=common/save-all"),
     }
     for label, (body, needle) in required.items():
@@ -924,30 +924,35 @@ def _check_1_9_2_contract_cases(tmp):
         prompts = json.loads(_read("test-prompts.json"))
         blob = json.dumps(prompts, ensure_ascii=False)
         if "不改变逐请求的已证明/确缺/未核对归属" not in blob:
-            fail.append("C28 test-prompts 题 17 未同步 strict 结论")
+            fail.append("params_strict_semantics test-prompts 题 17 未同步 strict 结论")
     except Exception as exc:  # noqa: BLE001
         fail.append("test-prompts.json 不可解析：%s" % exc)
 
+    version_match = re.search(r"^version:\s*(\d+\.\d+\.\d+)\s*$", skill, re.M)
+    expected_version = version_match.group(1) if version_match else None
     try:
         metadata = json.loads(_read("metadata.json"))
-        if metadata.get("version") != "1.9.2":
-            fail.append("metadata.version 不是 1.9.2")
-        if not metadata.get("update_history") or metadata["update_history"][0].get("version") != "1.9.2":
-            fail.append("metadata.update_history 首项不是 1.9.2")
+        if expected_version is None:
+            fail.append("SKILL.md 版本字段不可解析")
+        elif metadata.get("version") != expected_version:
+            fail.append("metadata.version 与 SKILL.md 版本不一致")
+        if (not metadata.get("update_history")
+                or metadata["update_history"][0].get("version") != expected_version):
+            fail.append("metadata.update_history 首项与 SKILL.md 版本不一致")
         file_ops = metadata.get("security_checks", {}).get("file_ops", "")
         for needle in ("显式输入", "命令推导资源", "选择性扫描", "声明外部写入目标"):
             if needle not in file_ops:
-                fail.append("C13 metadata.file_ops 缺少 %r" % needle)
+                fail.append("metadata_io_boundary metadata.file_ops 缺少 %r" % needle)
     except Exception as exc:  # noqa: BLE001
         fail.append("metadata.json 不可解析：%s" % exc)
-    if "version: 1.9.2" not in skill:
-        fail.append("SKILL.md 版本不是 1.9.2")
+    if version_match is None:
+        fail.append("SKILL.md 缺少版本字段")
     changelog = _read("CHANGELOG.md")
-    if "## [1.9.2]" not in changelog:
-        fail.append("CHANGELOG 缺少 1.9.2 段")
+    if expected_version is None or "## [%s]" % expected_version not in changelog:
+        fail.append("CHANGELOG 首版本段与 SKILL.md 版本不一致")
 
-    # C01/C02/C06/C07：真实 CLI 的退出码/strict 边界。
-    work = os.path.join(tmp, "v192_contract")
+    # exit_code_contract/degraded_registry/check_strict_scope/sqlrefs_exit_contract：真实 CLI 的退出码/strict 边界。
+    work = os.path.join(tmp, "document_cli_contracts")
     os.makedirs(work, exist_ok=True)
     valid = os.path.join(work, "valid.xwl")
     with open(valid, "w", encoding="utf-8", newline="") as fh:
@@ -977,7 +982,7 @@ def _check_1_9_2_contract_cases(tmp):
     ):
         rc, out, err = _run_cli(argv)
         if rc != expected:
-            fail.append("C01/C06/C07 %s 应 rc=%d，实得 %r：%s"
+            fail.append("exit_code_contract/check_strict_scope/sqlrefs_exit_contract %s 应 rc=%d，实得 %r：%s"
                         % (label, expected, rc, (out + err)[-500:]))
 
     bad_controls = os.path.join(work, "bad-controls.json")
@@ -1003,18 +1008,18 @@ def _check_1_9_2_contract_cases(tmp):
         rc, out, err = _run_cli(argv)
         text = out + err
         if rc != 2 or needle not in text:
-            fail.append("C02 坏 controls 且%s时⑪仍须执行，rc=%r needle=%r"
+            fail.append("degraded_registry 坏 controls 且%s时⑪仍须执行，rc=%r needle=%r"
                         % (" strict" if strict else "默认", rc, needle))
 
-    # C20：paths 输出必须来自实际命中，且推荐路径真能接 patch --dry-run。
+    # paths_real_paths：paths 输出必须来自实际命中，且推荐路径真能接 patch --dry-run。
     sql_page = os.path.join(work, "queryDemo.xwl")
     rc, out, err = _run_cli(["new", sql_page, "--kind", "sql",
                              "--title", "示例查询", "--no-js"])
     if rc != 0 or "WB_MISC" not in out or "必须替换" not in out:
-        fail.append("C22 new --kind sql 应 rc=0、先校验后提示且明确占位 SQL 必须替换")
+        fail.append("new_success_contract new --kind sql 应 rc=0、先校验后提示且明确占位 SQL 必须替换")
     rc, out, err = _run_cli(["paths", sql_page])
     if rc != 0 or "@dataprovider1" in out or '["@dataprovider", "configs", "sql"]' not in out:
-        fail.append("C20 paths 必须只给真实命中路径并可接 patch：%s" % (out + err))
+        fail.append("paths_real_paths paths 必须只给真实命中路径并可接 patch：%s" % (out + err))
     path_ops = os.path.join(work, "path_ops.json")
     with open(path_ops, "w", encoding="utf-8") as fh:
         fh.write('[{"op":"set","path":["@dataprovider","configs","sql"],'
@@ -1022,9 +1027,9 @@ def _check_1_9_2_contract_cases(tmp):
     rc, out, err = _run_cli(["patch", sql_page, "--ops", path_ops,
                              "--dry-run", "--no-js"])
     if rc != 0:
-        fail.append("C20 paths 推荐路径接 patch --dry-run 应 rc=0：%s" % (out + err))
+        fail.append("paths_real_paths paths 推荐路径接 patch --dry-run 应 rc=0：%s" % (out + err))
 
-    # C23：README 引用的唯一按钮样例必须真实挂到 grid→toolbar→button。
+    # readme_toolbar_structure：README 引用的唯一按钮样例必须真实挂到 grid→toolbar→button。
     button_page = os.path.join(work, "readme-button.xwl")
     _run_cli(["new", button_page, "--kind", "page", "--title", "README", "--no-js"])
     before = open(button_page, "rb").read()
@@ -1032,23 +1037,23 @@ def _check_1_9_2_contract_cases(tmp):
                              "--ops", os.path.join(root, "examples", "ops-add-button.json"),
                              "--dry-run", "--no-js"])
     if rc != 0 or open(button_page, "rb").read() != before:
-        fail.append("C23 README 按钮样例 dry-run 应 rc=0 且不改源")
+        fail.append("readme_toolbar_structure README 按钮样例 dry-run 应 rc=0 且不改源")
     rc, out, err = _run_cli(["patch", button_page,
                              "--ops", os.path.join(root, "examples", "ops-add-button.json"),
                              "--backup", "--no-js"])
     if rc != 0 or not os.path.exists(button_page + ".bak"):
-        fail.append("C23 README 按钮样例真跑必须 rc=0 且带 backup")
+        fail.append("readme_toolbar_structure README 按钮样例真跑必须 rc=0 且带 backup")
     elif open(button_page + ".bak", "rb").read() != before:
-        fail.append("C23 README 按钮样例 .bak 必须等于操作前源字节")
+        fail.append("readme_toolbar_structure README 按钮样例 .bak 必须等于操作前源字节")
     rc, out, err = _run_cli(["check", button_page, "--no-js"])
     if rc != 0:
-        fail.append("C23 README 按钮样例 check 应 rc=0：%s" % (out + err))
+        fail.append("readme_toolbar_structure README 按钮样例 check 应 rc=0：%s" % (out + err))
     try:
         _t, _b, page_obj = xwl.load_xwl(button_page)
         controls = list(xwl._iter_controls(page_obj))
         grids = [x for x in controls if x[1] in ("grid", "tgrid")]
         if len(grids) != 1:
-            fail.append("C23 按钮样例应只有一个 grid")
+            fail.append("readme_toolbar_structure 按钮样例应只有一个 grid")
         else:
             grid = grids[0][0]
             tbars = [x for x in grid.get("children", [])
@@ -1058,30 +1063,30 @@ def _check_1_9_2_contract_cases(tmp):
                         if isinstance(x, dict) and x.get("type") == "button"]
                        if tbars else [])
             if not tbars or not buttons:
-                fail.append("C23 按钮必须是 grid→toolbar(tbar)→button，不得挂 module.children")
+                fail.append("readme_toolbar_structure 按钮必须是 grid→toolbar(tbar)→button，不得挂 module.children")
     except Exception as exc:  # noqa: BLE001
-        fail.append("C23 按钮样例解析失败：%s" % exc)
+        fail.append("readme_toolbar_structure 按钮样例解析失败：%s" % exc)
 
-    # C36：querybar 自包含本地 store，并把中性字段口径锁住。
+    # walkthrough_neutral_fixture：querybar 自包含本地 store，并把中性字段口径锁住。
     for old in ("ORDER_FILE", "ORDER_NO", "CUSTOMER", "QTY", "CREATED_ON",
                 "queryOrder", "orderQuery", "orderNo", "stateStore"):
         if old in walkthrough:
-            fail.append("C36 walkthrough 旧字段/旧名仍存在：%r" % old)
+            fail.append("walkthrough_neutral_fixture walkthrough 旧字段/旧名仍存在：%r" % old)
     for needle in ("DEMO_TABLE", "COL_1", "COL_2", "COL_3", "COL_4",
                    "demoKey", "queryDemo", "demoQuery", "示例查询"):
         if needle not in walkthrough:
-            fail.append("C36 walkthrough 缺少中性字段/名称 %r" % needle)
+            fail.append("walkthrough_neutral_fixture walkthrough 缺少中性字段/名称 %r" % needle)
     try:
         qb = json.loads(_read("examples/ops-add-querybar.json"))
         qb_blob = json.dumps(qb, ensure_ascii=False)
         if "stateStore" in qb_blob:
-            fail.append("C36 querybar 仍引用外部 stateStore")
+            fail.append("walkthrough_neutral_fixture querybar 仍引用外部 stateStore")
         if '"type": "store"' not in qb_blob and "'type': 'store'" not in qb_blob:
-            fail.append("C36 querybar combo 内缺少本地 store")
+            fail.append("walkthrough_neutral_fixture querybar combo 内缺少本地 store")
     except Exception as exc:  # noqa: BLE001
-        fail.append("C36 querybar 样例 JSON 不可解析：%s" % exc)
+        fail.append("walkthrough_neutral_fixture querybar 样例 JSON 不可解析：%s" % exc)
 
-    # C36 端到端：直接执行 walkthrough 中的两段 ops，并核对列与 combo/store 结构。
+    # walkthrough_neutral_fixture 端到端：直接执行 walkthrough 中的两段 ops，并核对列与 combo/store 结构。
     try:
         blocks = re.findall(r"```json\n(.*?)\n```", walkthrough, re.S)
         sql_ops_blob = next(block for block in blocks if '"@module"' in block)
@@ -1093,42 +1098,42 @@ def _check_1_9_2_contract_cases(tmp):
         rc, out, err = _run_cli(["new", sql_live, "--kind", "sql",
                                  "--title", "示例查询", "--no-js"])
         if rc != 0:
-            fail.append("C36 walkthrough new SQL 失败：%s" % (out + err))
+            fail.append("walkthrough_neutral_fixture walkthrough new SQL 失败：%s" % (out + err))
         sql_ops = os.path.join(work, "walkthrough", "ops-sql.json")
         with open(sql_ops, "w", encoding="utf-8") as fh:
             fh.write(sql_ops_blob)
         rc, out, err = _run_cli(["patch", sql_live, "--ops", sql_ops,
                                  "--backup", "--no-js"])
         if rc != 0:
-            fail.append("C36 walkthrough SQL patch --backup 失败：%s" % (out + err))
+            fail.append("walkthrough_neutral_fixture walkthrough SQL patch --backup 失败：%s" % (out + err))
         rc, out, err = _run_cli(["sqlrefs", sql_live])
         if rc != 0:
-            fail.append("C36 walkthrough sqlrefs 失败：%s" % (out + err))
+            fail.append("walkthrough_neutral_fixture walkthrough sqlrefs 失败：%s" % (out + err))
 
         rc, out, err = _run_cli(["new", page_live, "--kind", "page",
                                  "--title", "示例查询", "--no-js"])
         if rc != 0:
-            fail.append("C36 walkthrough new page 失败：%s" % (out + err))
+            fail.append("walkthrough_neutral_fixture walkthrough new page 失败：%s" % (out + err))
         page_ops = os.path.join(work, "walkthrough", "ops-page.json")
         with open(page_ops, "w", encoding="utf-8") as fh:
             fh.write(page_ops_blob.replace("<模块>", "demo"))
         rc, out, err = _run_cli(["patch", page_live, "--ops", page_ops,
                                  "--backup", "--no-js"])
         if rc != 0:
-            fail.append("C36 walkthrough page patch --backup 失败：%s" % (out + err))
+            fail.append("walkthrough_neutral_fixture walkthrough page patch --backup 失败：%s" % (out + err))
         rc, out, err = _run_cli(["params", page_live, "--module-root", module_root,
                                  "--strict"])
         if rc != 0:
-            fail.append("C36 walkthrough params --strict 失败：%s" % (out + err))
+            fail.append("walkthrough_neutral_fixture walkthrough params --strict 失败：%s" % (out + err))
         rc, out, err = _run_cli(["check", page_live, "--no-js"])
         if rc != 0:
-            fail.append("C36 walkthrough page check 失败：%s" % (out + err))
+            fail.append("walkthrough_neutral_fixture walkthrough page check 失败：%s" % (out + err))
 
         _text, _bom, page_obj = xwl.load_xwl(page_live)
         controls = list(xwl._iter_controls(page_obj))
         grids = [item for item in controls if item[1] == "grid"]
         if len(grids) != 1:
-            fail.append("C36 walkthrough 应恰有一个 grid")
+            fail.append("walkthrough_neutral_fixture walkthrough 应恰有一个 grid")
         else:
             grid = grids[0][0]
             arrays = [child for child in grid.get("children", [])
@@ -1136,7 +1141,7 @@ def _check_1_9_2_contract_cases(tmp):
                       and (child.get("configs") or {}).get("itemId") == "columns"]
             columns = (arrays[0].get("children") if arrays else []) or []
             if len(columns) != 4:
-                fail.append("C36 walkthrough columns 必须恰有 4 列，实得 %d" % len(columns))
+                fail.append("walkthrough_neutral_fixture walkthrough columns 必须恰有 4 列，实得 %d" % len(columns))
         combos = [item[0] for item in controls
                   if item[1] == "combo"
                   and (item[2].get("itemId") == "demoState")]
@@ -1145,14 +1150,14 @@ def _check_1_9_2_contract_cases(tmp):
                 isinstance(node, dict) and node.get("type") == "store"
                 and (node.get("configs") or {}).get("itemId") == "store"
                 for node in local_stores):
-            fail.append("C36 walkthrough combo 必须内嵌本地 store")
+            fail.append("walkthrough_neutral_fixture walkthrough combo 必须内嵌本地 store")
     except Exception as exc:  # noqa: BLE001
-        fail.append("C36 walkthrough 端到端夹具失败：%s" % exc)
+        fail.append("walkthrough_neutral_fixture walkthrough 端到端夹具失败：%s" % exc)
 
     # 安装副本用内存 compile 自证，前后成员集合与源文件字节不变。
     # 分发面可能以无 `.git` 的 zip 解包布局出现，因此这里从实际分发目录复制，
     # 不从 Git 索引取清单；该断言验证的是分发内容本身，不应依赖宿主的仓库形态。
-    install = os.path.join(tmp, "v192_install")
+    install = os.path.join(tmp, "distribution_install")
     try:
         shutil.copytree(
             root,
@@ -1191,12 +1196,12 @@ def _check_1_9_2_contract_cases(tmp):
 
     if fail:
         return fail
-    print("[ok]  1.9.2 总契约：C01-C36 文档现行口径、退出码/strict、paths、"
+    print("[ok]  1.9.2 总契约：exit_code_contract-walkthrough_neutral_fixture 文档现行口径、退出码/strict、paths、"
           "README 工具栏结构/备份、walkthrough 中性字段与 querybar 自包含")
     return []
 
 
-def _check_round3_contract_cases():
+def _check_document_contract_phrase_set():
     """Round 3：六组旧口径必须消失，新口径逐文件落地。"""
     fail = []
 
@@ -1233,34 +1238,34 @@ def _check_round3_contract_cases():
         "各命令都会在输出里写明选了哪个换行",
     ):
         if old in old_probe:
-            fail.append("round3 旧口径仍存在：%r" % old)
+            fail.append("contract_phrase_set 旧口径仍存在：%r" % old)
 
     positive = {
-        "C16": (
+        "edit_eol_boundary": (
             texts["SKILL.md"] + texts["references/faq.md"] + texts["scripts/xwl.py"],
             (
                 "`edit` 不提供 `--eol`",
                 "`patch/expand` 执行整文件 EOL",
             ),
         ),
-        "C02": (
+        "degraded_registry": (
             texts["references/faq.md"] + texts["scripts/xwl.py"],
             ("①–⑧⑩⑪",),
         ),
-        "C03": (
+        "parser_layers": (
             texts["SKILL.md"] + texts["references/checklist.md"]
             + texts["test-prompts.json"] + texts["scripts/xwl.py"],
             ("④ 只说明解析阶段接受该文本",),
         ),
-        "C04": (
+        "write_failure_stages": (
             texts["SKILL.md"],
             ("不得从命令失败或 `rc` 推断文件未动",),
         ),
-        "C08": (
+        "backup_requirement": (
             texts["SKILL.md"] + texts["scripts/xwl.py"],
             ("确实存在的操作前副本",),
         ),
-        "C11": (
+        "reserved_itemid_policy": (
             texts["README.md"] + texts["test-prompts.json"],
             ("保留槽位", "普通非槽位"),
         ),
@@ -1272,7 +1277,7 @@ def _check_round3_contract_cases():
 
     if fail:
         return fail
-    print("[ok]  round3 C02/C03/C04/C08/C11/C16：旧句负例消失，"
+    print("[ok]  contract_phrase_set degraded_registry/parser_layers/write_failure_stages/backup_requirement/reserved_itemid_policy/edit_eol_boundary：旧句负例消失，"
           "解析分层、四写入阶段、操作前副本、槽位边界和 edit EOL 分工均有正向断言")
     return []
 
@@ -1370,7 +1375,7 @@ def _check_subcommands_tail(tmp, failures) -> None:
     code, out = _run(xwl.cmd_folders, path=fd, register=None, dry_run=False)
     if "悬空" not in out:
         fl_fail.append("folders 未检出 index 悬空项: %s" % out)
-    # `#57`：建议行须按「目录有没有 folder.json」分岔 —— 缺 folder.json 时**不得**直接建议
+    # `folder_index_guidance`：建议行须按「目录有没有 folder.json」分岔 —— 缺 folder.json 时**不得**直接建议
     #   `--register`（该建议必 rc=2）⇒ 改提示"先在设计器里建这个目录/补 folder.json"；有则照旧。
     fdn = os.path.join(tmp, "folder_nofj")
     os.makedirs(fdn, exist_ok=True)
@@ -1378,9 +1383,9 @@ def _check_subcommands_tail(tmp, failures) -> None:
         f.write('{"hidden":false,"children":[],"roles":{},"title":"t","iconCls":""}')
     code, out = _run(xwl.cmd_folders, path=os.path.join(fdn, "c.xwl"), register=None, dry_run=False)
     if "还没有 folder.json" not in out:
-        fl_fail.append("`#57`：缺 folder.json 时未给「先建 folder.json」提示: %s" % out)
+        fl_fail.append("`folder_index_guidance`：缺 folder.json 时未给「先建 folder.json」提示: %s" % out)
     if "登记：xwl.py folders" in out:
-        fl_fail.append("`#57`：缺 folder.json 时仍直接建议 `--register`（必 rc=2）: %s" % out)
+        fl_fail.append("`folder_index_guidance`：缺 folder.json 时仍直接建议 `--register`（必 rc=2）: %s" % out)
     fdy = os.path.join(tmp, "folder_yesfj")
     os.makedirs(fdy, exist_ok=True)
     with open(os.path.join(fdy, "folder.json"), "w", encoding="utf-8", newline="") as f:
@@ -1389,9 +1394,9 @@ def _check_subcommands_tail(tmp, failures) -> None:
         f.write('{"hidden":false,"children":[],"roles":{},"title":"t","iconCls":""}')
     code, out = _run(xwl.cmd_folders, path=os.path.join(fdy, "d.xwl"), register=None, dry_run=False)
     if "登记：xwl.py folders" not in out or "--register" not in out:
-        fl_fail.append("`#57`：有 folder.json 时未直接建议 `--register`（误伤正路）: %s" % out)
-    # F12：分层校验 + 应检枚举面（坏 JSON／结构／读不动／悬空／良性／无索引／空子目录／register 前置）
-    fl_fail.extend(_folders_f12_cases(tmp))
+        fl_fail.append("`folder_index_guidance`：有 folder.json 时未直接建议 `--register`（误伤正路）: %s" % out)
+    # folders_index_validation：分层校验 + 应检枚举面（坏 JSON／结构／读不动／悬空／良性／无索引／空子目录／register 前置）
+    fl_fail.extend(_check_folders_index_validation(tmp))
     if fl_fail:
         failures.extend(fl_fail)
     else:
@@ -1480,18 +1485,18 @@ def _check_subcommands_tail(tmp, failures) -> None:
         print("[ok]  schema --skeleton：只含该控件允许的键，events 键按该控件实际事件决定")
 
 
-    # ---- 序 7 归位：`17j-10`／`17j-11`／`17v` 从 `_check_docs` 移来（**块头与块名不变**）----
+    # ---- 序 7 归位：`docs.examples.schema_address`／`docs.examples.window_defaults`／`docs.examples.ops_smoke` 从 `_check_docs` 移来（**块头与块名不变**）----
     #   起因（为什么该挪这儿）：这三块的实质是「**真跑 CLI 再断言输出**」，与 `_check_docs` 的
     #     文档一致性职责不同类；混在一个函数里会让两边职责互相渗透、行数也一路涨。
     #   ⛔ 块名一个都没改（块基线照旧咬得住它们）；⛔ 判据一条都没动（文本逐字搬过来）。
     #   `doc_fail` 在这里是**局部同名清单**（搬过来的文本一字未改）⇒ 末端并进 `failures`。
     _root_sub = SKILL_ROOT
     doc_fail: list[str] = []
-    # `17j-10` 用的「误导版措辞」字面量：原来定义在 `_check_docs` 里，搬过来要**自带一份**。
+    # `docs.examples.schema_address` 用的「误导版措辞」字面量：原来定义在 `_check_docs` 里，搬过来要**自带一份**。
     # ⛔ 保持这种**拼接**写法（本文件也在扫描面内，整词直写会自命中）。
     _bad_lit = "app." "<itemId>"
 
-    # 17j-10 `schema --skeleton` 的 itemId 占位值必须写对口径（**行为级**：真跑一次再断言输出）。
+    # guard: docs.examples.schema_address `schema --skeleton` 的 itemId 占位值必须写对口径（**行为级**：真跑一次再断言输出）。
     #     起因（删了会怎样）：占位值曾把「工具 `@itemId` 寻址」与「运行时注册键取名」混为一谈；
     #     修正后**无自动化守卫**（QA 注入：把占位改回 `<必填>`，selftest 仍 rc=0 / [ok]=111 / [FAIL]=0）。
     #     删掉本断言 ⇒ 占位值再被改回误导版会静默回归。
@@ -1506,19 +1511,19 @@ def _check_subcommands_tail(tmp, failures) -> None:
                             list=False, tree=False, skeleton=True)
         _bad10 = []
         if "@itemId" not in _out10 or "工具寻址" not in _out10:
-            _bad10.append("17j-10 `schema --skeleton` 的 itemId 占位值丢了「工具寻址（@itemId）」口径："
+            _bad10.append("docs.examples.schema_address `schema --skeleton` 的 itemId 占位值丢了「工具寻址（@itemId）」口径："
                           "输出里找不到。含 itemId 的行：%s"
                           % " | ".join(_l.strip() for _l in _out10.splitlines() if "itemId" in _l)[:160])
         if _bad_lit in _out10:
-            _bad10.append("17j-10 `schema --skeleton` 的 itemId 占位值出现误导版措辞「%s」" % _bad_lit)
+            _bad10.append("docs.examples.schema_address `schema --skeleton` 的 itemId 占位值出现误导版措辞「%s」" % _bad_lit)
         if _bad10:
             doc_fail.extend(_bad10)
         else:
-            print("[ok]  17j-10 `schema --skeleton` 的 itemId 占位值口径正确（行为级：真跑 + 断言输出）")
+            print("[ok]  docs.examples.schema_address `schema --skeleton` 的 itemId 占位值口径正确（行为级：真跑 + 断言输出）")
     except (OSError, ValueError) as _exc:
-        doc_fail.append("17j-10 `schema --skeleton` 占位值守卫跑不起来：%s" % _exc)
+        doc_fail.append("docs.examples.schema_address `schema --skeleton` 占位值守卫跑不起来：%s" % _exc)
 
-    # 17j-11 `schema --skeleton` 对 `window` 必须预填两个**非缺省**推荐键（**行为级**：真跑一次再断言输出）。
+    # guard: docs.examples.window_defaults `schema --skeleton` 对 `window` 必须预填两个**非缺省**推荐键（**行为级**：真跑一次再断言输出）。
     #     起因（删了会怎样）：窗口这两个键的缺省分别是「真」与 'hide'，写错代价最大 ——
     #     `closeAction=destroy` 时若仍复用实例，第二次打开就是空白窗。预填是"防呆"，
     #     把它改回缺省（即不再预填）必须当场红，否则这条防呆会静默失效。
@@ -1533,42 +1538,42 @@ def _check_subcommands_tail(tmp, failures) -> None:
                             list=False, tree=False, skeleton=True)
         _bad11 = []
         if '"createInstance"' not in _out11 or '"false"' not in _out11:
-            _bad11.append("17j-11 `schema window --skeleton` 丢了预填的 createInstance=\"false\""
+            _bad11.append("docs.examples.window_defaults `schema window --skeleton` 丢了预填的 createInstance=\"false\""
                           "（窗口「每次重建」档据此写，缺了会退化成复用实例的空白窗写法）")
         if '"closeAction"' not in _out11 or '"destroy"' not in _out11:
-            _bad11.append("17j-11 `schema window --skeleton` 丢了预填的 closeAction=\"destroy\"")
+            _bad11.append("docs.examples.window_defaults `schema window --skeleton` 丢了预填的 closeAction=\"destroy\"")
         if _bad11:
             doc_fail.extend(_bad11)
         else:
-            print("[ok]  17j-11 `schema window --skeleton` 预填 createInstance/closeAction"
+            print("[ok]  docs.examples.window_defaults `schema window --skeleton` 预填 createInstance/closeAction"
                   "（行为级：真跑 + 断言输出）")
     except (OSError, ValueError) as _exc:
-        doc_fail.append("17j-11 窗口骨架预填守卫跑不起来：%s" % _exc)
+        doc_fail.append("docs.examples.window_defaults 窗口骨架预填守卫跑不起来：%s" % _exc)
 
-    # 17v 真跑 examples/ 下全部 ops-*.json 样板：空页 `new` → `patch --ops` → `check`，三步都要 rc=0。
+    # guard: docs.examples.ops_smoke 真跑 examples/ 下全部 ops-*.json 样板：空页 `new` → `patch --ops` → `check`，三步都要 rc=0。
     #   起因：样板是"从 `new --kind page` 空页出发、同文件自洽"的**对外承诺**，无守卫保证它**当下**跑得通 ——
     #     改了 `xwl.py` 的 ops 语义、或样板的 `path` 指错，样板跑不通了没人知道。经 `_run_cli`（子进程跑真 CLI）：
     #     拿真实退出码、异常被进程隔离；`new`/`patch` 带 `--no-js` 免依赖 node，`check` **不带**（连事件 JS 一起校验）。
-    _b17v_dir = os.path.join(_root_sub, "examples")
-    _b17v_names = sorted(_n for _n in (os.listdir(_b17v_dir) if os.path.isdir(_b17v_dir) else [])
+    _ops_dir = os.path.join(_root_sub, "examples")
+    _ops_names = sorted(_n for _n in (os.listdir(_ops_dir) if os.path.isdir(_ops_dir) else [])
                          if _n.startswith("ops-") and _n.endswith(".json"))
-    _b17v_bad: list = []
-    for _b17v_nm in _b17v_names:
-        _b17v_x = os.path.join(tmp, "ops-sample-%s.xwl" % _b17v_nm[4:-5])
-        for _b17v_cmd in (["new", _b17v_x, "--kind", "page", "--no-js"],
-                          ["patch", _b17v_x, "--ops", os.path.join(_b17v_dir, _b17v_nm), "--no-js"],
-                          ["check", _b17v_x]):
-            _b17v_rc, _b17v_out, _b17v_err = _run_cli(_b17v_cmd)
-            if _b17v_rc != 0:
-                _b17v_tail = (_b17v_out or _b17v_err).strip().splitlines()
-                _b17v_bad.append("真跑样板 %s 失败（%s rc=%s）：%s"
-                                 % (_b17v_nm, _b17v_cmd[0], _b17v_rc,
-                                    _b17v_tail[-1] if _b17v_tail else "（无输出）"))
+    _ops_bad: list = []
+    for _ops_name in _ops_names:
+        _ops_page = os.path.join(tmp, "ops-sample-%s.xwl" % _ops_name[4:-5])
+        for _ops_command in (["new", _ops_page, "--kind", "page", "--no-js"],
+                          ["patch", _ops_page, "--ops", os.path.join(_ops_dir, _ops_name), "--no-js"],
+                          ["check", _ops_page]):
+            _ops_rc, _ops_out, _ops_err = _run_cli(_ops_command)
+            if _ops_rc != 0:
+                _ops_tail = (_ops_out or _ops_err).strip().splitlines()
+                _ops_bad.append("真跑样板 %s 失败（%s rc=%s）：%s"
+                                 % (_ops_name, _ops_command[0], _ops_rc,
+                                    _ops_tail[-1] if _ops_tail else "（无输出）"))
                 break
-    if _b17v_bad:
-        doc_fail.extend(_b17v_bad)
+    if _ops_bad:
+        doc_fail.extend(_ops_bad)
     else:
-        print("[ok]  真跑 examples/ops-*.json 样板（%d 份）全部通过" % len(_b17v_names))
+        print("[ok]  真跑 examples/ops-*.json 样板（%d 份）全部通过" % len(_ops_names))
 
     if doc_fail:
         failures.extend(doc_fail)

@@ -4,7 +4,7 @@
   "principle": "任何派生事实只在此声明一次；未绑定到本表 ID 的派生值出现一律判红。生成器与判据须走不同代码路径（§3.2）。",
   "registry_root": "skill/contracts/registry.json",
   "value_authority": "真实源（文档与代码本体、磁盘文件）",
-  "scale_ref_basis": "scale_ref 为当前真实源规模的瞬时参照数（供判据/负例对账定位用），不是值正本；真实规模以现场重算为准，随真实源变化重新对齐，不手写第二份值。M2 已按当前实值对齐：items=249、checkpoints=92、examples.ops=9、references/layers=20、update_history=44、test_prompts=22、blocks=13、doc_guard_blocks=35、golden=6、protected=4、exempt=1、injection.cases=68、plans.archive.manifests=8。",
+  "scale_ref_basis": "scale_ref 为当前真实源规模的瞬时参照数（供判据/负例对账定位用），不是值正本；真实规模以现场重算为准，随真实源变化重新对齐，不手写第二份值。contract_validation 已按当前实值对齐：items=249、checkpoints=92、examples.ops=9、references/layers=20、update_history=45、test_prompts=22、blocks=13、doc_guard_blocks=35、golden=6、protected=4、exempt=1、injection.cases=68、plans.archive.manifests=8。",
   "order_types": {
     "set_canonical": {
       "meaning": "集合，按字典序规范排列",
@@ -75,7 +75,7 @@
     ]
   },
   "derived_claims": {
-    "note": "登记式「文档自称数字」声明（§3.4 形状白名单 × 绑定）。每条：锚正则（在文档里捕获数字）-> 绑定ID -> 该绑定从真实源现场重算的值。扫描器对每条登记声明做「声明值 == 重算值」判定，不等或解析不到即红。新增声明＝在此登记一条（登记驱动，不改扫描代码）。这是把 17i 逐句式字面量登记收敛为数据驱动的通用面。",
+    "note": "登记式「文档自称数字」声明（§3.4 形状白名单 × 绑定）。每条：锚正则（在文档里捕获数字）-> 绑定ID -> 该绑定从真实源现场重算的值。扫描器对每条登记声明做「声明值 == 重算值」判定，不等或解析不到即红。新增声明＝在此登记一条（登记驱动，不改扫描代码）。这是把 docs.claims.declared_counts_match 逐句式字面量登记收敛为数据驱动的通用面。",
     "claims": [
       {"id": "skill.faq_count", "doc": "SKILL.md", "regex": "\\*\\*(\\d+)\\s*条\\*\\*高频问题", "binding": "faq.count", "label": "SKILL §八 FAQ 条数"},
       {"id": "faq.first_block_count", "doc": "references/faq.md", "regex": "(?m)^\\*\\*(\\d+)\\s*条按四组归类\\*\\*", "binding": "faq.count", "label": "FAQ 首段「按四组归类」条数"},
@@ -370,10 +370,13 @@
     }
   ],
   "doc_guard_baseline_names": [
-    "17a", "17b", "17c", "17c-2", "17d", "17e", "17f", "17g", "17h", "17i",
-    "17j", "17j-10", "17j-11", "17j-12", "17j-13", "17j-14", "17j-3", "17j-4",
-    "17j-6", "17j-7", "17j-8", "17j-9", "17k", "17l", "17m", "17n", "17o",
-    "17p", "17q", "17r", "17t", "17u", "17v", "17w", "17x"
+    "docs.checklist.delta_counts", "docs.chronology.no_process_narrative", "docs.claims.declared_counts_match", "docs.claims.no_unscoped_measurements", "docs.content.no_legacy_phrases",
+    "docs.content.no_project_paths", "docs.diffguard.description_matches", "docs.distribution.self_contained", "docs.examples.ops_smoke", "docs.examples.schema_address",
+    "docs.examples.window_defaults", "docs.format.markdown_shape", "docs.heading.no_emoji", "docs.layers.content_policy", "docs.layers.ownership",
+    "docs.limits.document_sizes", "docs.limits.help_sizes", "docs.links.local_targets_exist", "docs.metadata.package_consistency", "docs.navigation.anti_patterns_entry",
+    "docs.navigation.cross_file_sections", "docs.navigation.moved_content_visible", "docs.navigation.toc_order_and_completeness", "docs.outputs.fenced_runtime_match", "docs.outputs.inline_runtime_match",
+    "docs.prompts.cli_coverage", "docs.references.chapters_resolve", "docs.references.index_bijective", "docs.references.named_targets_resolve", "docs.references.sections_resolve",
+    "docs.registry.controls_filename", "docs.sections.index_contract", "docs.skill.trigger_anchors", "docs.support.os_matrix", "docs.tables.no_duplicate_rows"
   ],
   "doc_guard_baseline_names_note": "冻结的 doc_guard_blocks 基线名集合（35 个）。作为 baseline.deduction 判「基线外新名」的权威基线；新增守卫块须在此登记并在 CHANGELOG 独立提及。与 baseline.json 的键集在干净树上应相等（相等即无「基线外新名」）。",
   "exempt_forms": {
