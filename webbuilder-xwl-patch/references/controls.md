@@ -305,16 +305,17 @@ module                          ← 每个 xwl 的 children[0]（页面级节点
 └─ viewport / window / panel    ← 可见根容器
    └─ grid  (itemId=grid1)
       ├─ store                  ← 数据源（configs.url = 'm?xwl=…'）
-      ├─ toolbar (itemId=tbar)  ← 查询条：text/combo/date/button/item（工具条挂**网格的 children**，不是网格的兄弟）
+      ├─ toolbar (itemId=tbar)  ← 单行查询条；多行查询见 layout.md（工具条挂**网格的 children**，不是网格的兄弟）
       ├─ array (itemId=columns) ← 列数组
       │  └─ column × N          ← 列（列里可真嵌套 column = 分组表头；column 可挂 combo/number/text 作 editor）
-      ├─ feature (itemId=features)
+      ├─ array (itemId=features)
+      │  └─ feature × N
       └─ tableview (itemId=viewConfig)
 ```
 
 **每个控件节点的键序也固定**：`configs, expanded, children, type`；**有事件时才多一个 `events`，排在最后**。
 所以「无事件的控件节点没有 `events` 键」—— 拿骨架时按 `schema --skeleton` 给的来（它只输出该控件合法的键）。
-**`itemId` 是**工具寻址**用的（`@itemId`），必须唯一**，槽位除外（`grid`、`tree`、`propertygrid` 的直接子工具条允许名是 `tbar`、`bbar`、`lbar`、`rbar`、`fbar`；`columns` 只是 `grid` 的直接子 `array`；列上的 `editor`）；运行时 `app.<名>` 取的是**注册键**（见 [`faq.md`](faq.md)「附录：itemId 命名规范与重名处置」）；少写 `expanded` / `children` 通常有默认值兜底，
+**`itemId` 是**工具寻址**用的（`@itemId`），自主命名控件必须唯一**。固定槽位只在真实父上下文成立，并允许跨父复用（`grid` 的 `store(store)`、`toolbar(tbar/bbar/lbar/rbar/fbar)`、`array(columns)`、`array(features)→feature`、`array(dockedItems)`、`tableview(viewConfig)`；`tree` 的 `treestore(store)` 与 `toolbar(tbar)`；`propertygrid` 的 `store(store)` 与 `toolbar(tbar)`；列上的 `editor`）。同一直接父级的同一属性只能有一份供给，显式 `configs` 与内嵌节点合并计数；运行时 `app.<名>` 取的是**注册键**（见 [`faq.md`](faq.md)「附录：itemId 命名规范与重名处置」）；少写 `expanded` / `children` 通常有默认值兜底，
 但**会与设计器产物不一致**，下次被设计器保存就产生额外 diff。
 
 > ⚠️ **顶层 `module` 的 `expanded` 在两种 `new --kind` 下取值相反**：`--kind page` 出 `false`、`--kind sql` 出 `true`。这是**有意**的、不是缺陷 —— 该键是**设计器导航树的展开状态**（设计器侧 UI 状态），**不在注册表 `configs` 键内**、**无运行时语义**；语料实测里页面与 SQL 载体**两类都两种值并存** ⇒ **不存在「必须取某值」的规则**，属**风格差异**。⇒ **改代码去统一既无依据、又会与语料多数冲突、无收益**，故**只在此记明、不改代码**。
@@ -341,12 +342,18 @@ module                          ← 每个 xwl 的 children[0]（页面级节点
 
 > **关键澄清**：`container` 标记只说明"能不能放**真子控件**"。`grid`/`module`/`combo` 这些没标容器的节点**照样有 `children`**——里面装的是上面这些**配置载体**（如 `grid.children` 既装 `store`/`array(columns)`/`feature`/`tableview` 这类**配置载体**，也可装 `toolbar` 这类**真子控件**，见上方控件树）。所以判断能不能加子节点，要分清是加"子控件"还是加"配置载体"。
 
+### 5.1 固定槽位与重复供给
+
+`check ⑪`、`itemids`、`patch`/`new --from-json` 写前检查和任务级验收器按同一事实识别槽位。两个 Grid 各有 `store/tbar/columns` 是合法结构；同一 Grid 出现两个 `store`、两个 `tbar` 或两个 `columns`，或 `configs.store` 与内嵌 `store(store)` 同时存在，报告同一父级的重复供给。
+
+同一 Grid 的列树中，完全重复列与重复列 `itemId` 都在既有 ⑪ 输出中提示两处路径。仅 `dataIndex` 相同不自动判错，交人工结合用途核对。跨 Grid 的同名列仍按普通列命名规则处理。
+
 ## 六、选型建议（哪种情况用什么）
 | 需求 | 用什么 | 备注 |
 |---|---|---|
 | PC 主页面骨架 | `viewport` → `panel`/`grid` | 根容器用一个即可 |
 | 查询条件条 | `toolbar`（`itemId` 惯用 `tbar`）+ `text`/`combo`/`date` | 查询按钮 `load({out: app.tbar})` 自动收值 |
-| 列表展示 | `grid` + `store` + `array(columns)` | 列用 `column`，`itemId` **默认＝字段名**（同页多网格时加 `Col` 后缀，camelCase） |
+| 列表展示 | `grid` + `store` + `array(columns)` ＋ `array(features)→feature` ＋ `tableview(viewConfig)` | 槽位名固定；列用 `column`，`itemId` **默认＝字段名**（同页多网格时加 `Col` 后缀，camelCase） |
 | 弹窗编辑 | `window` → `form`/`panel` → 字段控件 | 保存按钮里用 `out: app.editWin` 收整表值 |
 | 下拉选择 | `combo` + `store` | `store.url` 指向字典/代码类 SQL 文件 |
 | 多页签 | `tab` → 多个 `panel` |  |

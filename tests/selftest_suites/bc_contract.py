@@ -249,6 +249,43 @@ _GOLDEN_PATCHED = '''{
  "children": []
 }'''
 
+_BC19_CLEAN_BEFORE = (
+    b'{\n'
+    b' "hidden": false,\n'
+    b' "children": [{\n'
+    b'  "configs": {"itemId": "module"},\n'
+    b'  "expanded": false,\n'
+    b'  "children": [],\n'
+    b'  "type": "module"\n'
+    b' }],\n'
+    b' "roles": {"default": 1},\n'
+    b' "title": "",\n'
+    b' "iconCls": "",\n'
+    b' "inframe": false,\n'
+    b' "pageLink": ""\n'
+    b'}'
+)
+_BC19_CLEAN_AFTER = _BC19_CLEAN_BEFORE.replace(
+    b' "title": "",', b' "title": "Slot contract",', 1)
+_BC19_OPS = b'[{"op":"set","path":["title"],"value":"Slot contract"}]\r\n'
+_BC19_MARKER_LINE = "[ok]   ⑪ 写前槽位检查通过（无新增问题）"
+_BC19_OLD_STDOUT_LINES = (
+    "源文件: 226 B | 换行=LF | 是否设计器原样排版: 是（重排后与原文逐字节一致，diff 只含本次改动）",
+    "[ok]   已应用 1 个 op",
+    "[ok]   语义等价比对通过（规范化文本：含键序与值类型） | 变更后 239 B (+13)",
+    "备份 -> clean.xwl.bak",
+    "已写入: clean.xwl（本次已直接写盘）",
+    "--- 自动校验（本次改动是否破坏格式）---",
+    "=== check: clean.xwl",
+    "  [ok]   ① BOM  ② 换行一致  ③ 续行空白  ④ 解析  ⑤ 末行结构",
+    "  [ok]   ⑥ 无 events 节点",
+    "  [note] ⑦ 注册键重名分级：已按 `--no-itemid` 跳过",
+    "  -> OK",
+    "  [note] 该文件是 LF 换行（设计器在服务器上的产物形态），合法。",
+    "=== 结果: ALL OK",
+    "提示：注册键重名不在本步判定范围；要连它一起体检，跑 `xwl.py itemids clean.xwl`",
+)
+
 @_cap
 def _check_bc_contract(tmp, node, failures, write) -> None:
     """B/C 组「注册键口径 + 换行判据 + 整数值浮点保真 + 排版提示具体化 + 注册表来源同句」的**行为断言**（第 27 组）。
@@ -533,7 +570,8 @@ def _check_bc_contract(tmp, node, failures, write) -> None:
         payload12 = json.loads(out12)
         grps12 = payload12.get("groups") or []
         if not isinstance(payload12, dict) or set(payload12) != {
-                "errors", "groups", "js_refs", "n_benign", "nn_ty", "warns"}:
+                "errors", "groups", "js_refs", "n_benign", "nn_ty", "warns",
+                "slot_issues"}:
             f12.append("itemids --json 顶层类型或字段集合变化：%r" % type(payload12).__name__)
     except Exception as exc:  # noqa: BLE001
         f12.append("itemids --json 输出不是 JSON：%s" % exc)
@@ -639,13 +677,13 @@ def _check_bc_contract(tmp, node, failures, write) -> None:
 
     # 尾部两组（`app._X` 欠报 / params 按注册键找容器）已下沉为 `_check_bc_contract_tail`
     #   （本函数 406 行，要进 400 的上限）。判据文本逐字未改。
-    _check_bc_contract_tail(write, node, bc, _page, _ok)
+    _check_bc_contract_tail(tmp, write, node, bc, _page, _ok)
 
     if bc:
         failures.extend(bc)
 
 @_cap
-def _check_bc_contract_tail(write, node, bc, _page, _ok) -> None:
+def _check_bc_contract_tail(tmp, write, node, bc, _page, _ok) -> None:
     """`_check_bc_contract` 的尾部两组（有界下沉，判据文本逐字未改）。"""
     # ---- 回归：只以 `app._X` 形式被引用的重名组也必须判 error（欠报修复）----
     # 注入判据：把 `audit_itemids` 的 `referenced = (name in refs_all) or ("_" + name in refs_all)`
@@ -690,4 +728,88 @@ def _check_bc_contract_tail(write, node, bc, _page, _ok) -> None:
     if "app.tbrO" not in out18 or "容器内取值控件" not in out18:
         f18.append("params 未把 app.tbrO 当容器列出并给容器内取值控件")
     _ok("params 按**注册键**找容器（normalName=tbrO 的 toolbar 命中、无假「找不到容器」）", f18)
+
+    # ---- 段 32：干净 patch stdout 只新增一行；help options 含三档与默认值 ----
+    f19 = []
+    top = xwl.build_parser()
+    subs = next((a for a in top._actions if getattr(a, "choices", None)), None)
+    for name in ("patch", "new"):
+        helptext = subs.choices[name].format_help() if subs is not None else ""
+        lines = helptext.splitlines()
+        option_at = [i for i, ln in enumerate(lines)
+                     if ln.lstrip().startswith("--slot-check")]
+        if len(option_at) != 1:
+            f19.append("%s --help 的 options 段应恰有一行 --slot-check，实得 %r"
+                       % (name, [lines[i] for i in option_at]))
+        else:
+            start = option_at[0]
+            end = start + 1
+            while end < len(lines) and not lines[end].lstrip().startswith("--"):
+                end += 1
+            option_text = "\n".join(lines[start:end])
+            if not all(s in option_text for s in ("warn", "error", "default: warn")):
+                f19.append("%s --help 未展示三档与默认值：%r" % (name, option_text))
+
+    run_dir = os.path.join(tmp, "bc19_clean_patch")
+    os.makedirs(run_dir, exist_ok=True)
+    with open(os.path.join(run_dir, "clean.xwl"), "wb") as fh:
+        fh.write(_BC19_CLEAN_BEFORE)
+    with open(os.path.join(run_dir, "ops.json"), "wb") as fh:
+        fh.write(_BC19_OPS)
+
+    line_break = os.linesep.encode("utf-8")
+    old_stdout = b"".join(
+        (line + os.linesep).encode("utf-8") for line in _BC19_OLD_STDOUT_LINES)
+    marker = (_BC19_MARKER_LINE + os.linesep).encode("utf-8")
+    expected_lines = (_BC19_OLD_STDOUT_LINES[:3]
+                      + (_BC19_MARKER_LINE,) + _BC19_OLD_STDOUT_LINES[3:])
+    expected_stdout = b"".join(
+        (line + os.linesep).encode("utf-8") for line in expected_lines)
+
+    env19 = {**os.environ, "PYTHONIOENCODING": "utf-8", "PYTHONUTF8": "1"}
+    proc19 = _cap_run(
+        [sys.executable, "-B", os.path.join(SKILL_ROOT, "scripts", "xwl.py"),
+         "patch", "clean.xwl", "--ops", "ops.json", "--backup"],
+        cwd=run_dir, timeout=120, env=env19, binary=True)
+    rc19, out19b, err19b = proc19.returncode, proc19.stdout, proc19.stderr
+
+    def _stdout_issues(out):
+        issues = []
+        if out != expected_stdout:
+            issues.append("stdout 与平台换行构造的冻结基线不同")
+        if out.count(marker) != 1:
+            issues.append("⑪ 通过行应恰 1 条，实得 %d" % out.count(marker))
+        if out.replace(marker, b"", 1) != old_stdout:
+            issues.append("删除唯一新增 ⑪ 行后 stdout 不等于旧基线")
+        semantic = (_BC19_OLD_STDOUT_LINES[2] + os.linesep).encode("utf-8")
+        backup = (_BC19_OLD_STDOUT_LINES[3] + os.linesep).encode("utf-8")
+        if not (out.find(semantic) < out.find(marker) < out.find(backup)):
+            issues.append("⑪ 通过行未紧跟语义等价比对且位于备份/写入之前")
+        return issues
+
+    if rc19 != 0:
+        f19.append("干净 patch rc=%r（应 0）" % rc19)
+    f19.extend(_stdout_issues(out19b))
+    if err19b != b"":
+        f19.append("干净 patch stderr 应精确为空，实得 %r" % err19b)
+    for live_name, expected_bytes in (("clean.xwl", _BC19_CLEAN_AFTER),
+                                      ("clean.xwl.bak", _BC19_CLEAN_BEFORE)):
+        live = os.path.join(run_dir, live_name)
+        if not os.path.isfile(live) or open(live, "rb").read() != expected_bytes:
+            f19.append("%s 与冻结基线字节不同" % live_name)
+
+    missing_marker = out19b.replace(marker, b"", 1)
+    moved_marker = missing_marker.replace(
+        (_BC19_OLD_STDOUT_LINES[3] + os.linesep).encode("utf-8"),
+        (_BC19_OLD_STDOUT_LINES[3] + os.linesep).encode("utf-8") + marker, 1)
+    extra_output = out19b + "未声明输出".encode("utf-8") + line_break
+    for label, mutated in (("标记缺失", missing_marker),
+                           ("标记移动", moved_marker),
+                           ("额外输出", extra_output)):
+        if not _stdout_issues(mutated):
+            f19.append("定向反例未检出：%s" % label)
+        else:
+            print("[ok]  bc19 定向反例检出：" + label)
+    _ok("干净 patch 差分合同：唯一新增 ⑪ 行、删除后旧 stdout 逐字节相同、stderr/目标/备份相同；"
+        "patch/new help 展示档位与默认值", f19)
 

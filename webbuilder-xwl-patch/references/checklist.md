@@ -68,6 +68,10 @@
       url 写的是**模块相对路径且不带 `.xwl`**，目标文件确实存在，参数名与下游一致
 - [ ] 新增控件时：类型/父节点选对（`container` 才能挂真子控件；`grid` 的列/数据源是**配置载体**，
       见 [`controls.md`](controls.md)）
+- [ ] 固定槽位按父上下文使用：双 Grid 可各有一套 `store/tbar/columns`，但同一直接父级不能重复供给；
+      同 Grid 没有完全重复列或重复列 `itemId`（见 [`controls.md`](controls.md) §5.1）
+- [ ] 多行查询用 `panel → array(dockedItems) → toolbar(dock:"top")` 或 Grid 的 `array(dockedItems)`，
+      两行字段显式组装进同一次 `params`，并用 `params --strict` 核对（见 [`layout.md`](layout.md)「6.1 Grid 的两行查询」与「6.2 Panel 的两行查询」）
 - [ ] 改 SQL 用的是 `@itemId` 寻址（而不是硬编码 `children[0].children[0]`）
 
 ## 五、SQL 与传参
@@ -91,6 +95,7 @@
       而不是改 `itemId` —— 补 `normalName` 是**新建键**，那条 `set` 要带 `"create": true`
 - [ ] 改了 `itemId` 的话：**事件 JS 里对它的引用已同步改**，且 `itemids` 复查过
 - [ ] `xwl.py check` 的 ⑦ 没有 `[FAIL]`（**未被引用的重名出 `benign`**、知道了就行 —— 老代码可留，新代码别再加）
+- [ ] 固定槽位没有同父级重复供给；`check --strict` 的 ⑪ 没有错名、重复供给或同 Grid 重复列
 
 ## 七、新建文件时（额外必查）
 

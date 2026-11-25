@@ -15,10 +15,11 @@
   AMBIGUOUS   定位歧义（如同一文件内 itemId 重名、引用指向多个候选 ⇒ 报歧义，不替你任选）
   UNVERIFIED  无法验证（如缺 git 基线、缺基准数据 ⇒ 明确"未执行/无法验证"，⛔ 不当通过）
 
-三负例（内建 `--selftest`）：
+四负例（内建 `--selftest`）：
   ① 零对象：空任务 ⇒ 必须「不通过/未执行」，⛔ 不假绿
   ② 缺基线：无 git ⇒ 基线类应检项标 UNVERIFIED（非 PASS）
   ③ 歧义定位：itemId 重名 ⇒ 报 AMBIGUOUS（非任选其一）
+  ④ 槽位重复：同一父级重复供给 ⇒ 报 AMBIGUOUS；跨父级合法固定槽位为 PASS
 
 用法：
   python tests/task_acceptance.py <task_dir> [--golden G.json] [--json] [--selftest]
@@ -153,17 +154,58 @@ def derive_expected(task_dir):
                           "detail": "dataprovider sql 非空（%d 处）" % len(sql_nodes),
                           "source": rel})
 
-        # ② 同文件 itemId 唯一
+        # ② 同文件 itemId 唯一。固定槽位按“父对象身份 + 槽位名”判：
+        #    跨父级同名合法；同一父级重复供给与自主命名重名仍判 AMBIGUOUS。
         iids = {}
         for node, _p in _iter_controls(obj):
             i = _cfg(node).get("itemId")
             if isinstance(i, str) and i:
                 iids[i] = iids.get(i, 0) + 1
         dups = sorted(k for k, c in iids.items() if c > 1)
-        if dups:
+        import xwl
+        slot_analyzer = getattr(xwl, "analyze_slots", None)
+        controls_path = xwl.discover_controls(os.path.join(task_dir, rel))
+        slot_rep = (slot_analyzer(obj, controls_path) if callable(slot_analyzer)
+                    else {"occurrences": [], "issues": [], "unavailable": True})
+        occurrences = slot_rep.get("occurrences") or []
+        slot_by_iid = {}
+        for occurrence in occurrences:
+            slot_by_iid.setdefault(occurrence.get("item_id"), []).append(occurrence)
+        same_parent = []
+        autonomous = []
+        for name in dups:
+            same_name = slot_by_iid.get(name, [])
+            legal_slots = [o for o in same_name if o.get("state") == "ok"]
+            parent_keys = [o.get("parent_key") for o in legal_slots]
+            if same_name and len(legal_slots) == iids[name] and len(parent_keys) == len(set(parent_keys)):
+                continue
+            dup_issue_paths = [
+                i.get("message") for i in slot_rep.get("issues") or []
+                if i.get("kind") == "duplicate_slot" and i.get("slot") == name
+            ]
+            if dup_issue_paths:
+                same_parent.extend(dup_issue_paths)
+            covered_paths = {
+                tuple(o.get("path") or []) for o in same_name
+                if o.get("state") == "ok"
+            }
+            ordinary = [
+                node_path for node, node_path in _iter_controls(obj)
+                if _cfg(node).get("itemId") == name and tuple(node_path) not in covered_paths
+            ]
+            if ordinary:
+                autonomous.append("%s ×%d" % (name, len(ordinary)))
+        if same_parent or autonomous:
+            bits = []
+            if same_parent:
+                bits.append("同一父级重复占位：%s" % "；".join(same_parent))
+            if autonomous:
+                bits.append("自主命名歧义：%s" % "、".join(autonomous))
+            if slot_rep.get("unavailable"):
+                bits.append("统一槽位判据不可用")
             items.append({"id": "itemid-unique:" + rel, "kind": "itemid-unique",
                           "state": STATE_AMBIGUOUS,
-                          "detail": "同文件 itemId 重名：%s（定位有歧义，不任选）" % ", ".join(dups),
+                          "detail": "；".join(bits),
                           "source": rel})
         elif iids:
             items.append({"id": "itemid-unique:" + rel, "kind": "itemid-unique",
@@ -204,8 +246,9 @@ def _multi_hit(task_dir, ref):
 # --------------------------------------------------------------------------- #
 def _has_git(task_dir):
     try:
+        env = dict(os.environ, GIT_OPTIONAL_LOCKS="0")
         r = subprocess.run(["git", "-C", task_dir, "rev-parse", "--show-toplevel"],
-                           capture_output=True, text=True, timeout=20)
+                           capture_output=True, text=True, timeout=20, env=env)
         return r.returncode == 0
     except Exception:  # noqa: BLE001
         return False
@@ -299,7 +342,7 @@ def _summary(result):
 
 
 # --------------------------------------------------------------------------- #
-# 内建三负例 + 黄金覆盖/精确率自检
+# 内建四负例 + 生成链正例 + 黄金覆盖/精确率自检
 # --------------------------------------------------------------------------- #
 def _selftest():
     import io
@@ -361,8 +404,62 @@ def _selftest():
         if not amb_items or amb_items[0]["state"] != STATE_AMBIGUOUS:
             fails.append("负例③(歧义定位)：itemId 重名未报 AMBIGUOUS（%r）"
                          % (amb_items[0]["state"] if amb_items else None))
+        elif "自主命名歧义" not in amb_items[0].get("detail", ""):
+            fails.append("负例③(歧义定位)：detail 未分列自主命名歧义：%r"
+                         % amb_items[0].get("detail"))
         else:
             print("[ok]  负例③ 歧义定位：itemId 重名 ⇒ %s（报歧义、不任选）" % amb_items[0]["state"])
+
+        # ── 负例④ 同父级槽位重复供给：仍 AMBIGUOUS，detail 分列重复占位 ──
+        slotdup = os.path.join(tmp, "slotdup_task")
+        os.makedirs(slotdup, exist_ok=True)
+        slotdup_page = _page("SLOTDUP", children=[
+            {"configs": {"itemId": "grid1"}, "expanded": False, "type": "grid", "children": [
+                {"configs": {"itemId": "store"}, "expanded": False,
+                 "type": "store", "children": []},
+                {"configs": {"itemId": "store"}, "expanded": False,
+                 "type": "store", "children": []},
+            ]},
+        ])
+        _write_xwl(os.path.join(slotdup, "dup.xwl"), slotdup_page)
+        r_slotdup = evaluate(slotdup)
+        slotdup_items = [it for it in r_slotdup["items"] if it["kind"] == "itemid-unique"]
+        if (not slotdup_items or slotdup_items[0]["state"] != STATE_AMBIGUOUS
+                or "同一父级重复占位" not in slotdup_items[0].get("detail", "")):
+            fails.append("负例④(槽位重复)：未按同一父级重复占位判 AMBIGUOUS：%r"
+                         % (slotdup_items[0] if slotdup_items else None))
+        else:
+            print("[ok]  负例④ 槽位重复：同一父级重复 supply ⇒ AMBIGUOUS")
+
+        # ── 正例：目标生成链上的跨父固定槽位为 PASS ──
+        legal = os.path.join(tmp, "legal_slot_task")
+        os.makedirs(legal, exist_ok=True)
+        import xwl
+        generated = xwl.skeleton_page("合法双 Grid")
+        module = generated["children"][0]
+        for grid_name, col_name in (("grid1", "col1"), ("grid2", "col2")):
+            module["children"].append({
+                "configs": {"itemId": grid_name}, "expanded": False,
+                "type": "grid", "children": [
+                    {"configs": {"itemId": "store"}, "expanded": False,
+                     "type": "store", "children": []},
+                    {"configs": {"itemId": "tbar"}, "expanded": False,
+                     "type": "toolbar", "children": []},
+                    {"configs": {"itemId": "columns"}, "expanded": False,
+                     "type": "array", "children": [
+                         {"configs": {"itemId": col_name}, "expanded": False,
+                          "type": "column", "children": []},
+                     ]},
+                ]})
+        with open(os.path.join(legal, "generated.xwl"), "w",
+                  encoding="utf-8", newline="") as fh:
+            fh.write(xwl.dumps_designer(generated, 1, "\n"))
+        r_legal = evaluate(legal)
+        legal_items = [it for it in r_legal["items"] if it["kind"] == "itemid-unique"]
+        if not legal_items or legal_items[0]["state"] != STATE_PASS:
+            fails.append("正例(目标生成链)：合法跨父固定槽位未判 PASS：%r" % legal_items)
+        else:
+            print("[ok]  正例(目标生成链)：合法跨父固定槽位复用为 PASS")
 
         # ── 黄金覆盖/精确率：一个含 page(→link sql载体) 的样例 ──
         golddir = os.path.join(tmp, "gold_task")
@@ -402,7 +499,7 @@ def _selftest():
         for f in fails:
             print("[FAIL] " + f)
         return 1
-    print("[ok]  task_acceptance_static_checklist 执行器自检：三负例 + 黄金覆盖/精确率 全部符合")
+    print("[ok]  task_acceptance_static_checklist 执行器自检：四负例 + 正例 + 黄金覆盖/精确率 全部符合")
     return 0
 
 
@@ -414,7 +511,7 @@ def main(argv=None):
     p.add_argument("task_dir", nargs="?", help="任务目录（含 .xwl）")
     p.add_argument("--golden", help="黄金应检清单 JSON")
     p.add_argument("--json", action="store_true", help="输出机器可读 JSON")
-    p.add_argument("--selftest", action="store_true", help="跑内建三负例 + 黄金自检")
+    p.add_argument("--selftest", action="store_true", help="跑内建四负例 + 正例 + 黄金自检")
     a = p.parse_args(argv)
     if a.selftest:
         return _selftest()

@@ -365,10 +365,13 @@ def _check_itemid_event_reference_filter():
 
 
 def _check_reserved_slots(tmp, node, failures, write) -> None:
-    """序1至序3：保留名三元组、错槽位⑪、schema 骨架。挂在既有 itemids 块上，不是新自检块。"""
+    """段 32：统一槽位、同父级供给、重复列、错槽位⑪与 schema 骨架。"""
 
     def _bar(iid):
         return {"type": "toolbar", "configs": {"itemId": iid}, "children": []}
+
+    def _store(iid="store", typ="store"):
+        return {"type": typ, "configs": {"itemId": iid}, "children": []}
 
     def _cols(array_iid, col_iid, editor_iid):
         return {"type": "array", "configs": {"itemId": array_iid}, "children": [
@@ -382,6 +385,21 @@ def _check_reserved_slots(tmp, node, failures, write) -> None:
         if events:
             node_["events"] = events
         return node_
+
+    def _complete_grid(iid, column_prefix="col"):
+        return _grid(iid, [
+            _store("store"),
+            _bar("tbar"),
+            {"type": "array", "configs": {"itemId": "columns"}, "children": [
+                {"type": "column", "configs": {
+                    "itemId": column_prefix + "Code", "dataIndex": "code"}, "children": []},
+            ]},
+            {"type": "feature", "configs": {"itemId": "features"}, "children": []},
+            {"type": "array", "configs": {"itemId": "dockedItems"}, "children": [
+                _bar("toolbar1"), _bar("toolbar2"),
+            ]},
+            {"type": "tableview", "configs": {"itemId": "viewConfig"}, "children": []},
+        ])
 
     def _dump(name, obj):
         return write(name, xwl.dumps_designer(obj, 1, CRLF))
@@ -490,6 +508,153 @@ def _check_reserved_slots(tmp, node, failures, write) -> None:
         and "children[" not in out, "itemids 打 [note] 保留名，定位用 @父itemId/@名",
         out[:300])
 
+    # 无注册表时也必须统一识别固定三元组；跨父级同名槽位合法。
+    all_slots_page = {"children": [
+        _complete_grid("gridA", "a"),
+        _complete_grid("gridB", "b"),
+        {"type": "tree", "configs": {"itemId": "treeA"}, "children": [
+            _store("store", "treestore"), _bar("tbar"),
+            {"type": "array", "configs": {"itemId": "columns"},
+             "children": [_cols("ignored", "treeCol", "editor")["children"][0]]},
+            {"type": "array", "configs": {"itemId": "dockedItems"},
+             "children": [_bar("toolbar1"), _bar("toolbar2")]},
+            {"type": "tableview", "configs": {"itemId": "viewConfig"}, "children": []},
+        ]},
+        {"type": "propertygrid", "configs": {"itemId": "pgA"}, "children": [
+            _store("store"), _bar("tbar"),
+        ]},
+        {"type": "panel", "configs": {"itemId": "panelA"}, "children": [
+            {"type": "array", "configs": {"itemId": "dockedItems"},
+             "children": [_bar("toolbar1"), _bar("toolbar2")]},
+        ]},
+    ]}
+    all_slots_rep = xwl.analyze_slots(all_slots_page) if hasattr(xwl, "analyze_slots") else {
+        "issues": [{"kind": "missing-analyze_slots"}]}
+    _ok(not all_slots_rep["issues"],
+        "固定槽位统一识别：双 Grid、tree(treestore/columns)、feature/features、dockedItems、viewConfig 跨父合法",
+        "issues=%r" % all_slots_rep.get("issues"))
+    all_slots_audit = xwl.audit_itemids(all_slots_page)
+    all_slot_groups = {g["name"] for g in all_slots_audit["groups"]} & {
+        "store", "tbar", "columns", "features", "dockedItems", "viewConfig"}
+    _ok(not all_slot_groups,
+        "合法跨父固定槽位不进注册键重名组",
+        "groups=%s" % sorted(all_slot_groups))
+
+    mixed_page = {"children": [
+        _grid("gridMixed", [_store("store")], {"click": "app.store.load();"}),
+        {"type": "panel", "configs": {"itemId": "store"}, "children": []},
+    ]}
+    mixed_rep = xwl.audit_itemids(mixed_page)
+    mixed_group = next((g for g in mixed_rep["groups"] if g["name"] == "store"), None)
+    mixed_fix_paths = {
+        tuple(fix["path"]) for fix in (mixed_group or {}).get("fix_itemid", [])
+    }
+    grid_store_path = ("children", 0, "children", 0, "configs", "itemId")
+    _ok(mixed_group is not None and mixed_group["level"] == "error"
+        and grid_store_path not in mixed_fix_paths,
+        "混合重名保留整组定位证据，改名建议不指向合法 Grid store",
+        "group=%r fixes=%r" % (mixed_group, sorted(mixed_fix_paths)))
+
+    duplicate_slots_page = {"children": [
+        {"type": "grid", "configs": {"itemId": "gridDup"}, "children": [
+            _store("store"), _store("store"),
+            _bar("tbar"), _bar("tbar"),
+            {"type": "array", "configs": {"itemId": "columns"}, "children": []},
+            {"type": "array", "configs": {"itemId": "columns"}, "children": []},
+        ]},
+    ]}
+    dup_rep = xwl.analyze_slots(duplicate_slots_page) if hasattr(xwl, "analyze_slots") else {
+        "issues": []}
+    dup_locs = {i.get("slot") for i in dup_rep["issues"] if i.get("kind") == "duplicate_slot"}
+    _ok({"store", "tbar", "columns"}.issubset(dup_locs),
+        "同一直接父级的 store/tbar/columns 重复供给均有问题路径",
+        "issues=%r" % dup_rep.get("issues"))
+
+    explicit_dup = {"children": [{
+        "type": "grid",
+        "configs": {"itemId": "gridExplicit", "store": "app.otherStore"},
+        "children": [_store("store")],
+    }]}
+    explicit_rep = xwl.analyze_slots(explicit_dup) if hasattr(xwl, "analyze_slots") else {
+        "issues": []}
+    _ok(any(i.get("kind") == "duplicate_slot" and i.get("slot") == "store"
+            for i in explicit_rep["issues"]),
+        "内嵌节点与显式 configs 的同属性供给按父节点身份合并",
+        "issues=%r" % explicit_rep.get("issues"))
+
+    dup_slot_path = _dump("dup_supply.xwl", duplicate_slots_page)
+    rc, out, err = _itemids(dup_slot_path, suggest=True)
+    _ok(rc == 0 and out.lstrip().startswith("[]") and "gridDup_store" not in out
+        and "gridDup_tbar" not in out and "gridDup_columns" not in out
+        and "重复供给" in err,
+        "同父级重复槽位不给改名建议，itemids 用父级定位报告",
+        "rc=%s stdout=%r stderr=%r" % (rc, out[:180], err[:240]))
+    rc, out = _check([dup_slot_path], strict=True)
+    _ok(rc == 1 and "[FAIL] ⑪" in out and all(s in out for s in ("store", "tbar", "columns"))
+        and "@gridDup" in out,
+        "check --strict 对同父级重复供给判失败并给出父级路径",
+        "rc=%s %s" % (rc, " | ".join(ln.strip() for ln in out.splitlines()
+                                    if "⑪" in ln)[:400]))
+
+    repeated_columns = {"children": [
+        {"type": "grid", "configs": {"itemId": "gridCols"}, "children": [
+            {"type": "array", "configs": {"itemId": "columns"}, "children": [
+                {"type": "column", "configs": {
+                    "itemId": "sameCol", "dataIndex": "code", "text": "编码"}, "children": []},
+                {"type": "column", "configs": {
+                    "itemId": "sameCol", "dataIndex": "code", "text": "编码"}, "children": []},
+                {"type": "column", "configs": {
+                    "itemId": "nameCol", "dataIndex": "sameIndex"}, "children": []},
+                {"type": "column", "configs": {
+                    "itemId": "otherCol", "dataIndex": "sameIndex"}, "children": []},
+            ]},
+        ]},
+        {"type": "grid", "configs": {"itemId": "gridOther"}, "children": [
+            {"type": "array", "configs": {"itemId": "columns"}, "children": [
+                {"type": "column", "configs": {
+                    "itemId": "sameCol", "dataIndex": "code"}, "children": []},
+            ]},
+        ]},
+    ]}
+    col_rep = xwl.analyze_slots(repeated_columns) if hasattr(xwl, "analyze_slots") else {
+        "issues": []}
+    col_kinds = [i for i in col_rep["issues"] if i.get("kind", "").startswith("duplicate_column")]
+    _ok(any(i.get("kind") == "duplicate_column_id" for i in col_kinds)
+        and any(i.get("kind") == "duplicate_column_exact" for i in col_kinds)
+        and not any(i.get("dataIndex") == "sameIndex" for i in col_rep["issues"])
+        and not any("gridOther" in (i.get("message") or "") for i in col_kinds),
+        "同 Grid 完全重复/重复列 itemId 提示；仅 dataIndex 同值与跨 Grid 同名列不报",
+        "issues=%r" % col_rep.get("issues"))
+    col_path = _dump("dup_columns.xwl", repeated_columns)
+    rc, out, err = _itemids(col_path)
+    _ok(rc == 0 and "同 Grid 重复列 itemId" in out and "同 Grid 完全重复列" in out,
+        "itemids 在既有输出中展示两类同 Grid 重复列",
+        "rc=%s stdout=%r stderr=%r" % (rc, out[:260], err[:200]))
+    rc, out = _check([col_path], strict=True)
+    _ok(rc == 1 and "[FAIL] ⑪" in out and "同 Grid 重复列 itemId" in out,
+        "check --strict 升级同 Grid 重复列且保留两处路径",
+        "rc=%s %s" % (rc, " | ".join(ln.strip() for ln in out.splitlines()
+                                    if "⑪" in ln)[:360]))
+
+    bad_kind_page = {"children": [
+        {"type": "grid", "configs": {"itemId": "gridWrong"}, "children": [
+            _store("wrongStore"), _bar("wrongTbar"),
+            {"type": "array", "configs": {"itemId": "wrongColumns"}, "children": [
+                {"type": "column", "configs": {"itemId": "c1"}, "children": [
+                    {"type": "text", "configs": {"itemId": "wrongEditor"}, "children": []},
+                ]},
+            ]},
+            {"type": "feature", "configs": {"itemId": "wrongFeatures"}, "children": []},
+            {"type": "tableview", "configs": {"itemId": "wrongView"}, "children": []},
+        ]},
+    ]}
+    wrong_rep = xwl.analyze_slots(bad_kind_page) if hasattr(xwl, "analyze_slots") else {
+        "issues": []}
+    wrong_slots = {i.get("slot") for i in wrong_rep["issues"] if i.get("kind") == "wrong_slot"}
+    _ok({"store", "tbar", "columns", "editor", "features", "viewConfig"}.issubset(wrong_slots),
+        "错名 store/tbar/columns/editor/features/viewConfig 共用同一槽位判据",
+        "issues=%r" % wrong_rep.get("issues"))
+
     rc, out = _check([slot_path])
     _ok(rc == 0 and "保留名" in out and "[FAIL] ⑦" not in out,
         "只因 app.tbar 引用重复槽位时 ⑦ rc=0 且有保留名 note",
@@ -520,14 +685,13 @@ def _check_reserved_slots(tmp, node, failures, write) -> None:
         _grid("grid1", [
             {"type": "array", "configs": {"itemId": "features"}, "children": [
                 {"type": "feature", "configs": {"itemId": "f1"}, "children": []}]},
-            {"type": "store", "configs": {"itemId": "tripFileStore"}, "children": []},
         ]),
         {"type": "tgrid", "configs": {"itemId": "tg"}, "children": [
             {"type": "ttoolbar", "configs": {"itemId": "tb1"}, "children": []},
         ]},
     ]})
     rc, out = _check([neg_path])
-    _ok(rc == 0 and "⑪" not in out, "features/feature、tripFileStore、触摸错名不进 ⑪",
+    _ok(rc == 0 and "⑪" not in out, "array(features)→feature 与触摸错名不进 ⑪",
         "rc=%s %s" % (rc, " | ".join(ln.strip() for ln in out.splitlines() if "⑪" in ln)[:200]))
 
     occ_path = _dump("occ_slot.xwl", {"children": [_grid("grid1", [_bar("tbar"), _bar("tb1")])]})
@@ -548,7 +712,10 @@ def _check_reserved_slots(tmp, node, failures, write) -> None:
         [{"op": "set", "path": ["title"], "value": "w"}], ensure_ascii=False))
     rc, out = _run(xwl.cmd_patch, file=post, ops=ops, indent=1, eol="auto", dry_run=False,
                    backup=False, node=None, no_js=True, allow_new_key=False)
-    _ok(rc == 0 and "⑪" not in out, "patch 写盘后自检不跑 ⑪", "rc=%s tail=%s" % (rc, out[-180:]))
+    _after_write = out.split("已写入:", 1)[-1]
+    _ok(rc == 0 and "⑪" not in _after_write,
+        "patch 写盘后自检不跑 ⑪（既有问题只允许出现在写前门禁）",
+        "rc=%s tail=%s" % (rc, out[-240:]))
     rc, out = _run(xwl.cmd_expand, file=post, eol="auto", indent=1, safe=False, dry_run=False,
                    out=None, backup=False, node=None, no_js=True)
     _ok(rc == 0 and "⑪" not in out, "expand 写盘后自检不跑 ⑪", "rc=%s tail=%s" % (rc, out[-180:]))
@@ -589,9 +756,10 @@ def _check_reserved_slots(tmp, node, failures, write) -> None:
         "kids=%s hint=%s" % (_kids(out), " | ".join(ln.strip() for ln in out.splitlines()
                                                     if "提示" in ln)[:160]))
     rc, out = _schema("tree", True)
-    _ok(rc == 0 and _kids(out) == ["store", "tbar"] and '"itemId": "columns"' not in out
+    _ok(rc == 0 and _kids(out) == ["store", "tbar"] and '"type": "treestore"' in out
+        and '"type": "store"' not in out and '"itemId": "columns"' not in out
         and "槽位不可改" in out,
-        "schema tree --skeleton 只含 store 和 tbar", "kids=%s" % (_kids(out),))
+        "schema tree --skeleton 含 treestore(store) 和 tbar", "kids=%s" % (_kids(out),))
     rc, out = _schema("column", True)
     _ok(rc == 0 and _kids(out) == [] and "editor" not in out,
         "schema column --skeleton 不塞空 editor", "kids=%s has_editor=%s" % (_kids(out), "editor" in out))

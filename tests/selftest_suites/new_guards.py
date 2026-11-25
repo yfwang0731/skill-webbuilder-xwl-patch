@@ -420,6 +420,7 @@ def _check_new_guards(tmp, node, failures, write) -> None:
     _ng_write_overwrite(tmp, node, failures, write)
     _ng_params_defaults(tmp, node, failures, write)
     _ng_platform(tmp, node, failures, write)
+    failures.extend(_new_slot_gate_cases(tmp))
     # dependency_read_completeness：读依赖失败不得被吞（依赖面：SQL 载体／反查扫描；`var.json` 三态在 params_paths 块）
     failures.extend(_dependency_read_cases(tmp))
     # registry_single_load：注册表事实源一次加载（check --controls／itemids 两面；params 面在 params_paths 块）
@@ -437,6 +438,145 @@ def _check_new_guards(tmp, node, failures, write) -> None:
     failures.extend(_request_completion_cases(tmp))
     # 1.9.2 folders_parent_index：folders 检查目标/传入目录与其直接父索引的链接
     failures.extend(_check_folders_direct_parent_index(tmp))
+
+
+def _new_slot_gate_cases(tmp):
+    """段 32：`new --from-json` 三档、输出位置注册表与 --force 零副作用。"""
+    fail = []
+
+    def _ok(label, problems):
+        if problems:
+            fail.extend(label + ": " + item for item in problems)
+        else:
+            print("[ok]  " + label)
+
+    root = os.path.join(tmp, "new_slot_gate")
+    os.makedirs(root, exist_ok=True)
+
+    def _write_json(path, payload):
+        os.makedirs(os.path.dirname(path), exist_ok=True)
+        with open(path, "w", encoding="utf-8", newline="\n") as fh:
+            json.dump(payload, fh, ensure_ascii=False, indent=1)
+        return path
+
+    def _candidate(path, *, parent="grid", child="store", child_id="wrongStore"):
+        return _write_json(path, {
+            "hidden": False,
+            "children": [{
+                "type": parent,
+                "configs": {"itemId": "parent1"},
+                "expanded": False,
+                "children": [{
+                    "type": child,
+                    "configs": {"itemId": child_id},
+                    "expanded": False,
+                    "children": [],
+                }],
+            }],
+            "roles": {"default": 1},
+            "title": "slot",
+            "iconCls": "",
+            "inframe": False,
+            "pageLink": "",
+        })
+
+    def _new(out, src, *, dry, force=False, mode="warn"):
+        return _run(xwl.cmd_new, out=out, kind="page", from_json=src, title="",
+                    roles=None, eol="lf", indent=1, force=force, dry_run=dry,
+                    node=None, no_js=True,
+                    slot_check=None if mode == "default" else mode)
+
+    src = _candidate(os.path.join(root, "bad.json"))
+    for mode in ("default", "warn"):
+        for dry in (True, False):
+            out_path = os.path.join(root, "out_%s_%s.xwl" % (
+                mode, "dry" if dry else "real"))
+            rc, out = _new(out_path, src, dry=dry, mode=mode)
+            probs = []
+            if rc != 0:
+                probs.append("rc=%d（应 0）" % rc)
+            if "[warn] ⑪" not in out or "wrongStore" not in out or "@parent1" not in out:
+                probs.append("未给同路径 ⑪ 告警:\n%s" % out)
+            if dry and os.path.exists(out_path):
+                probs.append("预演生成了目标")
+            if not dry and not os.path.exists(out_path):
+                probs.append("warn 实写未生成目标")
+            _ok("new %s/%s 告警且写侧合同保持" % (
+                mode, "预演" if dry else "实写"), probs)
+
+    for dry in (True, False):
+        out_path = os.path.join(root, "out_error_%s.xwl" % ("dry" if dry else "real"))
+        rc, out = _new(out_path, src, dry=dry, mode="error")
+        probs = []
+        if rc != 1:
+            probs.append("rc=%d（应 1）" % rc)
+        if "[FAIL] ⑪" not in out or "wrongStore" not in out or "@parent1" not in out:
+            probs.append("未给同路径 ⑪ FAIL:\n%s" % out)
+        if os.path.exists(out_path):
+            probs.append("error 拒绝时仍生成目标")
+        _ok("new error/%s 拒绝且目标不存在" % ("预演" if dry else "实写"), probs)
+
+    existing = os.path.join(root, "existing.xwl")
+    with open(existing, "wb") as fh:
+        fh.write(b"KEEP-EXACT\r\n")
+    before = open(existing, "rb").read()
+    rc, out = _new(existing, src, dry=False, force=True, mode="error")
+    probs = []
+    if rc != 1 or "[FAIL] ⑪" not in out:
+        probs.append("--force error 未拒绝：rc=%d\n%s" % (rc, out))
+    if open(existing, "rb").read() != before:
+        probs.append("--force error 改动了既有目标字节")
+    if os.path.exists(existing + ".bak"):
+        probs.append("--force error 生成了备份")
+    _ok("new --force 搭配 error 仍在写前拒绝且目标不变", probs)
+
+    project = os.path.join(root, "project")
+    out_slot = os.path.join(project, "wb", "modules", "demo", "slot.xwl")
+    registry = os.path.join(project, "wb", "system", "controls.json")
+    input_registry = os.path.join(root, "input-side", "wb", "system", "controls.json")
+    _write_json(input_registry, {"children": [
+        {"id": "customparent", "general": {"autoNames": {}},
+         "configs": {"itemId": {"type": "string"}}},
+        {"id": "customslot", "general": {"autoNames": {"customparent": "fixedSlot"}},
+         "configs": {"itemId": {"type": "string"}}},
+    ]})
+    bad_custom = _candidate(os.path.join(root, "input-side", "bad-custom.json"),
+                            parent="customparent", child="customslot", child_id="wrongSlot")
+    rc, out = _new(out_slot, bad_custom, dry=True, mode="error")
+    probs = []
+    if rc != 0 or "[FAIL] ⑪" in out:
+        probs.append("输入侧注册表被错误用于输出发现：rc=%d\n%s" % (rc, out))
+    _ok("new 不读取输入侧注册表代替输出位置", probs)
+
+    _write_json(registry, {"children": [
+        {
+            "id": "customparent",
+            "general": {"autoNames": {}},
+            "configs": {"itemId": {"type": "string"}},
+        },
+        {
+            "id": "customslot",
+            "general": {"autoNames": {"customparent": "fixedSlot"}},
+            "configs": {"itemId": {"type": "string"}},
+        },
+    ]})
+    rc, out = _new(out_slot, bad_custom, dry=True, mode="error")
+    probs = []
+    if rc != 1 or "[FAIL] ⑪" not in out or "fixedSlot" not in out:
+        probs.append("输出侧注册表未参与发现：rc=%d\n%s" % (rc, out))
+    if os.path.exists(out_slot):
+        probs.append("输出侧 error 预演生成目标")
+    _ok("new 从输出位置发现注册表并检查整树", probs)
+
+    good_custom = _candidate(os.path.join(root, "input-side", "good-custom.json"),
+                             parent="customparent", child="customslot",
+                             child_id="fixedSlot")
+    rc, out = _new(out_slot, good_custom, dry=True, mode="error")
+    probs = []
+    if rc != 0 or "[FAIL] ⑪" in out:
+        probs.append("注册表派生槽位的正确候选被误拒：rc=%d\n%s" % (rc, out))
+    _ok("new 注册表派生槽位正确候选通过", probs)
+    return fail
 
 
 def _check_folders_direct_parent_index(tmp):

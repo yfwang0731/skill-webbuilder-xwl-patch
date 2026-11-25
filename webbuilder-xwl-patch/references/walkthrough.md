@@ -186,7 +186,8 @@ python "$SKILL_ROOT/scripts/xwl.py" patch wb/modules/<模块>/demoQuery.xwl --op
 
 1. `store` 是 **`grid` 的子节点**，不是 `grid` 的兄弟（骨架见 `references/controls.md` §4.2）；
 2. `store.url` 用**模块相对路径、不带 `.xwl` 后缀**；
-3. 新增控件的**注册键 `normalName || itemId` 唯一**（列控件可重名，见 [`faq.md`](faq.md)「附录：itemId 命名规范与重名处置」）。
+3. 新增控件时，固定槽位按父上下文使用；双 Grid 可各有一套 `store/tbar/columns`，同一直接父级不能重复供给；
+4. 新增自主命名控件的**注册键 `normalName || itemId` 唯一**（列控件可重名，见 [`faq.md`](faq.md)「附录：itemId 命名规范与重名处置」）。
 
 **预期**：`patch` 报告已应用 2 个 op、语义等价比对通过，`--backup` 生成 `.bak`，自动校验 `ALL OK`。
 
@@ -213,9 +214,11 @@ python "$SKILL_ROOT/scripts/xwl.py" check wb/modules/<模块>/demoQuery.xwl wb/m
 
 **预期**：每个文件 `-> OK`，末行 `=== 结果: ALL OK`。有 `[FAIL]` 就按第五章 FAQ 排查。
 
-页面交付还要再过三道门：`check --controls <工程>/wb/system/controls.json`、在设计器里实际打开、
+页面交付还要再过三道门：`check --strict --controls <工程>/wb/system/controls.json`、在设计器里实际打开、
 人工核对布局与交互。`check` 只证明文件级格式，不能替代后三道；缺注册表或未做设计器验收时，
 页面交付状态记“未完成”。
+
+`check --strict` 会把 ⑪ 的槽位错名、同父级重复供给与同 Grid 重复列升级为失败。`patch` / `new --from-json` 另在写盘和备份前检查本次新增问题；`--slot-check error` 用于把新增问题直接拒绝。多行查询的两种 `dockedItems` 结构与同次 `params` 示例见 [`layout.md`](layout.md)「6.1 Grid 的两行查询」与「6.2 Panel 的两行查询」。
 
 > 大文件上先跑 `check --no-js` 会跳过最重的 JS 校验；
 > 耗时构成与原因见 [`faq.md`](faq.md)「`check` 慢，或者本机根本没装 `node`？」，

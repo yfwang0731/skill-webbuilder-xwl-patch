@@ -14,6 +14,15 @@
 
 ---
 
+## [1.10.0] - 2026-11-25
+
+固定槽位、重复供给与多行查询（minor）。
+
+- `grid`、`tree`、`propertygrid` 的固定槽位统一按父上下文识别。双 Grid 可各有一套 `store/tbar/columns`，同父级重复供给、错名槽位与同 Grid 完全重复列或重复列 `itemId` 由 ⑪ 提示。`itemids` 与任务级验收器复用同一判据；合法固定槽位不再生成改名建议，自主命名控件仍按原注册键规则处理。
+- `patch` 与 `new --from-json` 新增 `--slot-check warn|error`，默认 `warn`。写前比较实际父对象身份与问题数量，只拦截本次新增问题；`error` 在目标与备份写入前返回 `1`，预演与实写同判。诊断保留 `@父/@槽位` 短名，并增加 `children[下标]` 完整结构路径以区分同名父对象。`new --from-json` 从输出位置发现 `controls.json`。
+- `schema tree --skeleton` 改为 `treestore(store)`；双 Grid 示例分别通过父级路径追加列。布局文档补充 Grid 与 Panel 的 `dockedItems` 多行结构、两行字段的同次 `params`、边框、自然高度与字段宽度指导。
+- 文档同步 ⑪ 的槽位供给、重复列和写前门禁口径；`edit` / `expand` 仍不新增槽位门禁，`check --strict` 仍只升级 ⑪。
+
 ## [1.9.3] - 2026-11-24
 
 提交面内部编号清理（patch）：无新子命令或参数，命令参数、退出码、公开 JSON 形状与文件副作用不变。

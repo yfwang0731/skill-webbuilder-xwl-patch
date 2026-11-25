@@ -5,7 +5,7 @@
 设计目标：把「安全编辑 + 格式校验」从"凭记忆手工做"固化成可复跑的命令。
 
 子命令（15 个）：
-  check   <file...>                              十项校验：8 项判定 + 2 项默认只提示（⑧ 加载链完整性 / ⑪ 错槽位；⑪ --strict 升级）
+  check   <file...>                              十项校验：8 项判定 + 2 项默认只提示（⑧ 加载链完整性 / ⑪ 槽位供给与重复列；⑪ --strict 升级）
   new     <out.xwl> [--kind page|sql]            **从零生成** xwl（内置设计器骨架）
   patch   <file> --ops ops.json                  结构级编辑（改对象 → 按设计器规则重建）
   edit    <file> --old-file O --new-file N       文本级安全替换（锚点按目标换行归一、断言出现次数、拍平多行时警示）
@@ -2205,6 +2205,56 @@ def _prewrite_gate(orig_obj, cand_obj, node_exe, no_js):
 _MISSING = object()
 
 
+def _slot_gate_snapshot(obj, controls_path=None):
+    """保留问题父对象引用及种类计数；删除父后引用仍存活，避免 id 复用误放行。"""
+    return [{"kind": issue["kind"], "parent": issue.get("_parent"),
+             "message": issue["message"]}
+            for issue in _analyze_slots_impl(obj, controls_path)["issues"]]
+
+
+def _slot_gate_new_issues(snapshot, obj, controls_path=None):
+    current = _analyze_slots_impl(obj, controls_path)["issues"]
+    seen = {}
+    added = []
+    for issue in current:
+        token = (issue["kind"], id(issue.get("_parent")))
+        seen[token] = seen.get(token, 0) + 1
+        baseline_count = sum(
+            1 for old in snapshot
+            if old["kind"] == issue["kind"]
+            and old["parent"] is issue.get("_parent"))
+        if seen[token] > baseline_count:
+            added.append(issue)
+    return added, current
+
+
+def _slot_write_gate(snapshot, obj, controls_path, mode, quiet_clean=False):
+    """写前槽位门禁：默认/warn 报告；error 只拦本次新增问题。"""
+    mode = mode or "warn"
+    added, current = _slot_gate_new_issues(snapshot, obj, controls_path)
+    lines = []
+    if added:
+        marker = "[FAIL] ⑪" if mode == "error" else "[warn] ⑪"
+        shown = []
+        for issue in added:
+            message = issue["message"]
+            if message not in shown:
+                shown.append(message)
+                lines.append(marker + " " + message)
+        if mode == "error":
+            return 1, lines
+        return 0, lines
+    if current:
+        shown = []
+        for issue in current:
+            if issue["message"] not in shown:
+                shown.append(issue["message"])
+                lines.append("[warn] ⑪ 既有槽位问题：" + issue["message"])
+    if not current and not quiet_clean:
+        lines.append("[ok]   ⑪ 写前槽位检查通过（无新增问题）")
+    return 0, lines
+
+
 def _bak_stamp() -> str:
     """备份轮换用的时间戳前缀（`%Y%m%d-%H%M%S`）。
 
@@ -3490,9 +3540,25 @@ def apply_ops(obj, ops, created=None, warned=None, allow_new_key=False, inserted
 
 
 
-_SLOT_BAR_PARENTS = frozenset({"grid", "tree", "propertygrid"})
+_SLOT_PARENT_TYPES = frozenset({"grid", "tree", "propertygrid"})
+_SLOT_BAR_PARENTS = _SLOT_PARENT_TYPES
 _SLOT_BAR_NAMES = frozenset({"tbar", "bbar", "lbar", "rbar", "fbar"})
 _SLOT_ROOT_TYPES = frozenset({"module", "folder"})
+_SLOT_KNOWN_BY_PARENT = {
+    "grid": frozenset({
+        "store", "tbar", "bbar", "lbar", "rbar", "fbar",
+        "columns", "features", "dockedItems", "viewConfig",
+    }),
+    "tree": frozenset({
+        "store", "tbar", "bbar", "lbar", "rbar", "fbar",
+        "columns", "features", "dockedItems", "viewConfig",
+    }),
+    "propertygrid": frozenset({
+        "store", "tbar", "bbar", "lbar", "rbar", "fbar",
+        "dockedItems", "viewConfig",
+    }),
+    "panel": frozenset({"dockedItems"}),
+}
 _EDITOR_FALLBACK = frozenset({
     "text", "number", "textarea", "combo", "date", "month", "time", "datetime",
     "file", "check", "radio", "displayfield", "colorfield", "picker",
@@ -3563,6 +3629,31 @@ def _preferred_names(child_type, parent_type, parent_is_root, auto_map) -> set:
     return {part.strip() for part in str(raw).split(",") if part.strip()}
 
 
+def _iter_slot_controls(obj):
+    """遍历控件并携带**直接父控件对象引用**，供写侧按同树身份比较。"""
+    def walk(value, path, anc, parent_control, container, key):
+        if isinstance(value, dict):
+            current_parent = parent_control
+            current_anc = anc
+            typ = value.get("type")
+            if isinstance(typ, str):
+                cfg = value.get("configs") if isinstance(value.get("configs"), dict) else {}
+                yield value, typ, cfg, list(path), list(anc), parent_control, container, key
+                current_parent = value
+                current_anc = anc + [(typ, cfg.get("itemId"))]
+            for child_key, child_value in value.items():
+                if child_key == "configs":
+                    continue
+                yield from walk(child_value, path + [child_key], current_anc,
+                                current_parent, value, child_key)
+        elif isinstance(value, list):
+            for index, child_value in enumerate(value):
+                yield from walk(child_value, path + [index], anc,
+                                parent_control, value, index)
+
+    yield from walk(obj, [], [], None, None, None)
+
+
 def editor_types(controls_path=None, auto_map=None) -> set:
     """editor 类型 = 内置兜底 ∪ 注册表里父类型 column/tcolumn 的首选名是 editor 的类型。"""
     ids = set(_EDITOR_FALLBACK)
@@ -3605,10 +3696,22 @@ def is_reserved_slot(parent_type, child_type, item_id, *, parent_is_root=False,
     """保留名是父 type、子 type、子 itemId 三元组。禁止按 itemId 字符串全局抑制。"""
     if not isinstance(item_id, str) or not item_id:
         return False
-    if (parent_type in _SLOT_BAR_PARENTS and child_type == "toolbar"
-            and item_id in _SLOT_BAR_NAMES):
-        return True
+    if parent_type in _SLOT_BAR_PARENTS and child_type in ("toolbar", "ttoolbar"):
+        if item_id in _SLOT_BAR_NAMES and child_type == "toolbar":
+            return True
+    if parent_type in _SLOT_BAR_PARENTS and child_type in ("store", "treestore"):
+        if item_id == "store":
+            return True
     if parent_type == "grid" and child_type == "array" and item_id == "columns":
+        return True
+    if parent_type == "grid" and child_type == "feature" and item_id == "features":
+        return True
+    if child_type == "tableview" and parent_type in _SLOT_BAR_PARENTS and item_id == "viewConfig":
+        return True
+    if child_type == "array" and item_id == "dockedItems" and not parent_is_root:
+        return True
+    if parent_type in _SLOT_PARENT_TYPES and child_type == "array" and item_id in {
+            "columns", "features", "viewConfig"}:
         return True
     types = _EDITOR_FALLBACK if editor_ty is None else editor_ty
     if parent_type in ("column", "tcolumn") and child_type in types and item_id == "editor":
@@ -3631,13 +3734,277 @@ def is_bad_slot(parent_type, child_type, item_id, node, editor_ty) -> bool:
     return False
 
 
+def _known_slot_keys(parent_type, parent_is_root, auto_map) -> set:
+    keys = set(_SLOT_KNOWN_BY_PARENT.get(parent_type, ()))
+    if not auto_map or not parent_type or parent_is_root:
+        return keys
+    for child_type, mapping in auto_map.items():
+        if child_type == "array":
+            continue
+        raw = mapping.get(parent_type)
+        if raw is None and "any" in mapping:
+            raw = mapping["any"]
+        if isinstance(raw, str):
+            keys.update(part.strip() for part in raw.split(",") if part.strip())
+    return keys
+
+
+def _classify_slot(parent_type, child_type, item_id, node, anc, editor_ty, auto_map):
+    """返回 `(槽位名, 状态)`；状态为 `ok`、`wrong`，非槽位返回 `(None, None)`。"""
+    if not isinstance(parent_type, str) or not parent_type:
+        return None, None
+    _pt, _pi, parent_is_root = _parent_info(anc)
+    iid = item_id if isinstance(item_id, str) else ""
+
+    if parent_type in _SLOT_BAR_PARENTS and child_type == "toolbar":
+        if iid in _SLOT_BAR_NAMES:
+            return iid, "ok"
+        return "tbar", "wrong"
+    if parent_type in _SLOT_BAR_PARENTS and child_type in ("store", "treestore"):
+        return ("store", "ok") if iid == "store" else ("store", "wrong")
+    if parent_type == "grid" and child_type == "feature":
+        return ("features", "ok") if iid == "features" else ("features", "wrong")
+    if parent_type in _SLOT_BAR_PARENTS and child_type == "tableview":
+        return ("viewConfig", "ok") if iid == "viewConfig" else ("viewConfig", "wrong")
+    if child_type == "array" and not parent_is_root:
+        if iid == "dockedItems":
+            return "dockedItems", "ok"
+        if parent_type in _SLOT_PARENT_TYPES and iid in {
+                "columns", "features", "viewConfig"}:
+            return iid, "ok"
+        if parent_type in ("grid", "tree") and _desc_has_column(node):
+            return "columns", "ok" if iid == "columns" else "wrong"
+
+    preferred = _preferred_names(child_type, parent_type, parent_is_root, auto_map)
+    if preferred and iid in preferred:
+        return iid, "ok"
+    if preferred and child_type != "array":
+        expected = sorted(preferred)
+        return expected[0], "wrong"
+
+    types = _EDITOR_FALLBACK if editor_ty is None else editor_ty
+    if parent_type in ("column", "tcolumn") and child_type in types:
+        return ("editor", "ok") if iid == "editor" else ("editor", "wrong")
+    return None, None
+
+
+def _slot_display(parent_type, parent_item, slot):
+    parent = parent_item or parent_type or "?"
+    return "@%s/@%s" % (parent, slot)
+
+
+def _fmt_control_path(path) -> str:
+    return "[" + ", ".join(json.dumps(x, ensure_ascii=False)
+                           if isinstance(x, str) else str(x) for x in path) + "]"
+
+
+def _fmt_structure_path(path) -> str:
+    """对象路径 → 可照文件层级核对的点/下标链，如 `children[0].configs.itemId`。"""
+    out = ""
+    for part in path:
+        if isinstance(part, int):
+            out += "[%d]" % part
+        elif isinstance(part, str) and _IID_JS_IDENT_RE.match(part):
+            out += ("." if out else "") + part
+        else:
+            out += "[%s]" % json.dumps(part, ensure_ascii=False)
+    return out
+
+
+def _slot_config_path(occurrence) -> list:
+    path = list(occurrence["path"])
+    if len(path) >= 2 and path[-2] == "configs":
+        return path
+    return path + ["configs", "itemId"]
+
+
+def _column_issues_for_grid(node, parent_item):
+    """同 Grid 内的完全重复列 / 重复列 itemId；只读，不按 dataIndex 判用途。"""
+    columns = []
+
+    def walk(value, path):
+        if isinstance(value, dict):
+            if value is not node and value.get("type") in _IID_GRID_TYPES:
+                return
+            if value.get("type") in _IID_COL_TYPES:
+                columns.append((value, path))
+                return
+            children = value.get("children")
+            if isinstance(children, list):
+                for index, child in enumerate(children):
+                    walk(child, path + ["children", index])
+        elif isinstance(value, list):
+            for index, child in enumerate(value):
+                walk(child, path + [index])
+
+    walk(node, [])
+    issues = []
+    by_id = {}
+    by_exact = {}
+    for column, path in columns:
+        cfg = column.get("configs") if isinstance(column.get("configs"), dict) else {}
+        item_id = cfg.get("itemId")
+        if isinstance(item_id, str) and item_id:
+            by_id.setdefault(item_id, []).append(path)
+        exact = json.dumps(column, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
+        by_exact.setdefault(exact, []).append(path)
+    for item_id, paths in sorted(by_id.items()):
+        if len(paths) < 2:
+            continue
+        for _extra in paths[1:]:
+            issues.append({
+                "kind": "duplicate_column_id", "slot": "columns",
+                "parent": parent_item, "item_id": item_id,
+                "path": _extra,
+                "message": "同 Grid 重复列 itemId %r：%s 的 %s"
+                           % (item_id, "@%s" % (parent_item or "?"),
+                              "、".join(_fmt_structure_path(p + ["configs", "itemId"])
+                                       for p in paths)),
+            })
+    for paths in by_exact.values():
+        if len(paths) < 2:
+            continue
+        for _extra in paths[1:]:
+            issues.append({
+                "kind": "duplicate_column_exact", "slot": "columns",
+                "parent": parent_item, "path": _extra,
+                "message": "同 Grid 完全重复列：%s 的 %s"
+                           % ("@%s" % (parent_item or "?"),
+                              "、".join(_fmt_structure_path(p + ["configs", "itemId"])
+                                       for p in paths)),
+            })
+    return issues
+
+
+def _analyze_slots_impl(obj, controls_path=None) -> dict:
+    auto_map = _auto_names_map(controls_path)
+    editor_ty = editor_types(auto_map=auto_map)
+    occurrences = []
+    issues = []
+    controls = list(_iter_slot_controls(obj))
+    parents_seen = set()
+    for node, typ, cfg, path, anc, parent, _container, _key in controls:
+        parent_type, parent_item, _root = _parent_info(anc)
+        item_id = cfg.get("itemId") if isinstance(cfg.get("itemId"), str) else ""
+        slot, state = _classify_slot(parent_type, typ, item_id, node, anc,
+                                     editor_ty, auto_map)
+        if slot:
+            occurrences.append({
+                "kind": "node", "slot": slot, "state": state,
+                "parent": parent_item or parent_type, "parent_type": parent_type,
+                "parent_key": id(parent) if parent is not None else 0,
+                "child_type": typ, "item_id": item_id, "path": path,
+                "_parent": parent,
+            })
+            if state == "wrong":
+                expected = slot
+                loc = _slot_display(parent_type, parent_item, item_id or "?")
+                struct_path = _fmt_structure_path(path + ["configs", "itemId"])
+                if typ == "toolbar" and expected == "tbar":
+                    msg = ("槽位 itemId 应为 tbar：%s %s。按工具条硬规则改用 tbar；"
+                           "需要多个工具条时外置，不另造带前缀的名字；"
+                           "结构路径 %s" % (typ, loc, struct_path))
+                else:
+                    msg = "槽位 itemId 应为 %s：%s %s；结构路径 %s" % (
+                        expected, typ, loc, struct_path)
+                issues.append({
+                    "kind": "wrong_slot", "slot": expected, "state": "wrong",
+                    "parent": parent_item or parent_type, "parent_type": parent_type,
+                    "parent_key": id(parent) if parent is not None else 0,
+                    "child_type": typ, "item_id": item_id, "path": path,
+                    "message": msg, "_parent": parent,
+                })
+        if parent is not None and id(parent) not in parents_seen:
+            parents_seen.add(id(parent))
+            known = _known_slot_keys(parent_type, _root, auto_map)
+            parent_cfg = (parent.get("configs")
+                          if isinstance(parent.get("configs"), dict) else {})
+            for key in parent_cfg:
+                if key not in known:
+                    continue
+                occurrences.append({
+                    "kind": "configs", "slot": key, "state": "ok",
+                    "parent": parent_item or parent_type, "parent_type": parent_type,
+                    "parent_key": id(parent), "child_type": "configs",
+                    "item_id": key, "path": path + ["configs", key],
+                    "_parent": parent,
+                })
+
+    by_parent_slot = {}
+    for occurrence in occurrences:
+        by_parent_slot.setdefault(
+            (occurrence["parent_key"], occurrence["slot"]), []).append(occurrence)
+    for (_parent_key, slot), items in sorted(by_parent_slot.items(),
+                                              key=lambda kv: (str(kv[0][0]), kv[0][1])):
+        if len(items) < 2:
+            continue
+        for occurrence in items:
+            occurrence["state"] = "duplicate"
+        parent = items[0].get("_parent")
+        loc = _slot_display(items[0]["parent_type"], items[0]["parent"], slot)
+        msg = "同一直接父级重复供给 %s：%s；结构路径：%s" % (
+            slot, loc, "、".join(_fmt_structure_path(_slot_config_path(i))
+                                for i in items))
+        for extra in items[1:]:
+            issues.append({
+                "kind": "duplicate_slot", "slot": slot, "state": "duplicate",
+                "parent": items[0]["parent"], "parent_type": items[0]["parent_type"],
+                "parent_key": items[0]["parent_key"], "child_type": "supply",
+                "item_id": slot, "path": extra["path"], "message": msg,
+                "_parent": parent,
+            })
+
+    for node, typ, cfg, path, anc, _parent, _container, _key in controls:
+        if typ not in _IID_GRID_TYPES:
+            continue
+        parent_type, parent_item, _root = _parent_info(anc)
+        for issue in _column_issues_for_grid(node, cfg.get("itemId") or parent_item):
+            issue.update({
+                "parent_key": id(node), "parent_type": typ,
+                "_parent": node, "path": path + issue.get("path", []),
+            })
+            issues.append(issue)
+
+    reserved = []
+    seen_reserved = set()
+    for occurrence in occurrences:
+        if occurrence["state"] != "ok":
+            continue
+        loc = _slot_display(occurrence["parent_type"], occurrence["parent"],
+                            occurrence["item_id"] or occurrence["slot"])
+        if loc not in seen_reserved:
+            seen_reserved.add(loc)
+            reserved.append(loc)
+    return {
+        "occurrences": occurrences,
+        "issues": issues,
+        "reserved_notes": (["保留名 " + "、".join(reserved)] if reserved else []),
+    }
+
+
+def analyze_slots(obj, controls_path=None) -> dict:
+    """统一槽位事实：合法复用、同父重复供给、错名与同 Grid 重复列。"""
+    data = _analyze_slots_impl(obj, controls_path)
+    public_occurrences = []
+    for occurrence in data["occurrences"]:
+        public_occurrences.append({k: v for k, v in occurrence.items()
+                                   if k != "_parent"})
+    public_issues = []
+    for issue in data["issues"]:
+        public_issues.append({k: v for k, v in issue.items()
+                              if k != "_parent"})
+    return {"occurrences": public_occurrences, "issues": public_issues,
+            "reserved_notes": list(data["reserved_notes"])}
+
+
 def _slot_state(node, child_type, cfg, anc, editor_ty, auto_map):
-    parent_type, _parent_item, parent_is_root = _parent_info(anc)
+    parent_type, _parent_item, _root = _parent_info(anc)
     item_id = cfg.get("itemId") if isinstance(cfg.get("itemId"), str) else ""
-    if is_reserved_slot(parent_type, child_type, item_id, parent_is_root=parent_is_root,
-                        editor_ty=editor_ty, auto_map=auto_map):
+    _slot, state = _classify_slot(parent_type, child_type, item_id, node, anc,
+                                  editor_ty, auto_map)
+    if state == "ok":
         return "ok"
-    if is_bad_slot(parent_type, child_type, item_id, node, editor_ty):
+    if state == "wrong":
         return "bad"
     return None
 
@@ -3656,32 +4023,12 @@ def _reserved_note(items) -> str:
 
 
 def scan_slot_issues(obj, controls_path=None) -> list:
-    """⑪ 正文直接写应使用的 itemId。同级已占用该槽位时不发明带前缀的新名。"""
-    auto_map = _auto_names_map(controls_path)
-    editor_ty = editor_types(auto_map=auto_map)
-    issues = []
-    for node, typ, cfg, _path, anc, container, _key in _iter_controls(obj):
-        parent_type, parent_item, _root = _parent_info(anc)
-        item_id = cfg.get("itemId") if isinstance(cfg.get("itemId"), str) else ""
-        if not is_bad_slot(parent_type, typ, item_id, node, editor_ty):
-            continue
-        if parent_type in _SLOT_BAR_PARENTS and typ == "toolbar":
-            expected, kind = "tbar", "toolbar"
-        elif parent_type == "grid" and typ == "array":
-            expected, kind = "columns", "array"
-        else:
-            expected, kind = "editor", "editor"
-        loc = _slot_loc(parent_item, parent_type, item_id or "?")
-        if _sibling_has_itemid(container, node, expected) and kind == "toolbar":
-            issues.append(
-                "槽位 itemId 应为 %s，但同级已占用：%s %s。按工具条硬规则把多余工具条外置，不另造带前缀的名字"
-                % (expected, typ, loc))
-        elif _sibling_has_itemid(container, node, expected):
-            issues.append("槽位 itemId 应为 %s，但同级已占用：%s %s。不另造带前缀的名字"
-                          % (expected, typ, loc))
-        else:
-            issues.append("槽位 itemId 应为 %s：%s %s" % (expected, typ, loc))
-    return issues
+    """⑪：错名槽位、同父重复供给、同 Grid 重复列。"""
+    messages = []
+    for issue in _analyze_slots_impl(obj, controls_path)["issues"]:
+        if issue["message"] not in messages:
+            messages.append(issue["message"])
+    return messages
 
 
 def _slot_skeleton_children(type_name):
@@ -3697,7 +4044,7 @@ def _slot_skeleton_children(type_name):
     if type_name == "grid":
         return [child("store", "store"), child("tbar", "toolbar"), child("columns", "array")]
     if type_name == "tree":
-        return [child("store", "store"), child("tbar", "toolbar")]
+        return [child("store", "treestore"), child("tbar", "toolbar")]
     return []
 
 
@@ -3729,26 +4076,30 @@ def audit_itemids(obj, js_refs=None, controls_path=None) -> dict:
     nn_ty = set(normalname_types(controls_path))
     auto_map = _auto_names_map(controls_path)
     editor_ty = editor_types(auto_map=auto_map)
-    state_of = {id(it): _slot_state(it[0], it[1], it[2], it[4], editor_ty, auto_map)
-                for it in nodes}
+    slot_rep = _analyze_slots_impl(obj, controls_path)
+    slot_state_by_path = {
+        tuple(occurrence["path"]): occurrence["state"]
+        for occurrence in slot_rep["occurrences"] if occurrence["kind"] == "node"
+    }
+    state_of = {}
+    for item in nodes:
+        state = slot_state_by_path.get(tuple(item[3]))
+        if state == "ok":
+            state_of[id(item)] = "ok"
+        elif state in ("wrong", "duplicate"):
+            state_of[id(item)] = "bad"
+    reserved_notes = list(slot_rep["reserved_notes"])
     by_key_all: dict = {}
     for it in nodes:
         by_key_all.setdefault(registry_key(it[2]), []).append(it)
-    note_items = []
-    for _name, _items in by_key_all.items():
-        if len(_items) < 2:
-            continue
-        note_items.extend(it for it in _items if state_of.get(id(it)) == "ok")
-    reserved_notes = [_reserved_note(note_items)] if note_items else []
-    by_key: dict = {}
-    for it in nodes:
-        if state_of.get(id(it)) == "ok":
-            continue
-        by_key.setdefault(registry_key(it[2]), []).append(it)
+    by_key = by_key_all
 
     groups = []
     for name, items in sorted(by_key.items()):
         if len(items) < 2:
+            continue
+        slot_items = [it for it in items if id(it) in state_of]
+        if len(slot_items) == len(items):
             continue
         types = {x[1] for x in items}
         # 运行时模块根级控件有 `app._X` **孪生键**（服务端生成：`app.X = app._X = …`）；
@@ -3791,7 +4142,7 @@ def audit_itemids(obj, js_refs=None, controls_path=None) -> dict:
         if any(not x for x in have_nn):
             taken_nn = set(taken_all)
             for i, it in enumerate(items):
-                if state_of.get(id(it)) == "bad":
+                if id(it) in state_of:
                     continue
                 n, t, cfg, p, anc = it
                 if isinstance(cfg.get("normalName"), str) and cfg.get("normalName"):
@@ -3808,7 +4159,7 @@ def audit_itemids(obj, js_refs=None, controls_path=None) -> dict:
         taken = set(taken_all)
         fix_id = []
         for i, it in enumerate(items):
-            if i == 0 or state_of.get(id(it)) == "bad":
+            if i == 0 or id(it) in state_of:
                 continue
             n, t, cfg, p, anc = it
             own = cfg.get("itemId")
@@ -3842,6 +4193,8 @@ def audit_itemids(obj, js_refs=None, controls_path=None) -> dict:
         "n_benign": sum(1 for g in groups if g["level"] == "benign"),
         "nn_ty": sorted(nn_ty),
         "reserved_notes": reserved_notes,
+        "slot_issues": [{k: v for k, v in issue.items() if k != "_parent"}
+                        for issue in slot_rep["issues"]],
     }
 
 
@@ -3936,6 +4289,10 @@ def cmd_itemids(args) -> int:
     def _emit_reserved(stream):
         for line in rep.get("reserved_notes") or []:
             print("[note] " + line, file=stream)
+
+    def _emit_slot_issues(stream):
+        for issue in rep.get("slot_issues") or []:
+            print("[warn] ⑪ " + issue["message"], file=stream)
     counts = {lv: sum(1 for g in groups if g["level"] == lv) for lv in ("error", "warn", "benign")}
     names = {registry_key(x[2]) for x in rep["nodes"]}
 
@@ -3977,6 +4334,7 @@ def cmd_itemids(args) -> int:
                   "（改用 `--fix itemId` 可改 itemId）" % (s["group"], s["index"], s["type"]),
                   file=sys.stderr)
         _emit_reserved(sys.stderr)
+        _emit_slot_issues(sys.stderr)
         if not ops:
             print("[]")
             print("（无需改名：没有 error/warn 组，或选定的修法对本文件不适用）")
@@ -3986,6 +4344,7 @@ def cmd_itemids(args) -> int:
 
     if args.json:
         _emit_reserved(sys.stderr)
+        _emit_slot_issues(sys.stderr)
         print(json.dumps({k: v for k, v in rep.items() if k not in ("nodes", "reserved_notes")},
                          ensure_ascii=False, indent=2))
         return 0
@@ -3998,6 +4357,7 @@ def cmd_itemids(args) -> int:
         print(f"[warn] 读注册表失败：{_i_ctl}（按**未找到**处理；已回退内置兜底）")
     print(controls_source_line(None if _ctl_bad else ctl))
     _emit_reserved(sys.stdout)
+    _emit_slot_issues(sys.stdout)
 
     cols = [(n, cfg) for n, t, cfg, *_ in rep["nodes"] if t in _IID_COL_TYPES]
     if cols:
@@ -4111,6 +4471,7 @@ def _cmd_patch_locked(args) -> int:
     if isinstance(ops, dict):
         ops = [ops]
 
+    slot_baseline = _slot_gate_snapshot(obj, _SLOT_CTL)
     created, warned, inserted, overwrites, unknown = [], [], [], [], []
     try:
         apply_ops(obj, ops, created=created, warned=warned, inserted=inserted,
@@ -4151,6 +4512,12 @@ def _cmd_patch_locked(args) -> int:
         return 2
     print(f"[ok]   语义等价比对通过（规范化文本：含键序与值类型） | 变更后 {_byte_len(out)} B "
           f"({_byte_len(out) - _byte_len(text):+d})")
+    slot_rc, slot_lines = _slot_write_gate(
+        slot_baseline, obj, _SLOT_CTL, getattr(args, "slot_check", None))
+    for line in slot_lines:
+        print(line)
+    if slot_rc:
+        return slot_rc
 
     try:
         orig_obj = loader_parse(text)
@@ -4745,6 +5112,13 @@ def cmd_new(args) -> int:
     if extra:
         print(f"[note] 保留了非标准顶层键（原样追加在末尾）：{extra}")
     print(f"[ok]   语义等价比对通过（规范化文本：含键序与值类型） | {_byte_len(out)} B | 换行={eol_name}")
+    slot_rc, slot_lines = _slot_write_gate(
+        [], obj, discover_controls(dest), getattr(args, "slot_check", None),
+        quiet_clean=True)
+    for line in slot_lines:
+        print(line)
+    if slot_rc:
+        return slot_rc
 
     if args.dry_run:
         print("\n--- 将写入的内容 ---")
@@ -8890,7 +9264,7 @@ def build_parser() -> argparse.ArgumentParser:
     sub = p.add_subparsers(dest="cmd", required=True)
 
     c = sub.add_parser("check",
-                       help="十项校验：8 项判定 + 2 项默认只提示（⑧ 加载链 / ⑪ 错槽位；"
+                       help="十项校验：8 项判定 + 2 项默认只提示（⑧ 加载链 / ⑪ 槽位供给与重复列；"
                             "⑪ --strict 升级）；--controls 另校 ⑨")
     c.add_argument("files", nargs="+", help="一个或多个 .xwl 文件")
     c.add_argument("--node", help="node 可执行文件路径")
@@ -8899,7 +9273,7 @@ def build_parser() -> argparse.ArgumentParser:
     c.add_argument("--no-cfgtype", action="store_true",
                    help="跳过 ⑩ configs 值类型校验（本项默认即最严档：FAIL、进 rc）")
     c.add_argument("--strict", action="store_true",
-                   help="⑪ 错槽位改为 FAIL 并进 rc（默认只警告，不进 rc）")
+                   help="⑪ 槽位供给与重复列改为 FAIL 并进 rc（默认只警告，不进 rc）")
     c.add_argument("--controls", metavar="CONTROLS",
                    help="设计器控件注册表路径（wb/system/controls.json）；**给了才**校 configs 键 "
                         "与 configs 内联 [js]（缺省不校、也不自动找）")
@@ -8956,6 +9330,8 @@ def build_parser() -> argparse.ArgumentParser:
     pt.add_argument("--backup", action="store_true", help="写盘前先备份为 <file>.bak")
     pt.add_argument("--allow-new-key", action="store_true",
                     help="这是逃生开关：全局放行新建键，恢复旧行为（不给则新建键默认被拒绝、rc=2）")
+    pt.add_argument("--slot-check", choices=["warn", "error"], default="warn",
+                    help="写前 ⑪：warn=告警并继续；error=本次新增即 rc=1（default: warn）")
     pt.add_argument("--node", help="node 可执行文件路径（缺省从 NODE_BIN 与 PATH 找）")
     pt.add_argument("--no-js", action="store_true", help="跳过写盘后的事件 JS 语法校验")
     pt.set_defaults(func=cmd_patch)
@@ -8992,6 +9368,8 @@ def build_parser() -> argparse.ArgumentParser:
                         "（new 无 auto —— 新文件没有源可沿用，直接选一种）")
     n.add_argument("--indent", type=int, default=1, help="缩进因子（设计器固定用 1，一般不用改）")
     n.add_argument("--force", action="store_true", help="允许覆盖已存在的文件")
+    n.add_argument("--slot-check", choices=["warn", "error"], default="warn",
+                   help="写前 ⑪：warn=告警并继续；error=发现问题即 rc=1（default: warn）")
     n.add_argument("--dry-run", action="store_true", help="只打印将写入的内容，不写盘")
     n.add_argument("--node", help="node 可执行文件路径（缺省从 NODE_BIN 与 PATH 找）")
     n.add_argument("--no-js", action="store_true", help="跳过写盘后的事件 JS 语法校验")

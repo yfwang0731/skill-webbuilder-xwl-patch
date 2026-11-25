@@ -138,3 +138,67 @@
 
 > ⛔ 这两条是**约束**，不是可选项。写文档或写代码时**不要**加"未验证""据观察"这类限定词
 > —— 它们会让人以为可以试试别的命名，而这条试错的代价是"页面上少一排按钮"且不报错。
+
+### 6.1 Grid 的两行查询
+
+Grid 的 `dockedItems` 是配置载体。每个工具栏可有独立 `itemId`，两个工具栏都设 `dock:"top"`；它们不是 `grid.children` 里直接挂的两个 `tbar`，因此不会形成同父级重复供给。
+
+```json
+{
+  "type": "array",
+  "configs": {"itemId": "dockedItems"},
+  "expanded": false,
+  "children": [
+    {"type": "toolbar", "configs": {"itemId": "queryTop", "dock": "top", "border": "false"}, "expanded": false, "children": []},
+    {"type": "toolbar", "configs": {"itemId": "queryBottom", "dock": "top", "border": "false"}, "expanded": false, "children": []}
+  ]
+}
+```
+
+### 6.2 Panel 的两行查询
+
+查询面板可在 `panel.children` 放 `array(dockedItems)`，再在两个工具栏里放字段。行内 `x` 保持一致，同列 `width/labelWidth` 保持一致；起止日期同行，按钮放在字段之后或独立一行。
+
+```json
+{
+  "type": "panel",
+  "configs": {"itemId": "queryPanel", "border": "false"},
+  "expanded": false,
+  "children": [{
+    "type": "array",
+    "configs": {"itemId": "dockedItems"},
+    "expanded": false,
+    "children": [
+      {"type": "toolbar", "configs": {"itemId": "queryTop", "dock": "top", "border": "false"}, "expanded": false, "children": []},
+      {"type": "toolbar", "configs": {"itemId": "queryBottom", "dock": "top", "border": "false"}, "expanded": false, "children": []}
+    ]
+  }]
+}
+```
+
+普通查询位从 `width:"220"`、`labelWidth:"70"` 起步。短状态与普通日期用 `180–200`，单号和港口用 `220–240`，客户、订舱人等长名称用 `260–300`；尺寸写成字符串。`border:"false"` 去掉工具条分隔线。查询面板优先随内容撑高；只有 `absolute` 面板仍按 §2.1 的高度算法写死 `height`。
+
+两个工具栏共同提交时，显式组装同一次请求，避免依赖 `out: app.queryPanel` 对多个 docked toolbar 的自动收集：
+
+```javascript
+app.demoGrid.store.load({
+  params: {
+    orderNo: app.orderNo.getValue(),
+    portCode: app.portCode.getValue(),
+    dateFrom: app.dateFrom.getValue(),
+    dateTo: app.dateTo.getValue()
+  }
+});
+```
+
+`params` 的键必须与 SQL 载体需要的一致，并用 `xwl.py params <页面> --strict` 复核。“两行都显示”不等于“两行都进入同一次请求”，这两项分别验收。
+
+### 6.3 多行查询的反模式
+
+| 反模式 | 后果 | 正解 |
+|---|---|---|
+| 在同一 Grid 的直接 `children` 挂两个 `toolbar(tbar)` | 第二个拿不到固定槽位，页面少一排按钮 | 用 `array(dockedItems)` 承载两个 `toolbar(dock:"top")` |
+| 把本应内嵌的单行查询栏移到 Panel / Module 下但不设 `tbar` / `bbar` 绑定 | 工具条存在但不出现在目标 Grid | 单行继续内嵌 Grid；外置时在目标 Grid `configs` 中显式绑定 |
+| 两行字段只靠 `out: app.queryPanel` 收集，未核对 docked toolbar 行为 | 参数可能只收到一行或完全收不到 | 显式组装同一次 `params`，并跑 `params --strict` |
+| 普通查询位继续用 90 px，客户或长名称仍不扩宽 | 文本被截断，触发按钮挤压输入区 | 普通位从 220 / labelWidth 70 起步；长名称用 260–300 |
+| `absolute` Panel 只平铺两行控件，不增加 `height` | 第二行被裁或留下大块空白 | 按 §2.1 重算高度；查询面板优先随内容撑高 |

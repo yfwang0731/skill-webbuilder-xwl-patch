@@ -2,7 +2,7 @@
 name: webbuilder-xwl-patch
 slug: skill-webbuilder-xwl-patch
 displayName: webbuilder-xwl-patch
-version: 1.9.3
+version: 1.10.0
 license: MIT
 metadata:
   category: development-tools
@@ -76,7 +76,7 @@ WebBuilder 的页面与查询定义都写在 `.xwl` 里。它**看起来像 JSON
 | 处理注册键重名 / `@itemId#N` 寻址 | [`references/faq.md`](references/faq.md)「附录：itemId 命名规范与重名处置」 |
 | 出问题了（按症状查） | 第五章 + [`references/faq.md`](references/faq.md) |
 | **动手前**扫一遍"别这么干" | [`references/anti-patterns.md`](references/anti-patterns.md) —— 23 条，标了哪些是**静默**的 |
-| **交活前**逐条过 | 第六章 + [`references/checklist.md`](references/checklist.md) —— 31 项 |
+| **交活前**逐条过 | 第六章 + [`references/checklist.md`](references/checklist.md) —— 34 项 |
 | 换控件 / 不知道用哪个 / 该挂哪里 | [`references/controls.md`](references/controls.md) |
 | 定布局：面板该多高、列宽与列网格、`region` 拉伸、工具条挂法 | [`references/layout.md`](references/layout.md) |
 | 值映射：`keyName` vs `renderer`、多选三路来源、值往返与存储格式 | [`references/value-mapping.md`](references/value-mapping.md) |
@@ -137,7 +137,7 @@ WebBuilder 的页面与查询定义都写在 `.xwl` 里。它**看起来像 JSON
 真实引用按可执行代码区识别：`app.X`、`app.get('X')`、`app['X']`／`app["X"]`；
 普通字符串、纯模板文字和注释里的伪引用不计数。
 
-grid 内嵌 tbar、columns、store 与列上的 editor 是槽位，重名不是缺陷，禁止改 itemId。细节见 references/controls.md。
+grid 内嵌 tbar、columns、store、features、dockedItems、viewConfig 与列上的 editor 是槽位；跨直接父级可复用，同一直接父级重复供给仍是缺陷。详情见 `references/controls.md` §5.1。
 
 ### 1.3 页面顶层骨架（7 把钥匙，键序固定）
 
@@ -349,6 +349,8 @@ python "$SKILL_ROOT/scripts/xwl.py" patch <file.xwl> --ops ops.json --dry-run
 python "$SKILL_ROOT/scripts/xwl.py" patch <file.xwl> --ops ops.json --backup
 ```
 
+**写前槽位检查**：`patch` 在目标与备份写入前统一检查 ⑪。默认 `--slot-check warn` 报告本次新增的错名槽位、同父级重复供给或同 Grid 重复列后继续；`--slot-check error` 以 `rc=1` 拒绝。诊断同时给出 `@父/@槽位` 短名和 `children[下标]` 完整结构路径，同名父对象可区分。既有问题只按实际父对象身份和问题数量比较，兄弟移位或同一父级内同类数量不增加时保留。`new --from-json` 使用输出路径发现的 `controls.json` 检查整棵候选，`--dry-run` 与实写同判。
+
 **写入结果按四阶段判断**。不得从命令失败或 `rc` 推断文件未动。
 
 1. 写前拒绝：目标未写，通常也无新 `.bak`。
@@ -425,7 +427,7 @@ python "$SKILL_ROOT/scripts/xwl.py" diffguard <改过的文件或目录> --stric
 | `patch` | **结构级编辑（默认方式）**：只给值 / 子树，按设计器算法重建整份文件 |
 | `edit` | 文本级安全替换（**例外**手段，改一小段文本且不希望整份重排时用） |
 | `expand` | 单行源 → 设计器同款多行 |
-| `check` | 十项校验：格式五项 + 事件 JS 语法 + **注册键**重名分级 + **`configs` 值类型** + 加载链完整性（只提示）＋ **错槽位（⑪，默认只警告）**；**给了 `--controls` 时另校 `configs` 键（⑨）与内联 `[js]`** |
+| `check` | 十项校验：格式五项 + 事件 JS 语法 + **注册键**重名分级 + **`configs` 值类型** + 加载链完整性（只提示）＋ **槽位供给与重复列（⑪，默认只警告）**；**给了 `--controls` 时另校 `configs` 键（⑨）与内联 `[js]`** |
 | `diffguard` | **相对 git 基线**检测「多行内容被压平」 |
 | `itemids` | 注册键重名报告 + 建议改名（只读） |
 | `paths` | 列出 `sql` / `totalSql` / `serverScript` / `url` 四类字段的位置 |
@@ -444,7 +446,7 @@ python "$SKILL_ROOT/scripts/xwl.py" diffguard <改过的文件或目录> --stric
 | 退出码 | 含义 |
 |---|---|
 | `0` | 成功 |
-| `1` | **被检查对象或查询结果有问题**（`check` 的文件级 BOM、缺失、不可读均为 `1`；`paths` / `sqlrefs` / `sql` / `events` 没找到目标字段或**无适用检查内容**判 `1`；`folders` 的索引 JSON／结构损坏、或 `index` 确认悬空判 `1`） |
+| `1` | **被检查对象或查询结果有问题**（`check` 的文件级 BOM、缺失、不可读均为 `1`；`patch --slot-check error` 或 `new --from-json --slot-check error` 发现本次新增槽位问题为 `1`；`paths` / `sqlrefs` / `sql` / `events` 没找到目标字段或**无适用检查内容**判 `1`；`folders` 的索引 JSON／结构损坏、或 `index` 确认悬空判 `1`） |
 | `2` | **用法或前置条件不满足**（缺必填参数、`edit` 锚点次数不符、`new` 拒绝覆盖；`patch/edit/expand` 的 BOM 或读取失败为 `2`；**`check` 的坏 `--controls` 总码为 `2`**，此时 ①–⑧⑩⑪ 照常执行，仅跳过 ⑨ 与 configs 内联 `[js]`；`patch/edit` 写前 node 调用失败也判 `2`；`params --strict` 仅未核对判 `2`；`diffguard --strict` 检查未完成判 `2`；`folders` 索引读不动判 `2`；`params` / `sqlrefs` 依赖读取失败判 `2`） |
 
 各命令的 strict 边界分别计算：`check --strict` **仅升级 ⑪**；`params` 使用自己的默认/严格矩阵，
@@ -475,7 +477,7 @@ python "$SKILL_ROOT/scripts/xwl.py" diffguard <改过的文件或目录> --stric
 
 ## 六、改完的自检清单
 
-**31 项**清单（改已有文件 24 项 + 新建文件 7 项）在 `references/checklist.md` ——
+**34 项**清单（改已有文件 27 项 + 新建文件 7 项）在 `references/checklist.md` ——
 交活前逐条过一遍。按主题分了七组，**与 `references/anti-patterns.md` 的分组对齐**（七组 ↔ 反模式组的对照表在 `references/checklist.md` 开头）。
 
 > 其中最容易跳过、后果最重的三条：① 多行源**绝不能**压成一行（改完用 `diffguard` 精确、

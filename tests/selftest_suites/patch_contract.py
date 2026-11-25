@@ -471,9 +471,280 @@ def _check_patch_contract(tmp, node, failures, write) -> None:
     _ok("5-14", f14,
         "expand/patch 数字形态=3：字符串、SQL/JS、转义及前导文本不计数；位置互换方向差=0")
 
+    pc_fail.extend(_check_slot_gate(tmp))
+    pc_fail.extend(_check_slot_diagnostic_paths(tmp))
     pc_fail.extend(_check_configs_path_guard(tmp))
     if pc_fail:
         failures.extend(pc_fail)
+
+
+def _check_slot_gate(tmp):
+    """段 32：patch 写前槽位三档、无副作用、既有问题移位与父对象身份。"""
+    fail = []
+
+    def _ok(label, problems):
+        if problems:
+            fail.extend("§slot-gate " + item for item in problems)
+        else:
+            print("[ok]  §slot-gate " + label)
+
+    def _page(children):
+        return {"hidden": False, "children": children, "roles": {}, "title": "slot",
+                "iconCls": "", "inframe": "", "pageLink": ""}
+
+    def _ctl(typ, item_id, children=None):
+        return {"configs": {"itemId": item_id}, "expanded": False,
+                "children": [] if children is None else children, "type": typ}
+
+    def _write_page(name, children):
+        path = os.path.join(tmp, name)
+        with open(path, "w", encoding="utf-8", newline="") as fh:
+            fh.write(xwl.dumps_designer(_page(children), 1, CRLF))
+        return path
+
+    def _write_ops(name, ops):
+        path = os.path.join(tmp, name)
+        with open(path, "w", encoding="utf-8", newline="\n") as fh:
+            json.dump(ops, fh, ensure_ascii=False, indent=1)
+        return path
+
+    def _md5(path):
+        return hashlib.md5(open(path, "rb").read()).hexdigest()
+
+    def _run_patch(path, ops, *, dry_run, backup, slot_check):
+        return _run(xwl.cmd_patch, file=path, ops=_write_ops(
+                        "slot_%s_%s_%s.json" % (
+                            os.path.basename(path).replace(".", "_"), slot_check,
+                            "dry" if dry_run else "real"),
+                        ops),
+                    indent=1, eol="auto", dry_run=dry_run, backup=backup,
+                    node=None, no_js=True, allow_new_key=False,
+                    slot_check=slot_check)
+
+    bad_append = [{"op": "append", "path": ["@grid1", "children"], "value":
+                   _ctl("store", "wrongStore")}]
+
+    for mode in ("default", "warn"):
+        for dry in (True, False):
+            target = _write_page("slot_%s_%s.xwl" % (mode, "dry" if dry else "real"),
+                                 [_ctl("grid", "grid1", [_ctl("store", "store")])])
+            before = open(target, "rb").read()
+            md5 = _md5(target)
+            rc, out = _run_patch(
+                target, bad_append, dry_run=dry, backup=(not dry),
+                slot_check=None if mode == "default" else "warn")
+            probs = []
+            if rc != 0:
+                probs.append("%s/%s rc=%d（应 0）" % (mode, "预演" if dry else "实写", rc))
+            if "[warn] ⑪" not in out or "wrongStore" not in out or "@grid1" not in out:
+                probs.append("%s/%s 未给出同路径的 ⑪ 告警:\n%s"
+                             % (mode, "预演" if dry else "实写", out))
+            if dry:
+                if open(target, "rb").read() != before or os.path.exists(target + ".bak"):
+                    probs.append("%s/预演 改动了目标或生成了备份" % mode)
+            else:
+                if not os.path.exists(target + ".bak") or open(target + ".bak", "rb").read() != before:
+                    probs.append("%s/实写 备份不等于原始字节" % mode)
+                if _md5(target + ".bak") != md5:
+                    probs.append("%s/实写 备份 MD5 不等于原始 MD5" % mode)
+            _ok("%s 档%s均告警且写侧合同保持" % (mode, "预演" if dry else "实写"), probs)
+
+    for dry in (True, False):
+        target = _write_page("slot_error_%s.xwl" % ("dry" if dry else "real"),
+                             [_ctl("grid", "grid1", [_ctl("store", "store")])])
+        before = open(target, "rb").read()
+        md5 = _md5(target)
+        rc, out = _run_patch(target, bad_append, dry_run=dry,
+                             backup=False, slot_check="error")
+        probs = []
+        if rc != 1:
+            probs.append("error/%s rc=%d（应 1）" % ("预演" if dry else "实写", rc))
+        if "[FAIL] ⑪" not in out or "wrongStore" not in out or "@grid1" not in out:
+            probs.append("error/%s 未给出同路径的 ⑪ FAIL:\n%s"
+                         % ("预演" if dry else "实写", out))
+        if open(target, "rb").read() != before:
+            probs.append("error/%s 改动了目标" % ("预演" if dry else "实写"))
+        if os.path.exists(target + ".bak"):
+            probs.append("error/%s 生成了备份" % ("预演" if dry else "实写"))
+        if _md5(target) != md5:
+            probs.append("error/%s 目标 MD5 变化" % ("预演" if dry else "实写"))
+        _ok("error 档%s拒绝且目标/备份零副作用" % ("预演" if dry else "实写"), probs)
+
+    healthy = _write_page("slot_healthy.xwl", [
+        _ctl("grid", "grid1", [
+            _ctl("store", "store"), _ctl("toolbar", "tbar"),
+            _ctl("array", "columns", [_ctl("column", "col1")]),
+        ])])
+    before = open(healthy, "rb").read()
+    rc, out = _run_patch(healthy, [{"op": "set", "path": ["title"], "value": "ok"}],
+                         dry_run=True, backup=False, slot_check="error")
+    probs = []
+    if rc != 0:
+        probs.append("健康候选 rc=%d（应 0）" % rc)
+    if "[ok]   ⑪ 写前槽位检查通过（无新增问题）" not in out:
+        probs.append("健康候选缺逐字通过行:\n%s" % out)
+    if open(healthy, "rb").read() != before:
+        probs.append("健康候选预演改动了目标")
+    _ok("健康候选显式 error 通过且逐字给通过行", probs)
+
+    shift = _write_page("slot_shift.xwl", [
+        _ctl("grid", "grid1", [_ctl("store", "wrongStore")]),
+    ])
+    rc, out = _run_patch(
+        shift, [{"op": "set", "path": ["@wrongStore", "configs", "itemId"],
+                 "value": "stillWrong"}],
+        dry_run=True, backup=False, slot_check="error")
+    probs = []
+    if rc != 0 or "[FAIL] ⑪" in out:
+        probs.append("既有同类问题移位被误拒：rc=%d\n%s" % (rc, out))
+    _ok("既有同类问题在同一父对象内移位允许", probs)
+
+    two_parents = _write_page("slot_two_parents.xwl", [
+        _ctl("grid", "gridA", [_ctl("store", "wrongStore")]),
+        _ctl("grid", "gridB", [_ctl("store", "wrongStore")]),
+    ])
+    before = open(two_parents, "rb").read()
+    rc, out = _run_patch(two_parents, [
+        {"op": "set", "path": ["@gridA", "@wrongStore", "configs", "itemId"], "value": "store"},
+        {"op": "append", "path": ["@gridB", "children"], "value": _ctl("store", "wrongStore")},
+    ], dry_run=False, backup=True, slot_check="error")
+    probs = []
+    if rc != 1 or "@gridB" not in out or "[FAIL] ⑪" not in out:
+        probs.append("两个同名父节点一处修复另一处新增未拒：rc=%d\n%s" % (rc, out))
+    if open(two_parents, "rb").read() != before or os.path.exists(two_parents + ".bak"):
+        probs.append("父对象身份负例产生了目标/备份副作用")
+    _ok("父对象身份不同处新增拒绝，且保留已删父引用不误放行", probs)
+    return fail
+
+
+def _check_slot_diagnostic_paths(tmp):
+    """round 2：同名/多层父的诊断必须同时保留短名与完整结构路径。"""
+    fail = []
+
+    def _ok(label, problems):
+        if problems:
+            fail.extend("§slot-path " + item for item in problems)
+        else:
+            print("[ok]  §slot-path " + label)
+
+    def _ctl(typ, item_id, children=None):
+        return {"configs": {"itemId": item_id}, "expanded": False,
+                "children": [] if children is None else children, "type": typ}
+
+    def _page(children):
+        return {"hidden": False, "children": children, "roles": {}, "title": "slot-path",
+                "iconCls": "", "inframe": "", "pageLink": ""}
+
+    def _write(name, payload):
+        path = os.path.join(tmp, name)
+        with open(path, "w", encoding="utf-8", newline="") as fh:
+            if isinstance(payload, str):
+                fh.write(payload)
+            else:
+                fh.write(xwl.dumps_designer(payload, 1, CRLF))
+        return path
+
+    def _run_patch(path, ops, *, dry, backup, mode):
+        ops_path = _write(os.path.basename(path) + ".%s.%s%s.ops.json" % (
+            mode, "dry" if dry else "real", "b" if backup else ""),
+            json.dumps(ops, ensure_ascii=False, indent=1))
+        return _run(xwl.cmd_patch, file=path, ops=ops_path, indent=1, eol="auto",
+                    dry_run=dry, backup=backup, node=None, no_js=True,
+                    allow_new_key=False,
+                    slot_check=None if mode == "default" else mode)
+
+    full_same = "children[1].children[0].configs.itemId"
+    short_same = "@gridSame/@wrongStore"
+    same_base = _page([
+        _ctl("grid", "gridSame", [_ctl("store", "wrongStore")]),
+        _ctl("grid", "gridSame"),
+    ])
+    same_ops = [
+        {"op": "set", "path": ["@gridSame#1", "children", 0, "configs", "itemId"],
+         "value": "store"},
+        {"op": "append", "path": ["@gridSame#2", "children"],
+         "value": _ctl("store", "wrongStore")},
+    ]
+    for mode in ("default", "warn", "error"):
+        for dry in (True, False):
+            for backup in (False, True):
+                label = "%s/%s/%s" % (mode, "dry" if dry else "real",
+                                       "backup" if backup else "no-backup")
+                target = _write("slot_path_%s_%s_%s.xwl" % (
+                    mode, "dry" if dry else "real", "b" if backup else "n"), same_base)
+                before = open(target, "rb").read()
+                rc, out = _run_patch(target, same_ops, dry=dry, backup=backup, mode=mode)
+                probs = []
+                expect_rc = 1 if mode == "error" else 0
+                if rc != expect_rc:
+                    probs.append("rc=%d（应 %d）\n%s" % (rc, expect_rc, out))
+                marker = "[FAIL] ⑪" if mode == "error" else "[warn] ⑪"
+                if marker not in out:
+                    probs.append("缺 %s" % marker)
+                if short_same not in out:
+                    probs.append("丢短名 %s" % short_same)
+                if full_same not in out:
+                    probs.append("缺可消歧结构路径 %s" % full_same)
+                if (dry or mode == "error") and open(target, "rb").read() != before:
+                    probs.append("拒绝/预演路径改动了目标")
+                if open(target, "rb").read() != before and os.path.exists(target + ".bak"):
+                    pass
+                expect_bak = (not dry and mode != "error" and backup)
+                if os.path.exists(target + ".bak") != expect_bak:
+                    probs.append("备份存在性不符（expect=%r）" % expect_bak)
+                elif expect_bak and open(target + ".bak", "rb").read() != before:
+                    probs.append("备份字节不等于操作前")
+                _ok("同名兄弟父三档矩阵 %s" % label, probs)
+
+    multi_base = _page([
+        _ctl("panel", "outer", [
+            _ctl("panel", "middle", [_ctl("grid", "gridSame", [
+                _ctl("store", "wrongStore"),
+            ])]),
+            _ctl("panel", "middle2", [_ctl("grid", "gridSame")]),
+        ]),
+    ])
+    multi_ops = [
+        {"op": "set", "path": ["@gridSame#1", "children", 0, "configs", "itemId"],
+         "value": "store"},
+        {"op": "append", "path": ["@gridSame#2", "children"],
+         "value": _ctl("store", "wrongStore")},
+    ]
+    multi = _write("slot_path_multi.xwl", multi_base)
+    rc, out = _run_patch(multi, multi_ops, dry=True, backup=False, mode="error")
+    multi_path = "children[0].children[1].children[0].children[0].configs.itemId"
+    _ok("多层父输出完整 children 下标链", [] if (
+        rc == 1 and multi_path in out and short_same in out) else [
+            "rc=%d；期望路径=%s\n%s" % (rc, multi_path, out)])
+
+    duplicate_base = _page([
+        _ctl("grid", "gridDup", [
+            _ctl("store", "wrongStore"),
+            _ctl("store", "wrongStore"),
+        ]),
+    ])
+    duplicate = _write("slot_path_duplicate.xwl", duplicate_base)
+    rc, out = _run_patch(
+        duplicate, [{"op": "set", "path": ["title"], "value": "same"}],
+        dry=True, backup=False, mode="warn")
+    p0 = "children[0].children[0].configs.itemId"
+    p1 = "children[0].children[1].configs.itemId"
+    _ok("既有重复供给保留多条完整路径", [] if (
+        rc == 0 and p0 in out and p1 in out and "同一直接父级重复供给" in out) else [
+            "rc=%d\n%s" % (rc, out)])
+
+    shift_base = _page([
+        _ctl("grid", "gridShift", [_ctl("store", "wrongStore")]),
+    ])
+    shift = _write("slot_path_shift.xwl", shift_base)
+    shift_ops = [{"op": "insert", "path": ["children"], "index": 0,
+                  "value": _ctl("panel", "inserted")}]
+    rc, out = _run_patch(shift, shift_ops, dry=True, backup=False, mode="error")
+    shifted_path = "children[1].children[0].configs.itemId"
+    _ok("兄弟插入后按同一父对象保留既有问题、输出当前路径", [] if (
+        rc == 0 and "[FAIL] ⑪" not in out and shifted_path in out) else [
+            "rc=%d；期望当前路径=%s\n%s" % (rc, shifted_path, out)])
+    return fail
 
 
 def _check_configs_path_guard(tmp):

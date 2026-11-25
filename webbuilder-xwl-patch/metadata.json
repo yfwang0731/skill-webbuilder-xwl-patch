@@ -3,12 +3,12 @@
   "name_en": "webbuilder-xwl-patch",
   "displayName": "webbuilder-xwl-patch",
   "author": "yfwang0731",
-  "version": "1.9.3",
+  "version": "1.10.0",
   "schema_version": "1.0",
   "description": "WebBuilder（wb）平台 .xwl 定义文件的处理与安全编辑：结构级 patch（只给值 / 子树，工具按设计器自己的算法重建整份文件）+ 格式校验 + 相对 git 基线的压平检测。",
   "core_capabilities": [
     "结构级 patch 编辑（不碰文本层，格式错误在构造上不会发生）",
-    "check 十项校验（8 项判定：BOM / 换行一致 / 续行空白 / 加载器等价解析 / 末行结构 / 事件 JS 语法 / 注册键重名分级 / `configs` 值类型 ＋ 2 项默认只提示：⑧ 加载链完整性 / ⑪ 错槽位；⑪ 在 `--strict` 时改为 `[FAIL]` 并进 rc，⑧ 始终只提示、不进 rc）；文件级 BOM、缺失、不可读为 rc=1；`patch/edit/expand` 的 BOM 或读取失败为 rc=2。给了 `--controls` 时另校 `configs` 键合法性（⑨，`[warn]`、不进 rc）与 `configs` 内联 `[js]` 语法（`[FAIL]`、进 rc）；坏注册表总码为 2，①–⑧⑩⑪ 与逐文件结论照常产出，只跳过 ⑨ 与内联 `[js]`",
+    "check 十项校验（8 项判定：BOM / 换行一致 / 续行空白 / 加载器等价解析 / 末行结构 / 事件 JS 语法 / 注册键重名分级 / `configs` 值类型 ＋ 2 项默认只提示：⑧ 加载链完整性 / ⑪ 槽位供给与重复列；⑪ 在 `--strict` 时改为 `[FAIL]` 并进 rc，⑧ 始终只提示、不进 rc）；文件级 BOM、缺失、不可读为 rc=1；`patch/edit/expand` 的 BOM 或读取失败为 rc=2。给了 `--controls` 时另校 `configs` 键合法性（⑨，`[warn]`、不进 rc）与 `configs` 内联 `[js]` 语法（`[FAIL]`、进 rc）；坏注册表总码为 2，①–⑧⑩⑪ 与逐文件结论照常产出，只跳过 ⑨ 与内联 `[js]`",
     "schema 的机器可读与语料实测（`--json` / `--observed`）：`--json` 出机器可读形态（单个对象 / `--list` 出数组）；`--observed [ROOT]` 统计该控件类型在语料里实测用过的 `configs` 键 ＋ 频次，并与注册表给差集",
     "patch 的按键序插入 `insertKey`：把对象键插到指定位置（before/after/index 三选一），补 `set` 只能新建末端的缺口；新建键自授权、以 `[note]` 列出可见",
     "从零新建页面与 SQL 载体（内置设计器真实键序骨架）",
@@ -18,6 +18,7 @@
     "patch 的 ops 契约：`set` 新建键**默认被拒绝**（rc=2）、两条出路（op 上 `\"create\": true` 逐条放行 / 全局 `--allow-new-key` 放行）；非 `set` 带 `create` 报 rc=2 + 越界 / 缺失键统一可读 [FAIL]（rc=2）",
     "params --upstream：核对「谁在调用本页」—— 单根全扫上游调用方与传入键，末尾独立分组输出（默认关、零成本；只认字面量键，动态 url 只计数）",
     "patch 全局逃生开关 `--allow-new-key`：一次放行全部新建键（恢复旧行为、以 `[warn]` 留痕；与逐条 `\"create\": true` 任一即放行）",
+    "patch / new --from-json 写前槽位检查：默认 warn，error 拒绝本次新增的错名槽位、同父级重复供给或同 Grid 重复列；按父对象身份比较既有问题，预演与实写同判，拒绝发生在目标与备份写入前",
     "params 逃生开关 `--strict`：确缺参或确悬空判 rc=1；仅未核对或依赖读取失败判 rc=2；读取失败与已确认内容失败并存判 rc=1。默认缺参只告警，依赖读取失败仍判 rc=2"
   ],
   "trace_dimensions": {
@@ -162,6 +163,11 @@
   },
   "update_history": [
     {
+      "version": "1.10.0",
+      "date": "2026-11-25",
+      "summary": "槽位判据与多行查询（minor）：统一 Grid/tree/propertygrid 固定槽位、同父级重复供给与同 Grid 重复列判据；check ⑪、itemids、patch/new --from-json 写前检查和任务级验收器共用分析结果。patch/new 新增 --slot-check warn|error，默认 warn，error 只在本次新增问题时拒绝且先于目标和备份写入。双 Grid 合法同名跨父复用，同父重复与自主命名歧义继续报告；tree 骨架改为 treestore(store)。布局文档新增 Grid/Panel 两种 dockedItems 多行结构、同次 params、边框、高度与字段宽度指导，双 Grid 示例各用父级路径追加列。"
+    },
+    {
       "version": "1.9.3",
       "date": "2026-11-24",
       "summary": "提交面内部编号清理（patch）：当前活跃源码、公开文档与测试身份改用行为名称；文档守卫改用语义点号 ID；新增单一防回流守卫，从四类版本事实动态派生版本化机器名，并保留业务控件值、技术名、用户寻址和历史记录。命令、参数、退出码、公开 JSON 形状与文件副作用不变。"
@@ -179,7 +185,7 @@
     {
       "version": "1.9.0",
       "date": "2026-11-21",
-      "summary": "保留名与错槽位（minor）：槽位按父 type、子 type、子 itemId 三元组识别，命中后不再建议改 itemId，也不再计入 check ⑦。页根 toolbar 与 module/folder 根上的 store 仍按普通重名。check 新增 ⑪，默认警告、不进 rc，--strict 才 FAIL；不进 patch/edit/expand 写盘后自检。schema grid --skeleton 给出 store、tbar、columns 占位，tree 给出 store、tbar，column 不塞空 editor；无 --skeleton 的输出不变。说明只补 SKILL §1.2 一行、layout §六把 itemId 可自取限定到 grid/tree/propertygrid 之外、controls §4.2 在必须唯一后写槽位例外，并把文档里的 check 计数从九项改为十项。"
+      "summary": "保留名与错槽位（minor）：槽位按父 type、子 type、子 itemId 三元组识别，命中后不再建议改 itemId，也不再计入 check ⑦。页根 toolbar 与 module/folder 根上的 store 仍按普通重名。check 新增 ⑪，默认警告、不进 rc，--strict 才 FAIL；不进 patch/edit/expand 写盘后自检。schema grid --skeleton 给出 store、tbar、columns 占位，tree 给出 treestore(store)、tbar，column 不塞空 editor；无 --skeleton 的输出不变。说明只补 SKILL §1.2 一行、layout §六把 itemId 可自取限定到 grid/tree/propertygrid 之外、controls §4.2 在必须唯一后写槽位例外，并把文档里的 check 计数从九项改为十项。"
     },
     {
       "version": "1.8.6",
