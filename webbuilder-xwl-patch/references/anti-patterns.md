@@ -44,7 +44,7 @@ FAQ 回答"**已经坏了怎么救**"（按症状查），这里回答"**你正�
 | 15 | 把样本工程的比例当阈值 | 在自己工程上跑 `itemids` | 否 |
 | 16 | 在 `serverScript` 里写 `{#…#}` | 用 `app.get('名字')` | 否 |
 | 17 | 参数名与控件 `itemId` 不一致 | 一路同名到 `{?名字?}` + 跑 `params` | 是 |
-| 18 | 用 `Wb.request` 代替 `store` | 列表/分页/排序用 `store.load` | 否 |
+| 18 | 用 `Wb.request` 代替 `store` | 列表取数用 `store.load`；分页只按 [`sql-fragments.md`](sql-fragments.md) §六 | 否 |
 | 19 | 手工拼 SQL 值 | 用绑定参数 `{?名字?}` | 否 |
 | 20 | 给要提交的文件用 `expand --safe` | 默认忠实模式 | 否 |
 | 21 | 给 `patch` / `expand` 传 `--indent`（非 1）| 用默认值（设计器是 1 个空格） | 否 |
@@ -240,10 +240,10 @@ FAQ 回答"**已经坏了怎么救**"（按症状查），这里回答"**你正�
 
 - **错误做法**：列表数据也用 `Wb.request` 去请求 SQL 片段。
 - **为什么诱人**：`Wb.request` 的写法更直观，和平时请求后台片段一致。
-- **实际后果**：**分页 / 排序失效** —— 框架不会替你带 `page` / `start` / `limit`，
-  也不处理返回结构。
-- **正确做法**：列表、分页、排序用 `store.load(...)`（配合 `store.configs.url`）；
-  `Wb.request` 留给"不建页面、只要结果"的查询 / 校验 / 取数。
+- **实际后果**：列表数据绕过了 store 的请求与结果处理链，页面拿不到统一的列表状态。
+- **正确做法**：列表使用 `store.load(...)`（配合 `store.configs.url`）；
+  `Wb.request` 留给"不建页面、只要结果"的查询 / 校验 / 取数。分页、业务 Top N、
+  自管分页与 `totalSql` 只按 [`sql-fragments.md`](sql-fragments.md) §六 核对。
 
 ### 19 · 手工拼 SQL 值
 

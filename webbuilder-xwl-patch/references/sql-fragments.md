@@ -19,7 +19,8 @@
 - [三、引用机制](#三引用机制核心)（3.1 方向一 / 3.2 三种占位符 / 3.3 方向二 / 3.4 url 三类写法与解析口径）
 - [四、两条硬规则](#四两条硬规则)
 - [五、页面怎么把值送进来](#五页面怎么把值送进来两条通路推荐-out)
-- [六、配套检查工具](#六配套检查工具)
+- [六、分页、`totalSql` 与 SQL 投影](#六分页totalsql-与-sql-投影)
+- [七、配套检查工具](#七配套检查工具)
 
 ## 一、两级结构
 
@@ -272,14 +273,157 @@ queryBizList.xwl
   `ide`/`cache`/`debug`/`log`/`home`/`homeMobile`/`controls`/`printError`/`sendStreamGzip`/
   `sendGzipMinSize`/`serverId`/`serverConsolePrint`）。
 
-## 六、配套检查工具
+## 六、分页、`totalSql` 与 SQL 投影
 
-```bash
-# SKILL_ROOT 已在上面设好（或先 export SKILL_ROOT="…"）；<file.xwl>/<page.xwl> 换成真实文件
-python "$SKILL_ROOT/scripts/xwl.py" paths   <file.xwl>                  # 列出 sql / totalSql / serverScript / url 的位置
-python "$SKILL_ROOT/scripts/xwl.py" sqlrefs <file.xwl>                  # {#名字#} 与 serverScript 是否自洽
-python "$SKILL_ROOT/scripts/xwl.py" params  <page.xwl> [--controls …]   # 页面 → store → SQL 的传参链路交叉核对
+本节是分页、`totalSql`、手写切片与 SQL 投影的**唯一规则正本**。[`transcription-defaults.md`](transcription-defaults.md) 与 [`anti-patterns.md`](anti-patterns.md) 只保留指向本节的指针。
+
+### 6.1 先判由谁分页
+
+| 场景 | SQL 负责 | 页面 / store 负责 | 交付判据 |
+|---|---|---|---|
+| **框架接管分页** | `dataprovider` 声明 `autoPage`，SQL 返回逻辑结果集，不按本次页再加 `LIMIT` / `OFFSET` | 列表走 `store.load(...)`，分页条传 `page` / `start` / `limit` | 同一请求只切一次页；SQL 文本没有与本次页重复的切片 |
+| **业务 Top N** | SQL 明确表达“最新 N 条 / 前 N 条”等业务上限 | 该入口按业务语义取数，不把业务上限伪装成用户翻页 | SQL 注释或交付说明写清 Top N 含义；不能据此复用为通用分页 |
+| **自管分页** | 目标库或历史接口不支持框架分页时，SQL 自行处理 `start` / `limit` 或等价游标 | 调用方只传一次页参数，不再由框架重复切页 | 参数名、来源、返回 `total` 三者同链路核对 |
+| **参考页已有 `totalSql`** | 保留参考页的总数 SQL 与过滤条件 | 保留同一场景的请求接线 | 参考页来源、SQL 条件与返回 `total` 一并核对 |
+
+新建纯列表且没有参考 SQL 时，可以不写 `totalSql`，由框架补总数；参考页已经带 `totalSql` 时保留该逻辑。这个分场景结论来自使用者确认，本机没有执行 SQL 复现。
+
+### 6.2 禁止二次切页
+
+`autoPage` 接管后，**同一请求不得再次手写切页**。下列写法属于重复切页：
+
+- SQL 已声明 `autoPage`，又在末尾按当前 `start` / `limit` 追加 `LIMIT` / `OFFSET`；
+- 框架已把 `start` / `limit` 传到 SQL，再把结果集在服务端切片一次；
+- 页面先取全量，再按页码手工 `splice` / `slice` 后显示。
+
+业务 Top N 与自管分页可以在 SQL 内出现上限或切片，但它们必须与框架接管分页互斥，并在交付说明中写明场景。不要因为一条 Top N 需要 `LIMIT`，就给普通列表也复制同样的切片。
+
+### 6.3 SQL 引用、别名与投影
+
+核对范围固定在**当前应用模块根**。`m?xwl=` 路径相对 `wb/modules/`，不带 `.xwl`；把资源放到另一个 webapp 或另一个工程只能证明那里可用，不能证明当前应用可用。
+
+投影核对按同一列链追到结果：
+
+```text
+SQL 物理列
+  → SELECT 别名
+    → store 返回 JSON 字段
+      → grid column.dataIndex
+        → renderer / keyName / 业务取数
 ```
+
+例：
+
+```sql
+select t.BIZ_NO as BIZ_NO,
+       t.STATE_NAME as STATE_NAME
+  from demo_table t
+ where t.STATE_CODE = {?STATUS?}
+```
+
+页面列必须用 `dataIndex: "BIZ_NO"` 与 `dataIndex: "STATE_NAME"`。只把列标题写成“状态”不建立映射；SQL 别名改了而 `dataIndex` 未改时，列可能空白或读到未定义值。
+
+### 6.4 可复制的 Windows PowerShell 示例
+
+在源码工作区仓库根目录依次执行下面整段 PowerShell 7 脚本。脚本只在系统临时目录创建中性页面和 SQL 载体，不写业务工程。
+
+```powershell
+$ErrorActionPreference = 'Stop'
+$RepoRoot = (Resolve-Path '.').Path
+$SkillRoot = Join-Path $RepoRoot 'skill/webbuilder-xwl-patch'
+$Xwl = Join-Path $SkillRoot 'scripts/xwl.py'
+$FixtureRoot = Join-Path $env:TEMP ('wb-xwl-copyable-' + [guid]::NewGuid().ToString('N'))
+$ModuleRoot = Join-Path $FixtureRoot 'modules'
+$SqlPath = Join-Path $ModuleRoot 'examples/demoSql/queryDemo.xwl'
+$PagePath = Join-Path $ModuleRoot 'examples/pageDemo.xwl'
+$SqlOpsPath = Join-Path $FixtureRoot 'sql-ops.json'
+$PageOpsPath = Join-Path $FixtureRoot 'page-ops.json'
+$StoreUrl = 'm?' + 'xwl=examples/demoSql/queryDemo'
+
+New-Item -ItemType Directory -Force -Path (Split-Path -Parent $SqlPath) | Out-Null
+New-Item -ItemType Directory -Force -Path (Split-Path -Parent $PagePath) | Out-Null
+
+$SqlOps = @'
+[
+  {
+    "op": "set",
+    "path": ["@module", "configs", "serverScript"],
+    "value": "var data = app.get();\nvar whereSql = '';\nif (!Wb.isEmpty(data.STATUS)) {\n  whereSql = ' AND t.STATE_CODE = {?STATUS?}';\n}\nrequest.setAttribute('whereSql', whereSql);"
+  },
+  {
+    "op": "set",
+    "path": ["@dataprovider", "configs", "sql"],
+    "value": "select t.BIZ_NO as BIZ_NO, t.STATE_NAME as STATE_NAME from demo_table t where 1=1 {#whereSql#}"
+  },
+  {
+    "op": "set",
+    "path": ["@dataprovider", "configs", "totalSql"],
+    "value": "select count(1) as TOTAL from demo_table t where 1=1 {#whereSql#}",
+    "create": true
+  }
+]
+'@
+
+$PageOps = @'
+[
+  {"op":"append","path":["children",0,"children"],"value":{"configs":{"itemId":"viewport1"},"expanded":false,"children":[],"type":"viewport"}},
+  {"op":"append","path":["@viewport1","children"],"value":{"configs":{"itemId":"panel1","layout":"fit"},"expanded":false,"children":[],"type":"panel"}},
+  {"op":"append","path":["@panel1","children"],"value":{"configs":{"itemId":"demoGrid"},"expanded":false,"children":[],"type":"grid"}},
+  {"op":"append","path":["@demoGrid","children"],"value":{"configs":{"itemId":"store","autoLoad":"false","url":"STOREDEMO"},"expanded":false,"children":[],"type":"store"}},
+  {"op":"append","path":["@demoGrid","children"],"value":{"configs":{"itemId":"tbar"},"expanded":false,"children":[],"type":"toolbar"}},
+  {"op":"append","path":["@tbar","children"],"value":{"configs":{"itemId":"STATUS","fieldLabel":"Status"},"expanded":false,"children":[],"type":"text"}},
+  {"op":"append","path":["@tbar","children"],"value":{"configs":{"itemId":"queryBtn","text":"Query"},"expanded":false,"children":[],"type":"button","events":{"click":"app.demoGrid.store.load({params:{STATUS:app.STATUS.getValue()}});"}}},
+  {"op":"append","path":["@demoGrid","children"],"value":{"configs":{"itemId":"columns"},"expanded":false,"children":[],"type":"array"}},
+  {"op":"append","path":["@columns","children"],"value":{"configs":{"itemId":"BIZ_NO","dataIndex":"BIZ_NO","text":"Biz No"},"expanded":false,"children":[],"type":"column"}},
+  {"op":"append","path":["@columns","children"],"value":{"configs":{"itemId":"STATE_NAME","dataIndex":"STATE_NAME","text":"Status"},"expanded":false,"children":[],"type":"column"}}
+]
+'@
+
+$PageOps = $PageOps.Replace('STOREDEMO', $StoreUrl)
+
+[System.IO.File]::WriteAllText($SqlOpsPath, $SqlOps, [System.Text.UTF8Encoding]::new($false))
+[System.IO.File]::WriteAllText($PageOpsPath, $PageOps, [System.Text.UTF8Encoding]::new($false))
+
+function Invoke-Xwl {
+  param([string[]]$XwlArgs)
+  python -B $Xwl @XwlArgs
+  $code = $LASTEXITCODE
+  Write-Output ("[xwl-rc] {0} = {1}" -f $XwlArgs[0], $code)
+  if ($code -ne 0) { throw ("xwl {0} failed" -f $XwlArgs[0]) }
+}
+
+Invoke-Xwl @('new', $SqlPath, '--kind', 'sql', '--title', 'Demo SQL')
+Invoke-Xwl @('patch', $SqlPath, '--ops', $SqlOpsPath)
+Invoke-Xwl @('new', $PagePath, '--kind', 'page', '--title', 'Demo page')
+Invoke-Xwl @('patch', $PagePath, '--ops', $PageOpsPath)
+Invoke-Xwl @('sqlrefs', $SqlPath)
+Invoke-Xwl @('params', $PagePath, '--strict', '--module-root', $ModuleRoot)
+Invoke-Xwl @('check', $PagePath, $SqlPath, '--strict')
+```
+
+该链的 `sqlrefs` 应报告 `{#whereSql#}` 已由同文件 `serverScript` 提供，`params --strict --module-root $ModuleRoot` 应报告 `STATUS` 已由显式调用提供，末尾 `check --strict` 应为 `ALL OK`。
+
+静态命令的证据分工：
+
+| 命令 | 证明什么 | 不能证明什么 |
+|---|---|---|
+| `sqlrefs` | 本文件 `{#名字#}` 与字面量 `request.setAttribute(…)` 的集合是否自洽 | 执行时序、分支、跨 module、数据库可执行性 |
+| `params --strict`，并把 `--module-root` 指向当前应用模块根 | 页面调用点与当前模块根内 SQL 参数需求是否一致 | SQL 实际执行、结果字段投影与数据库内容 |
+| `paths` / `dump` | SQL 字段位置与页面结构 | 数据库返回列名 |
+
+别名与投影不一致可能不触发 `sqlrefs` 或 `params --strict`。它们必须由人工或独立结构断言逐项比较 SELECT 别名、回包字段和 `dataIndex`；SQL 结果列与真实翻页仍要在业务库验证。
+
+## 七、配套检查工具
+
+完成上节 PowerShell 链后，`$Xwl`、`$SqlPath`、`$PagePath`、`$ModuleRoot` 已指向中性夹具。继续执行：
+
+```powershell
+python -B $Xwl paths $SqlPath
+python -B $Xwl sqlrefs $SqlPath
+python -B $Xwl params $PagePath --strict --module-root $ModuleRoot
+```
+
+核对其他 SQL 文件或页面时，把实际路径赋给 `$SqlPath` 或 `$PagePath` 后复用同一命令形状。`--controls` 接收当前 wb 工程的实际注册表路径，例如在 wb 工程根执行 `$ControlsPath = (Resolve-Path 'system/controls.json').Path`，再给 `check` 传入 `--controls $ControlsPath`。
 
 - **`paths`** —— 同时给出「原路径」与「`@写法`」，改 SQL 前先跑它拿路径。
 - **`sqlrefs`** —— 检查三件事：每个 `{#名字#}` 是否有 serverScript 提供（`sys.*` / `Str.*` 视为内置）、

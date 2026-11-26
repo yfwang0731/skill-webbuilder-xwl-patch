@@ -3,7 +3,7 @@
   "name_en": "webbuilder-xwl-patch",
   "displayName": "webbuilder-xwl-patch",
   "author": "yfwang0731",
-  "version": "1.10.0",
+  "version": "1.10.1",
   "schema_version": "1.0",
   "description": "WebBuilder（wb）平台 .xwl 定义文件的处理与安全编辑：结构级 patch（只给值 / 子树，工具按设计器自己的算法重建整份文件）+ 格式校验 + 相对 git 基线的压平检测。",
   "core_capabilities": [
@@ -162,6 +162,11 @@
     "references/workflow-notes.md": "evidence"
   },
   "update_history": [
+    {
+      "version": "1.10.1",
+      "date": "2026-11-25",
+      "summary": "页面运行与 SQL 交付指引（patch）：无对外能力变化，无新子命令、新参数、判定、退出码或文件副作用。补充空 text/value 的 processConfigs/charAt 风险、窗口 app._X 模板键与 initialize/finalize 时序复核、改名删除后的四类引用检查；补充单选字典 combo 的 keyName 写法、字典身份与键/提交值/显示值/数据源核对、pickList/URL store/异步空 store 的实际展开验收。分页、totalSql、业务 Top N、自管分页与二次切页收敛为 sql-fragments 单一正本，补齐模块根、SQL 别名和查询投影的静态与运行边界。layout 区分 Grid 内 summary 与 border 父层独立汇总；js-api 补充最新响应生效、失败、旧响应晚到、按钮恢复、Wb.prompt 原始输入和 window → panel → xwl 的模块核对短例。"
+    },
     {
       "version": "1.10.0",
       "date": "2026-11-25",

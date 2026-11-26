@@ -202,3 +202,50 @@ app.demoGrid.store.load({
 | 两行字段只靠 `out: app.queryPanel` 收集，未核对 docked toolbar 行为 | 参数可能只收到一行或完全收不到 | 显式组装同一次 `params`，并跑 `params --strict` |
 | 普通查询位继续用 90 px，客户或长名称仍不扩宽 | 文本被截断，触发按钮挤压输入区 | 普通位从 220 / labelWidth 70 起步；长名称用 260–300 |
 | `absolute` Panel 只平铺两行控件，不增加 `height` | 第二行被裁或留下大块空白 | 按 §2.1 重算高度；查询面板优先随内容撑高 |
+
+## 七、两种“合计”
+
+两种合计的用途与直接父级不同。先按结果覆盖范围选形态，再写控件树。
+
+### 7.1 Grid 内 summary：汇总当前表格
+
+用途：某列显示当前 Grid 行集的数量、小计、平均值等。`summary` 是 Grid 的 feature，直接父级链为 `grid → array(features) → feature(summary)`；对应列用 `summaryType`。
+
+```json
+{
+  "type": "array",
+  "configs": {"itemId": "features"},
+  "expanded": false,
+  "children": [
+    {"type": "feature", "configs": {"itemId": "summary"}, "expanded": false, "children": []}
+  ]
+}
+```
+
+```json
+{"type": "column", "configs": {"itemId": "AMOUNT", "dataIndex": "AMOUNT", "text": "金额", "summaryType": "sum"}, "expanded": false, "children": []}
+```
+
+### 7.2 同一 border 父层中的独立汇总
+
+用途：表格下方显示跨区域、跨数据源或由独立取数得到的汇总。Grid 与汇总面板是同一个 `border` 父级的兄弟区域：Grid 用 `region:"center"`，汇总面板用 `region:"south"`。汇总值不依赖 Grid 的 `summaryType`，来源与刷新时机由该面板自己的控件或请求负责。
+
+```json
+{
+  "type": "panel",
+  "configs": {"itemId": "summaryShell", "layout": "border"},
+  "expanded": false,
+  "children": [
+    {"type": "grid", "configs": {"itemId": "resultGrid", "region": "center"}, "expanded": false, "children": []},
+    {"type": "panel", "configs": {"itemId": "totalPanel", "region": "south", "height": "48", "border": "false"}, "expanded": false, "children": []}
+  ]
+}
+```
+
+判断顺序：
+
+1. 只要当前 Grid 行集的列级汇总，使用 `feature(summary)`。
+2. 合计必须常驻在表格外、覆盖多个区域或来自独立查询，使用同一 `border` 父级的独立面板。
+3. 两种形态不要用同名 `itemId` 冒充同一种合计；直接父级与 `region` 必须能从 `dump` 或结构断言中看清。
+
+实际停靠效果与汇总返回值仍要在设计器或浏览器核对；静态结构只证明挂载关系。

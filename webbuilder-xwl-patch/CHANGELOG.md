@@ -14,6 +14,16 @@
 
 ---
 
+## [1.10.1] - 2026-11-25
+
+页面运行与 SQL 交付指引（patch）：**无对外能力变化**。无新子命令、新参数、判定、退出码或文件副作用。
+
+- 补充空字符串 `text` / `value` 进入 `ExtControl.processConfigs` 与 `charAt(0)` 路径的风险、静态 `check` 的证据边界和正常对照。
+- 补充窗口 `app._X` 模板键、`initialize` / `finalize` 时序、改名或删除后的 `app.X` / `app._X` / `app.get()` / `app["X"]` 引用复核。
+- 补充单选字典 combo 的 `keyName` 最小写法，区分字典身份、业务键、提交值与显示值；说明 `pickList`、URL store 与异步空初始数据的实际展开和回填核对。
+- 将分页、业务 Top N、自管分页、`totalSql` 与二次切页规则收敛到 `sql-fragments.md`，其他文档只保留指针；补充当前应用模块根、SQL 别名和查询投影核对。
+- `layout.md` 区分 Grid 内 `summary` 与同一 `border` 父层的独立汇总；`js-api.md` 补充查询生效值、失败、旧响应晚到、按钮状态、`Wb.prompt` 原始输入和按模块核对的选择窗口短例。
+
 ## [1.10.0] - 2026-11-25
 
 固定槽位、重复供给与多行查询（minor）。

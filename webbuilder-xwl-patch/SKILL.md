@@ -2,7 +2,7 @@
 name: webbuilder-xwl-patch
 slug: skill-webbuilder-xwl-patch
 displayName: webbuilder-xwl-patch
-version: 1.10.0
+version: 1.10.1
 license: MIT
 metadata:
   category: development-tools
@@ -71,12 +71,14 @@ WebBuilder 的页面与查询定义都写在 `.xwl` 里。它**看起来像 JSON
 | 查子命令 / 退出码 / 环境依赖 | 第四章 |
 | 改引用、传参、写 `events` 里的 JS | [`references/js-api.md`](references/js-api.md) |
 | 加 / 改窗口（`createInstance`、`closeAction`、`app._X`） | [`references/js-api.md`](references/js-api.md) §5 |
+| 页面运行排错：空 `text/value`、`app.X` 改名或实例时序 | [`references/faq.md`](references/faq.md) §二 · [`references/js-api.md`](references/js-api.md) §5 |
 | 提交前取 grid 的变更集（新增 / 修改 / 删除） | [`references/js-api.md`](references/js-api.md) §6《`Wb.getModified` —— 取 grid 的变更集（用法约定，非平台契约）》 |
 | 改 SQL 片段（`serverScript` ↔ `dataprovider`） | [`references/sql-fragments.md`](references/sql-fragments.md) |
+| 分页、业务 Top N、自管分页、`totalSql` 与 SQL 投影 | [`references/sql-fragments.md`](references/sql-fragments.md) §六 |
 | 处理注册键重名 / `@itemId#N` 寻址 | [`references/faq.md`](references/faq.md)「附录：itemId 命名规范与重名处置」 |
 | 出问题了（按症状查） | 第五章 + [`references/faq.md`](references/faq.md) |
 | **动手前**扫一遍"别这么干" | [`references/anti-patterns.md`](references/anti-patterns.md) —— 23 条，标了哪些是**静默**的 |
-| **交活前**逐条过 | 第六章 + [`references/checklist.md`](references/checklist.md) —— 34 项 |
+| **交活前**逐条过 | 第六章 + [`references/checklist.md`](references/checklist.md) —— 40 项 |
 | 换控件 / 不知道用哪个 / 该挂哪里 | [`references/controls.md`](references/controls.md) |
 | 定布局：面板该多高、列宽与列网格、`region` 拉伸、工具条挂法 | [`references/layout.md`](references/layout.md) |
 | 值映射：`keyName` vs `renderer`、多选三路来源、值往返与存储格式 | [`references/value-mapping.md`](references/value-mapping.md) |
@@ -469,7 +471,7 @@ python "$SKILL_ROOT/scripts/xwl.py" diffguard <改过的文件或目录> --stric
 
 ## 五、常见问题（FAQ）
 
-**25 条**高频问题在 `references/faq.md`，按四组归类：① 格式与解析 / ② 命名与引用 /
+**26 条**高频问题在 `references/faq.md`，按四组归类：① 格式与解析 / ② 命名与引用 /
 ③ 能不能这么改 / ④ 命令行为（设计器看不到新文件、SQL 抽取报 `1064`、`check` 慢或没装 `node`、脚本 / CI 怎么判断成败等）。
 
 > 出问题**第一站是那份 FAQ**（按症状查）；**动手前**想避开已知的坑，看
@@ -477,7 +479,7 @@ python "$SKILL_ROOT/scripts/xwl.py" diffguard <改过的文件或目录> --stric
 
 ## 六、改完的自检清单
 
-**34 项**清单（改已有文件 27 项 + 新建文件 7 项）在 `references/checklist.md` ——
+**40 项**清单（改已有文件 33 项 + 新建文件 7 项）在 `references/checklist.md` ——
 交活前逐条过一遍。按主题分了七组，**与 `references/anti-patterns.md` 的分组对齐**（七组 ↔ 反模式组的对照表在 `references/checklist.md` 开头）。
 
 > 其中最容易跳过、后果最重的三条：① 多行源**绝不能**压成一行（改完用 `diffguard` 精确、

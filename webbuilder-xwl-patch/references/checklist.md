@@ -41,6 +41,10 @@
 - [ ] `xwl.py check` 全绿（含 ④ 加载器等价解析、⑥ 事件 JS 语法）
       （④ 只说明解析阶段接受该文本；`patch/expand` 还要求可安全整份重建，页面可用性另看 ⑧、设计器打开和交互验收。尾随逗号、前导内容、单引号键／未引号键／相邻贪婪 `{...}{...}` 的宽容边界见 `references/faq.md` §一）
       （⑦ 的判定口径是**注册键** `normalName || itemId` —— 口径变更后既有文件可能新报 `[FAIL]`，属既有问题、不是本次改坏）
+- [ ] 可见控件的 `text` 与需要初值的 `value` 都不是空字符串；空 `text/value` 可能进入
+      `ExtControl.processConfigs` 的 `charAt(0)` 路径，而 ⑩ 只判类型，静态 `check` 不拦
+- [ ] 要核 ⑨ 或 `configs` 内联 `[js]` 时，`check` 已**显式**带 `--controls`；⑦ 与 `itemids`
+      的注册表可由文件位置**自动向上发现**，两种发现面不混写
 - [ ] 语义层面的改动已用 `git diff` 复核（格式校验查不出语义变化）
 - [ ] 跑过 `xwl.py diffguard <file>`：没有「疑似把多行内容压平」的告警
       （判据使用**精确、最长行、相似度三档**；主判据是定义级精确拼接，最长行只是粗筛，
@@ -66,6 +70,9 @@
 - [ ] 改的是**被引用的片段**时，已确认引用它的页面/入口能正常取到
 - [ ] 改了引用（`store.url` / `Wb.request` / `Wb.open` / `Wb.upload` / `Wb.requestAg`）时：
       url 写的是**模块相对路径且不带 `.xwl`**，目标文件确实存在，参数名与下游一致
+- [ ] 改了窗口或控件名后，已对照 `app.X`、`app._X`、`app.get('X')`、`app['X']` 四种引用；
+      根窗口模板键挂在 `module` / `folder` 直接子级，`module.events.initialize` 与
+      `finalize` 的调用时机已在目标页面核对（见 [`js-api.md`](js-api.md) §5）
 - [ ] 新增控件时：类型/父节点选对（`container` 才能挂真子控件；`grid` 的列/数据源是**配置载体**，
       见 [`controls.md`](controls.md)）
 - [ ] 固定槽位按父上下文使用：双 Grid 可各有一套 `store/tbar/columns`，但同一直接父级不能重复供给；
@@ -84,6 +91,10 @@
       类型是**取值控件**（button/label 之类没有 `getValue()`，不会被送）
 - [ ] 没有在 `out` 与 `params` 里给**同名参数**写不同值
       （统一口径：`store.load` 为 `params > out > store 静态 params`，`Wb.request/requestAg` 为 `params > out`）
+- [ ] 涉及分页、业务 `Top N`、自管分页或 `totalSql` 时，只按
+      [`sql-fragments.md`](sql-fragments.md) 的分页正本核对；同一请求没有二次切页
+- [ ] SQL 列别名与页面 `dataIndex` 已逐项对照；`sqlrefs` 与
+      `params --strict` 的静态结论已和人工投影核对分开记录，模块根明确指向当前应用
 
 ## 六、itemId 命名
 
@@ -91,6 +102,8 @@
       或按父子关系确认过后再改
 - [ ] 新增控件时**注册键 `normalName || itemId` 唯一**（列控件可重名 —— 列 `itemId` 默认 ＝ 字段名，**仅当同页存在多个网格**（字段名可能跨网格重复）时才加 `Col` 后缀（camelCase）；
       按钮 / 面板 / `tab` / 数据承载**必须**区分开）
+- [ ] 字典列的 `keyName` 是项目字典身份；SQL 入值 / 提交值 / 显示值三者已按
+      [`value-mapping.md`](value-mapping.md) §五对照，`check --controls` 的证据边界没有写成“字典键已存在”
 - [ ] 若目标是"同一字段名出现在多处明细面板"：**优先补 `normalName`**（`app.<normalName>`），
       而不是改 `itemId` —— 补 `normalName` 是**新建键**，那条 `set` 要带 `"create": true`
 - [ ] 改了 `itemId` 的话：**事件 JS 里对它的引用已同步改**，且 `itemids` 复查过

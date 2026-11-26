@@ -57,7 +57,7 @@ Wb.request({
 
 - **参数怎么给**：`params: {...}` 或 `out: app.<容器>` —— 完整规则（收哪些控件、
   `params` 覆盖 `out`）见 [`sql-fragments.md`](sql-fragments.md) 第五节。
-- **别用 `Wb.request` 代替 store**：列表/分页/排序要用 `store.load(...)`（框架会带上 `page`/`start`/`limit` 并处理返回）。
+- **别用 `Wb.request` 代替 store**：列表取数用 `store.load(...)`；分页、Top N、自管分页与 `totalSql` 只按 [`sql-fragments.md`](sql-fragments.md) §六核对。
 - 默认**失败自动弹错**；不想弹就 `showError: false`，自己处理 `failure`。
 - `callback` 会先于 `success`/`failure` 被调用，签名是 **`(form, action, value, success)`**（比 `success` 多一个布尔），**返回 `false` 可跳过**后续处理（用于统一拦截）。
 - 返回值是请求对象，可用于取消：`var req = Wb.request({...}); req.abort?` → 实际用 `Ext.Ajax.abort(req)`。
@@ -66,6 +66,47 @@ Wb.request({
 - **跨页面传参不在核对范围**：`Wb.open({url:'m?xwl=…', params:{…}})` 传进**子页面**的键写在
   **调用方**页面里，子页面自己看不到（运行时值从 request 取，静态不可见）⇒ `params <子页面>`
   会把对应的 `{?名?}` 报成"未发现来源"，那是**能力边界不是错误**；要核对就到**调用方页面**跑。
+
+### 1.1 查询生效值与按钮状态
+
+一组查询请求要分别核对**原始输入**、**成功生效值**、**失败**、**旧响应晚到**与**按钮状态**。原始输入取 `Wb.prompt` handler 收到的 `values`，不要拿格式化后的显示值反推：
+
+```js
+var latestRequest = 0;
+var effectiveKeyword = '';
+
+function runQuery(rawKeyword) {
+  var requestId = ++latestRequest;
+  app.queryBtn.setDisabled(true);
+  Wb.request({
+    url: 'm?xwl=<模块>/<业务目录>/queryDemo',
+    params: {KEYWORD: rawKeyword},
+    showError: false,
+    success: function (resp) {
+      if (requestId !== latestRequest) return;   // 旧响应不覆盖新条件
+      effectiveKeyword = rawKeyword;
+      app.resultGrid.store.load({params: {KEYWORD: effectiveKeyword}});
+      app.queryBtn.setDisabled(false);
+    },
+    failure: function () {
+      if (requestId !== latestRequest) return;
+      app.queryBtn.setDisabled(false);            // 失败恢复按钮，不更新生效值
+    }
+  });
+}
+
+Wb.prompt({
+  title: '查询',
+  items: {itemId: 'keyword', fieldLabel: '关键字'},
+  handler: function (values, win) {
+    var rawValue = values.keyword;               // 保留用户原始输入
+    win.close();
+    runQuery(rawValue);
+  }
+});
+```
+
+核对顺序是：请求成功前页面仍使用旧生效值；成功后只采用最新请求的输入；失败时保留旧生效值并恢复按钮；较早请求晚到时不覆盖较新请求。真实浏览器中的请求先后、`Wb.prompt` 组件与回调字段要在目标页面记录，Node 事件序列只能验证状态机约定。
 
 ## 2. `Wb.open` —— 打开子页面（列表页 / 弹窗）
 
@@ -201,6 +242,10 @@ Wb.requestAg({
 生成。挂在 `viewport` 下的窗口只有 `app.X`（由框架注册器写入）= 实例，
 ⇒ **想做"每次重建"就必须把窗口放到 `module` 直接子级**。
 
+**改名 / 删除控件前后必须对读引用**：窗口或其他控件的 `itemId` / `normalName` 改动后，同时搜索
+`app.X`、`app._X`、`app.get('X')`、`app['X']` 四种写法；删除控件时，原引用不能只靠 JS 语法通过来判存活。
+`module.events.initialize` 与 `finalize` 也要一起核对：调用点必须位于目标实例可用之后。静态检查不证明实际执行顺序，运行期报错留给目标页面验证。
+
 **用途建议**（是建议、不是校验项）：
 
 - 常驻（`hide`）多用于**窗口内嵌 grid 做查询**。此时窗口在页面加载时就已实例化，
@@ -222,6 +267,35 @@ Wb.requestAg({
 **出处**：框架侧为 `ExtControl`（服务端生成那对孪生键）与 ExtJS 注册器（按注册键注销）；
 平台自带示例 `examples/basic/import-module.xwl` 的注释把两种用法都演示了。
 实测分布见 [`measured-data-designer.md`](measured-data-designer.md) §十二。
+
+### 5.1 `window → panel → xwl`：按模块核对选择页
+
+选船、选客户、选物料等选择器按各自模块交付，结构通常是：
+
+```text
+window chooseWin
+└─ panel choosePanel
+   └─ grid chooseGrid
+      └─ store  url='m?xwl=<模块>/<业务目录>/demoSql/queryChoose'
+```
+
+窗口节点、面板、Grid、store 与 SQL 载体可以在**当前模块**内配套生成。入口路径、窗口标题、SQL 条件和返回字段都由该模块维护；⛔ 不把一个模块的选船回调直接复制到另一个模块。跨 webapp 或跨工程引用按单根规则核不到。
+
+调用方按实际入口核对模块路径与返回字段：
+
+```js
+Wb.open({
+  url: 'm?xwl=<模块>/<业务目录>/chooseDemo',
+  success: function (appScope, responseText) {
+    var data = Wb.decode(responseText);
+    var row = data.rows && data.rows[0];   // dataprovider 返回形态
+    if (!row) return;
+    // 从当前模块回调约定的 row.<字段> 取值，再回填调用页
+  }
+});
+```
+
+`responseText` 的内容取决于服务端节点：`dataprovider` 一般给出带 `rows` 的 JSON，`app.send(x)` 给出 `x` 本身。回调字段只认当前模块实际返回的结构；使用 `Wb.request` 而不是 `Wb.open` 时同理。项目核对步骤是：从调用方页面拿到入口路径，对该调用方页面运行 `params --strict`，并将 `--module-root` 指向当前应用模块根，再打开窗口实际选择并核对回填值与 SQL 投影。
 
 ## 6. `Wb.getModified` —— 取 grid 的变更集（用法约定，非平台契约）
 

@@ -381,13 +381,53 @@ module                          ← 每个 xwl 的 children[0]（页面级节点
 `keyName` 同为 `column` 的 `configs` 键，值写**字典里的键名**（字符串、不写代码）：
 
 ```json
-{"type": "column", "configs": {"itemId": "status", "text": "状态", "keyName": "<字典键名>"}, "children": []}
+{"type": "column", "configs": {"itemId": "status", "dataIndex": "STATUS", "text": "状态", "keyName": "DEMO_STATUS"}, "children": []}
 ```
 
-> ⚠️ 该键**确切的取值语义**（写字典名，还是写字典内的键）注册表未声明 —— 落文件前以设计器实测为准，⛔ 不要凭本文猜。
+`keyName` 标识的是项目**代码表 / 字典身份**。它既不是页面收到的业务原值，也不是字典项的显示文字：
+
+| 概念 | 中性例 | 在哪里核对 |
+|---|---|---|
+| 字典身份 | `DEMO_STATUS` | 项目代码表名称；注册表只证明控件接受 `keyName` 这个配置键 |
+| 提交值 / 入参值 | `A` | SQL 返回值、`combo.getValue()`、提交参数与业务列 |
+| 显示值 | `启用` | 下拉展开项、列渲染结果、`getTextValue()` / `%<itemId>` |
+
+单选字典下拉的最小写法：
+
+```json
+{"type": "combo", "configs": {"itemId": "statusCode", "fieldLabel": "状态", "keyName": "DEMO_STATUS", "multiSelect": "false"}, "children": []}
+```
+
+落地时核对三处一致：代码表里确有 `DEMO_STATUS`，业务表存的是该字典的键值（如 `A`），显示值由平台按同一字典翻译。`schema combo` 与 `check` 显式接收当前工程的 `--controls` 路径时，只能证明控件注册表接受这些配置键，**不查询 Redis / 业务库，也不能证明字典身份存在、键值与显示值对应**。真实字典内容由持有所在数据源的项目核对。
 
 > **什么时候用哪个、以及存储与往返的代价**见 [`value-mapping.md`](value-mapping.md)（本文只管**写法**）。
-> 两个键是否被该控件接受，用 `xwl.py schema column --controls <…/controls.json>` 复核 —— 注册表是唯一权威。
+> 两个键是否被该控件接受，用 `schema column` 加当前工程的 `--controls` 路径复核 —— 注册表是唯一权威。
+
+### 6.2 空字符串 `text` / `value`
+
+`ExtControl.processConfigs` 消费控件配置时，部分项目会走到 `charAt(0)` 一类的字符串读取路径。使用者已反馈空 `text` / `value` 可导致页面打开失败；当前静态检查只验证值是字符串，因此空字符串仍是**合法字符串类型**，`check` 不能替代平台加载。
+
+失败输入与正常对照：
+
+```json
+{"type": "button", "configs": {"itemId": "emptyButton", "text": ""}, "children": []}
+```
+
+```json
+{"type": "button", "configs": {"itemId": "openBtn", "text": "打开"}, "children": []}
+```
+
+```json
+{"type": "text", "configs": {"itemId": "emptyValue", "value": ""}, "children": []}
+```
+
+```json
+{"type": "text", "configs": {"itemId": "seedValue", "value": "DEMO"}, "children": []}
+```
+
+- 需要可见文字时写非空标题或省略该键，让控件使用类型默认显示。
+- 需要初值时写业务允许的非空字符串。确实允许空输入时，**省略 `value`** 或用该控件的空值状态表达，⛔ 不用空字面量测试平台容错。
+- `check` 的 ⑩ 只看类型，故两段失败输入可通过静态校验。`check --controls` 也不会查询平台 `processConfigs` 分支；页面加载结论须在目标工程与浏览器验证。
 
 ## 七、改结构时的安全顺序
 
