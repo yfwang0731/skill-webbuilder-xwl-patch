@@ -443,3 +443,11 @@ module                          ← 每个 xwl 的 children[0]（页面级节点
 3. 用 `xwl.py paths` / `xwl.py dump` 看清现有层级，再写 `patch` 的 `ops`
    （`path` 段可用 `@itemId` 寻址；`paths` 的「原路径」已含 `configs` 层）；
 4. `patch --dry-run` 看 diff → 真跑 → `xwl.py check`。
+
+### 7.1 坐标键与 `checkOnly`（待核对）
+
+`check --controls` 的 ⑨ 仍只按当前注册表判断 `configs` 键有没有登记。真实语料里的坐标键没有构成可以按上下文收窄的修正面，因此这里不改 ⑨ 检查器，也不把未登记键写成合法键。
+
+`checkOnly` 在控件注册表里没有定义。它若属于某个项目自己的扩展，由该项目登记进自己的注册表，或修正页面上的落点。设计器中的实际落点与生效路径仍待项目侧核对。
+
+本段状态是待核对。不把设计器落点写成已经核对完成。

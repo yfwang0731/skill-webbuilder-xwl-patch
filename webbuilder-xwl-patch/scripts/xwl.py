@@ -2229,8 +2229,8 @@ def _slot_gate_new_issues(snapshot, obj, controls_path=None):
 
 
 def _slot_write_gate(snapshot, obj, controls_path, mode, quiet_clean=False):
-    """写前槽位门禁：默认/warn 报告；error 只拦本次新增问题。"""
-    mode = mode or "warn"
+    """写前槽位门禁：默认与 error 拒绝本次新增；显式 warn 只报告。"""
+    mode = mode or "error"
     added, current = _slot_gate_new_issues(snapshot, obj, controls_path)
     lines = []
     if added:
@@ -9330,8 +9330,8 @@ def build_parser() -> argparse.ArgumentParser:
     pt.add_argument("--backup", action="store_true", help="写盘前先备份为 <file>.bak")
     pt.add_argument("--allow-new-key", action="store_true",
                     help="这是逃生开关：全局放行新建键，恢复旧行为（不给则新建键默认被拒绝、rc=2）")
-    pt.add_argument("--slot-check", choices=["warn", "error"], default="warn",
-                    help="写前 ⑪：warn=告警并继续；error=本次新增即 rc=1（default: warn）")
+    pt.add_argument("--slot-check", choices=["warn", "error"], default="error",
+                    help="写前 ⑪：warn=告警并继续；error=本次新增即 rc=1（default: error）")
     pt.add_argument("--node", help="node 可执行文件路径（缺省从 NODE_BIN 与 PATH 找）")
     pt.add_argument("--no-js", action="store_true", help="跳过写盘后的事件 JS 语法校验")
     pt.set_defaults(func=cmd_patch)
@@ -9368,8 +9368,8 @@ def build_parser() -> argparse.ArgumentParser:
                         "（new 无 auto —— 新文件没有源可沿用，直接选一种）")
     n.add_argument("--indent", type=int, default=1, help="缩进因子（设计器固定用 1，一般不用改）")
     n.add_argument("--force", action="store_true", help="允许覆盖已存在的文件")
-    n.add_argument("--slot-check", choices=["warn", "error"], default="warn",
-                   help="写前 ⑪：warn=告警并继续；error=发现问题即 rc=1（default: warn）")
+    n.add_argument("--slot-check", choices=["warn", "error"], default="error",
+                   help="写前 ⑪：warn=告警并继续；error=发现问题即 rc=1（default: error）")
     n.add_argument("--dry-run", action="store_true", help="只打印将写入的内容，不写盘")
     n.add_argument("--node", help="node 可执行文件路径（缺省从 NODE_BIN 与 PATH 找）")
     n.add_argument("--no-js", action="store_true", help="跳过写盘后的事件 JS 语法校验")

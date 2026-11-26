@@ -747,7 +747,7 @@ def _check_bc_contract_tail(tmp, write, node, bc, _page, _ok) -> None:
             while end < len(lines) and not lines[end].lstrip().startswith("--"):
                 end += 1
             option_text = "\n".join(lines[start:end])
-            if not all(s in option_text for s in ("warn", "error", "default: warn")):
+            if not all(s in option_text for s in ("warn", "error", "default: error")):
                 f19.append("%s --help 未展示三档与默认值：%r" % (name, option_text))
 
     run_dir = os.path.join(tmp, "bc19_clean_patch")

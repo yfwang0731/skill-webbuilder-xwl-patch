@@ -218,7 +218,7 @@ python "$SKILL_ROOT/scripts/xwl.py" check wb/modules/<模块>/demoQuery.xwl wb/m
 人工核对布局与交互。`check` 只证明文件级格式，不能替代后三道；缺注册表或未做设计器验收时，
 页面交付状态记“未完成”。
 
-`check --strict` 会把 ⑪ 的槽位错名、同父级重复供给与同 Grid 重复列升级为失败。`patch` / `new --from-json` 另在写盘和备份前检查本次新增问题；`--slot-check error` 用于把新增问题直接拒绝。多行查询的两种 `dockedItems` 结构与同次 `params` 示例见 [`layout.md`](layout.md)「6.1 Grid 的两行查询」与「6.2 Panel 的两行查询」。
+`check --strict` 会把 ⑪ 的槽位错名、同父级重复供给与同 Grid 重复列升级为失败。`patch` / `new --from-json` 另在写盘和备份前检查本次新增问题；默认拒绝，要保留旧行为才加 `--slot-check warn`。多行查询的两种 `dockedItems` 结构与同次 `params` 示例见 [`layout.md`](layout.md)「6.1 Grid 的两行查询」与「6.2 Panel 的两行查询」。
 
 > 大文件上先跑 `check --no-js` 会跳过最重的 JS 校验；
 > 耗时构成与原因见 [`faq.md`](faq.md)「`check` 慢，或者本机根本没装 `node`？」，

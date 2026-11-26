@@ -524,30 +524,48 @@ def _check_slot_gate(tmp):
     bad_append = [{"op": "append", "path": ["@grid1", "children"], "value":
                    _ctl("store", "wrongStore")}]
 
-    for mode in ("default", "warn"):
-        for dry in (True, False):
-            target = _write_page("slot_%s_%s.xwl" % (mode, "dry" if dry else "real"),
-                                 [_ctl("grid", "grid1", [_ctl("store", "store")])])
-            before = open(target, "rb").read()
-            md5 = _md5(target)
-            rc, out = _run_patch(
-                target, bad_append, dry_run=dry, backup=(not dry),
-                slot_check=None if mode == "default" else "warn")
-            probs = []
-            if rc != 0:
-                probs.append("%s/%s rc=%d（应 0）" % (mode, "预演" if dry else "实写", rc))
-            if "[warn] ⑪" not in out or "wrongStore" not in out or "@grid1" not in out:
-                probs.append("%s/%s 未给出同路径的 ⑪ 告警:\n%s"
-                             % (mode, "预演" if dry else "实写", out))
-            if dry:
-                if open(target, "rb").read() != before or os.path.exists(target + ".bak"):
-                    probs.append("%s/预演 改动了目标或生成了备份" % mode)
-            else:
-                if not os.path.exists(target + ".bak") or open(target + ".bak", "rb").read() != before:
-                    probs.append("%s/实写 备份不等于原始字节" % mode)
-                if _md5(target + ".bak") != md5:
-                    probs.append("%s/实写 备份 MD5 不等于原始 MD5" % mode)
-            _ok("%s 档%s均告警且写侧合同保持" % (mode, "预演" if dry else "实写"), probs)
+    for dry in (True, False):
+        target = _write_page("slot_default_%s.xwl" % ("dry" if dry else "real"),
+                             [_ctl("grid", "grid1", [_ctl("store", "store")])])
+        before = open(target, "rb").read()
+        md5 = _md5(target)
+        rc, out = _run_patch(
+            target, bad_append, dry_run=dry, backup=(not dry), slot_check=None)
+        label = "预演" if dry else "实写"
+        probs = []
+        if rc != 1:
+            probs.append("default/%s rc=%d（应 1）" % (label, rc))
+        if "[FAIL] ⑪" not in out or "wrongStore" not in out or "@grid1" not in out:
+            probs.append("default/%s 未给出同路径的 ⑪ FAIL:\n%s" % (label, out))
+        if open(target, "rb").read() != before or os.path.exists(target + ".bak"):
+            probs.append("default/%s 改动了目标或生成了备份" % label)
+        if _md5(target) != md5:
+            probs.append("default/%s 目标 MD5 变化" % label)
+        _ok("default 档%s拒绝且目标/备份零副作用" % label, probs)
+
+    for dry in (True, False):
+        target = _write_page("slot_warn_%s.xwl" % ("dry" if dry else "real"),
+                             [_ctl("grid", "grid1", [_ctl("store", "store")])])
+        before = open(target, "rb").read()
+        md5 = _md5(target)
+        rc, out = _run_patch(
+            target, bad_append, dry_run=dry, backup=(not dry), slot_check="warn")
+        label = "预演" if dry else "实写"
+        probs = []
+        if rc != 0:
+            probs.append("warn/%s rc=%d（应 0）" % (label, rc))
+        if "[warn] ⑪" not in out or "wrongStore" not in out or "@grid1" not in out:
+            probs.append("warn/%s 未给出同路径的 ⑪ 告警:\n%s" % (label, out))
+        if dry:
+            if open(target, "rb").read() != before or os.path.exists(target + ".bak"):
+                probs.append("warn/预演 改动了目标或生成了备份")
+        else:
+            if (not os.path.exists(target + ".bak")
+                    or open(target + ".bak", "rb").read() != before):
+                probs.append("warn/实写 备份不等于原始字节")
+            if _md5(target + ".bak") != md5:
+                probs.append("warn/实写 备份 MD5 不等于原始 MD5")
+        _ok("warn 档%s均告警且写侧合同保持" % label, probs)
 
     for dry in (True, False):
         target = _write_page("slot_error_%s.xwl" % ("dry" if dry else "real"),
@@ -675,21 +693,21 @@ def _check_slot_diagnostic_paths(tmp):
                 before = open(target, "rb").read()
                 rc, out = _run_patch(target, same_ops, dry=dry, backup=backup, mode=mode)
                 probs = []
-                expect_rc = 1 if mode == "error" else 0
+                expect_rc = 1 if mode in ("default", "error") else 0
                 if rc != expect_rc:
                     probs.append("rc=%d（应 %d）\n%s" % (rc, expect_rc, out))
-                marker = "[FAIL] ⑪" if mode == "error" else "[warn] ⑪"
+                marker = "[FAIL] ⑪" if mode in ("default", "error") else "[warn] ⑪"
                 if marker not in out:
                     probs.append("缺 %s" % marker)
                 if short_same not in out:
                     probs.append("丢短名 %s" % short_same)
                 if full_same not in out:
                     probs.append("缺可消歧结构路径 %s" % full_same)
-                if (dry or mode == "error") and open(target, "rb").read() != before:
+                if (dry or mode in ("default", "error")) and open(target, "rb").read() != before:
                     probs.append("拒绝/预演路径改动了目标")
                 if open(target, "rb").read() != before and os.path.exists(target + ".bak"):
                     pass
-                expect_bak = (not dry and mode != "error" and backup)
+                expect_bak = (not dry and mode == "warn" and backup)
                 if os.path.exists(target + ".bak") != expect_bak:
                     probs.append("备份存在性不符（expect=%r）" % expect_bak)
                 elif expect_bak and open(target + ".bak", "rb").read() != before:

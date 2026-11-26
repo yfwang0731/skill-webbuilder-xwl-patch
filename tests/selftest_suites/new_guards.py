@@ -487,22 +487,34 @@ def _new_slot_gate_cases(tmp):
                     slot_check=None if mode == "default" else mode)
 
     src = _candidate(os.path.join(root, "bad.json"))
-    for mode in ("default", "warn"):
-        for dry in (True, False):
-            out_path = os.path.join(root, "out_%s_%s.xwl" % (
-                mode, "dry" if dry else "real"))
-            rc, out = _new(out_path, src, dry=dry, mode=mode)
-            probs = []
-            if rc != 0:
-                probs.append("rc=%d（应 0）" % rc)
-            if "[warn] ⑪" not in out or "wrongStore" not in out or "@parent1" not in out:
-                probs.append("未给同路径 ⑪ 告警:\n%s" % out)
-            if dry and os.path.exists(out_path):
-                probs.append("预演生成了目标")
-            if not dry and not os.path.exists(out_path):
-                probs.append("warn 实写未生成目标")
-            _ok("new %s/%s 告警且写侧合同保持" % (
-                mode, "预演" if dry else "实写"), probs)
+    for dry in (True, False):
+        out_path = os.path.join(root, "out_default_%s.xwl" % ("dry" if dry else "real"))
+        rc, out = _new(out_path, src, dry=dry, mode="default")
+        label = "预演" if dry else "实写"
+        probs = []
+        if rc != 1:
+            probs.append("rc=%d（应 1）" % rc)
+        if "[FAIL] ⑪" not in out or "wrongStore" not in out or "@parent1" not in out:
+            probs.append("未给同路径 ⑪ FAIL:\n%s" % out)
+        if os.path.exists(out_path):
+            probs.append("default 拒绝时仍生成目标")
+        _ok("new default/%s 拒绝且目标不存在" % label, probs)
+
+    for dry in (True, False):
+        out_path = os.path.join(root, "out_warn_%s.xwl" % (
+            "dry" if dry else "real"))
+        rc, out = _new(out_path, src, dry=dry, mode="warn")
+        label = "预演" if dry else "实写"
+        probs = []
+        if rc != 0:
+            probs.append("rc=%d（应 0）" % rc)
+        if "[warn] ⑪" not in out or "wrongStore" not in out or "@parent1" not in out:
+            probs.append("未给同路径 ⑪ 告警:\n%s" % out)
+        if dry and os.path.exists(out_path):
+            probs.append("预演生成了目标")
+        if not dry and not os.path.exists(out_path):
+            probs.append("warn 实写未生成目标")
+        _ok("new warn/%s 告警且写侧合同保持" % label, probs)
 
     for dry in (True, False):
         out_path = os.path.join(root, "out_error_%s.xwl" % ("dry" if dry else "real"))

@@ -435,6 +435,7 @@ python -B $Xwl params $PagePath --strict --module-root $ModuleRoot
 
 - **`patch`** —— 改 SQL / 结构走 `ops.json`（操作数组），五种 `op`：`set` / `insertKey` / `insert` / `append` / `delete`；**`ops` 按顺序执行**，`path` 按执行到那一步时的结构解释。对象键优先用 `@itemId`，重名时**不猜顺序**（用 `@名字#N` 点名第 N 个、或**串联 `@`** 缩小范围）。
   值里的 JS / SQL 用**单引号**；完整示例见 `xwl.py patch --help`。
+  SQL 要整行删掉或整行改写时，用 `patch` 改 `configs.sql` 的整段值。续行由序列化器按设计器规则重建。`edit` 不提供续行开关。
 
 - **`params`** —— 自动做四件事：
   1. 列出页面里的 store 及其指向的 SQL 文件（解析 `m?xwl=`，补 `.xwl`，报文件是否存在），

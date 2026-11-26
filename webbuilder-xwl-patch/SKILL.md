@@ -2,7 +2,7 @@
 name: webbuilder-xwl-patch
 slug: skill-webbuilder-xwl-patch
 displayName: webbuilder-xwl-patch
-version: 1.10.1
+version: 1.10.2
 license: MIT
 metadata:
   category: development-tools
@@ -351,7 +351,7 @@ python "$SKILL_ROOT/scripts/xwl.py" patch <file.xwl> --ops ops.json --dry-run
 python "$SKILL_ROOT/scripts/xwl.py" patch <file.xwl> --ops ops.json --backup
 ```
 
-**写前槽位检查**：`patch` 在目标与备份写入前统一检查 ⑪。默认 `--slot-check warn` 报告本次新增的错名槽位、同父级重复供给或同 Grid 重复列后继续；`--slot-check error` 以 `rc=1` 拒绝。诊断同时给出 `@父/@槽位` 短名和 `children[下标]` 完整结构路径，同名父对象可区分。既有问题只按实际父对象身份和问题数量比较，兄弟移位或同一父级内同类数量不增加时保留。`new --from-json` 使用输出路径发现的 `controls.json` 检查整棵候选，`--dry-run` 与实写同判。
+**写前槽位检查**：`patch` 在目标与备份写入前统一检查 ⑪。默认拒绝本次新增的错名槽位、同父级重复供给或同 Grid 重复列，`rc=1`，不写目标、不建 `.bak`；要保留旧行为才加 `--slot-check warn`。诊断同时给出 `@父/@槽位` 短名和 `children[下标]` 完整结构路径，同名父对象可区分。既有问题只按实际父对象身份和问题数量比较，兄弟移位或同一父级内同类数量不增加时保留。`new --from-json` 使用输出路径发现的 `controls.json` 检查整棵候选，`--dry-run` 与实写同判。
 
 **写入结果按四阶段判断**。不得从命令失败或 `rc` 推断文件未动。
 
@@ -448,7 +448,7 @@ python "$SKILL_ROOT/scripts/xwl.py" diffguard <改过的文件或目录> --stric
 | 退出码 | 含义 |
 |---|---|
 | `0` | 成功 |
-| `1` | **被检查对象或查询结果有问题**（`check` 的文件级 BOM、缺失、不可读均为 `1`；`patch --slot-check error` 或 `new --from-json --slot-check error` 发现本次新增槽位问题为 `1`；`paths` / `sqlrefs` / `sql` / `events` 没找到目标字段或**无适用检查内容**判 `1`；`folders` 的索引 JSON／结构损坏、或 `index` 确认悬空判 `1`） |
+| `1` | **被检查对象或查询结果有问题**（`check` 的文件级 BOM、缺失、不可读均为 `1`；`patch` 或 `new --from-json` 默认发现本次新增槽位问题为 `1`（`--slot-check warn` 只告警）；`paths` / `sqlrefs` / `sql` / `events` 没找到目标字段或**无适用检查内容**判 `1`；`folders` 的索引 JSON／结构损坏、或 `index` 确认悬空判 `1`） |
 | `2` | **用法或前置条件不满足**（缺必填参数、`edit` 锚点次数不符、`new` 拒绝覆盖；`patch/edit/expand` 的 BOM 或读取失败为 `2`；**`check` 的坏 `--controls` 总码为 `2`**，此时 ①–⑧⑩⑪ 照常执行，仅跳过 ⑨ 与 configs 内联 `[js]`；`patch/edit` 写前 node 调用失败也判 `2`；`params --strict` 仅未核对判 `2`；`diffguard --strict` 检查未完成判 `2`；`folders` 索引读不动判 `2`；`params` / `sqlrefs` 依赖读取失败判 `2`） |
 
 各命令的 strict 边界分别计算：`check --strict` **仅升级 ⑪**；`params` 使用自己的默认/严格矩阵，
